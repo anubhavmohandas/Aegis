@@ -96,8 +96,8 @@ AI prompt and the UI:
 | Windows process | ETW, if `pywintrace` works + admin | WMI fallback |
 | Windows USB | WMI event callback | — |
 | Windows startup | Startup folder (watchdog) | Registry Run/RunOnce |
-| macOS process | NSWorkspace (GUI app launches only) | psutil diff (all processes) |
-| macOS USB | — | `system_profiler` polling |
+| macOS process | NSWorkspace (GUI app launches only) | psutil diff (all processes), verified live |
+| macOS USB | — | `system_profiler` polling (2 sources, see below), verified live |
 | macOS startup | LaunchAgents/Daemons (watchdog) | Login Items (`osascript`) |
 | Linux process | — | psutil diff (same tradeoff as macOS) |
 | Linux USB | pyudev netlink monitor | — |
@@ -139,6 +139,44 @@ run this way — no machine to run them on. Treat the Linux results as
 evidence the *architecture* works end to end, not as evidence the Windows/
 macOS API calls are correct — those still need verification on real hardware.
 
+**Update: macOS has since been verified live too**, on real hardware, in a
+real testing session — not by me (I still have no Mac access), by the
+person building this, pasting real console output back for me to read and
+fix against. What that surfaced, in order:
+
+- **A real bug in the notifier**: `plyer`'s macOS notification backend
+  imports `pyobjus`, which `requirements-macos.txt` never installs (it
+  installs `pyobjc`, a different library). Confirmed via a real
+  `ModuleNotFoundError` traceback, not guessed. Fixed by adding an
+  `osascript -e 'display notification ...'` fallback in `core/notifier.py`
+  — ships on every Mac, no new dependency needed.
+- **A real design bug in the dispatcher**: rule-engine-trusted events and
+  rate-limited events were still calling `notify()`, defeating the purpose
+  of both mechanisms — confirmed by a real flood of `mdworker_shared`
+  notifications (macOS Spotlight indexing spawns it constantly). Both
+  paths in `core/dispatcher.py` now persist and log silently instead of
+  popping a notification, once an event has already been explicitly
+  deprioritized by the rule engine or the rate limiter.
+- **A real, undocumented reliability gap in `system_profiler SPUSBDataType`**:
+  a genuine external USB flash drive (visible in Finder, fully mounted and
+  usable) was completely absent from both the JSON and plain-text output of
+  `SPUSBDataType` — not a parsing bug, `system_profiler` itself omitted a
+  real device. Confirmed by cross-checking `SPStorageDataType`, which
+  correctly showed the same drive with `physical_drive.protocol: "USB"` and
+  `is_internal_disk: "no"`. `macos/usb_monitor.py` now polls both sources;
+  `SPStorageDataType`, filtered to that protocol/internal-disk condition,
+  is the one that turned out to be reliable for external storage. Verified
+  end to end: unmounting and remounting the real drive produced real
+  `USB_REMOVED`/`USB_CONNECTED` events with correct severity classification.
+- **Process, folder, and notification pipeline** all confirmed working
+  against real macOS process spawns (`git`, `Brave Browser Helper`, system
+  daemons) and a real file create/modify/delete cycle on the real Desktop.
+
+Every fix above was made only after seeing real command output or a real
+traceback — none of it was patched blind. macOS is now the second platform
+(after Linux) with actual evidence behind it, not just documented API
+patterns. Windows remains completely unverified.
+
 ## Known gaps and deliberate tradeoffs
 
 1. **No EndpointSecurity on macOS.** ES is the only way to get Windows-ETW-
@@ -172,16 +210,16 @@ macOS API calls are correct — those still need verification on real hardware.
    opinion, not a detector. Every event is persisted regardless of what the
    AI says or whether it was called at all.
 
-5. **Untested platform-specific code.** This was built without access to a
-   Windows or Mac machine (Linux sandbox only). Everything in `core/` was
-   exercised against real behavior (SQLite writes, rule engine logic,
-   dedup/rate-limit, folder watching via real inotify events). Everything
-   in `windows/` and `macos/` compiles and follows documented API patterns,
-   but has not run against the real APIs it targets. The PySide6 timeline UI
-   passes Python syntax/import checks and its data-loading logic was
-   verified against a real SQLite file, but the actual window could not be
-   instantiated in this sandbox (missing system graphics libraries, no root
-   to install them) — visually verify it once you have a real display.
+5. **Windows remains untested; macOS no longer is.** This was built without
+   access to a Windows or Mac machine (Linux sandbox only), but macOS has
+   since been run and debugged live on real hardware — see "Live
+   verification" above for exactly what was found and fixed. `windows/`
+   still only compiles and follows documented API patterns; none of it has
+   run against the real APIs it targets. The PySide6 timeline UI passes
+   Python syntax/import checks and its data-loading logic was verified
+   against a real SQLite file, but the actual window has not been visually
+   confirmed on either platform yet (I have no display access; the Mac
+   testing session so far has focused on the monitors, not the UI).
 
 ## On the "Aegis" name
 

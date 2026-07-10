@@ -16,5 +16,14 @@ db_path: aegis_events.db      # SQLite event history read by ui/timeline_app.py
 # Opt-in noise reduction (see core/rule_engine.py for why this is NOT a
 # built-in "known safe" list -- it only skips the AI call for things YOU
 # add here, e.g. your own dev tools that fire constantly).
-trusted_process_names: []     # e.g. ["code.exe", "python.exe"]
+trusted_process_names:        # populated from your real macOS test run -- routine
+                               # system daemons that were firing constantly and
+                               # adding no signal. Remove any of these if you'd
+                               # rather keep seeing them; add more the same way.
+  - mdworker_shared
+  - biomesyncd
+  - FolderActionsDispatcher
+  - com.apple.iCloudHelper
+  - AddressBookSourceSync
+  - AddressBookManager
 trusted_usb_ids: []           # e.g. ["usb\\vid_0781&pid_5581\\...\\"] (Windows DeviceID) or a Mac serial_num

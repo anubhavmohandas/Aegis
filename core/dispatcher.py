@@ -93,16 +93,25 @@ class Dispatcher:
         severity = self.severity.evaluate(event, verdict)
 
         if verdict.skip_ai:
-            logger.info("Rule engine skipped AI call (%s): %s", verdict.reason, event.summary)
-            notify(self._title_for(event, severity), verdict.canned_explanation or event.summary)
+            # Deliberately silent: a user-trusted item is the one case where
+            # NOT notifying is correct. The whole point of trusted_process_names
+            # is "stop bugging me about this" -- still logged and persisted to
+            # the timeline for the audit trail, just no popup.
+            logger.info("Rule engine skipped AI call and notification (%s): %s", verdict.reason, event.summary)
             self._persist(event, severity=severity, explanation=verdict.canned_explanation,
                           ai_skipped=True, risk_hint=verdict.reason)
             return
 
         if severity not in RATE_LIMIT_EXEMPT_SEVERITIES and not self._under_rate_limit():
-            logger.warning("Rate limit hit (%s/min) -- skipping AI call for: %s",
+            # Also deliberately silent -- notifying once per rate-limited event
+            # defeated the purpose of rate limiting: a burst of 6 events in
+            # 400ms became 6 "rate-limited" popups instead of 6 AI-explained
+            # ones, which is worse, not better. Still logged (at WARNING, so
+            # it's visible if you're watching the console) and persisted to
+            # the timeline -- just no popup for something whose entire
+            # premise is "too much is happening to explain individually."
+            logger.warning("Rate limit hit (%s/min) -- skipping AI call and notification for: %s",
                             MAX_EVENTS_PER_MINUTE, event.summary)
-            notify("Aegis (rate-limited)", event.summary)
             self._persist(event, severity=severity, explanation=None, ai_skipped=True,
                           risk_hint="rate_limited")
             return
