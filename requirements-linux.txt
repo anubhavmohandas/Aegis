@@ -1,0 +1,6 @@
+-r requirements-common.txt
+pyudev>=0.24
+# pyudev needs libudev (present on essentially every mainstream Linux distro
+# by default -- part of systemd). Not relevant to the client's requested
+# scope (Windows + macOS); included because it's the collector set that
+# could actually be verified end-to-end in a Linux sandbox during development.

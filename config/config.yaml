@@ -1,0 +1,20 @@
+# Aegis configuration.
+# API keys are NOT set here -- set ANTHROPIC_API_KEY or OPENAI_API_KEY as
+# environment variables instead, so you never accidentally commit a key.
+
+ai_provider: anthropic        # "anthropic" or "openai"
+ai_model: claude-sonnet-5     # current Claude model as of mid-2026; check docs.claude.com for the latest if this drifts
+
+# Leave empty to auto-default to Desktop/Downloads/Documents in your home folder.
+watched_folders: []
+
+poll_interval_seconds: 3      # used by every polling-based monitor (registry, login items, USB on Mac, WMI fallback)
+notify_on_startup_scan: true
+log_path: events.log
+db_path: aegis_events.db      # SQLite event history read by ui/timeline_app.py
+
+# Opt-in noise reduction (see core/rule_engine.py for why this is NOT a
+# built-in "known safe" list -- it only skips the AI call for things YOU
+# add here, e.g. your own dev tools that fire constantly).
+trusted_process_names: []     # e.g. ["code.exe", "python.exe"]
+trusted_usb_ids: []           # e.g. ["usb\\vid_0781&pid_5581\\...\\"] (Windows DeviceID) or a Mac serial_num

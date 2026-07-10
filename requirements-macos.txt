@@ -1,0 +1,5 @@
+-r requirements-common.txt
+pyobjc-framework-Cocoa>=10.0
+# NSWorkspace launch notifications need this. If it's not installed, the app
+# still runs via psutil polling alone (see macos/process_monitor.py), just
+# with slightly worse latency on GUI app launches specifically.
