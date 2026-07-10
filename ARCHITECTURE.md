@@ -177,6 +177,68 @@ traceback — none of it was patched blind. macOS is now the second platform
 (after Linux) with actual evidence behind it, not just documented API
 patterns. Windows remains completely unverified.
 
+## Validating v1 — current status
+
+Be precise about what "done" means: everything below was run via
+`python3 main.py` from source. **None of it has been through a packaged
+build yet** — that's still untouched, on either OS.
+
+```
+macOS, from source (python3 main.py):
+  [x] Launches, runs continuously without crashing
+  [x] Process monitor    -- real spawns detected (git, browser helpers, system daemons)
+  [x] Folder monitor     -- real create/modify/delete cycle detected, severity correct
+  [x] USB monitor        -- real mount/unmount detected (after the SPStorageDataType fix)
+  [x] Notifications       -- real banners confirmed on screen (after the osascript fix)
+  [x] Rule engine / severity / rate limiting -- all confirmed against real event bursts
+  [ ] Tray icon visually confirmed in the menu bar -- never explicitly checked
+  [ ] AI explanations against a real API key -- only tested key-less so far
+  [ ] Timeline UI (ui/timeline_app.py) -- never run
+  [ ] Packaged .app via py2app/Briefcase -- not attempted
+
+Windows: nothing tested yet, still zero real-hardware evidence.
+```
+
+The `pystray`/NSWorkspace thread-interaction concern (`pystray.Icon.run()`
+wanting the main thread while the NSWorkspace observer runs its own loop on
+a background thread) didn't cause a hang — the app ran continuously for
+20+ minutes without freezing. Decent indirect evidence they coexist fine,
+but the tray icon's actual visibility in the menu bar hasn't been confirmed
+separately from "didn't crash."
+
+If `python main.py` works but a packaged `.exe`/`.app` doesn't, that's a
+packaging problem (hidden imports, missing bundled data files), not a
+monitoring-logic bug — see "Packaging" below before debugging the wrong
+layer. Use `TEST_REPORT_TEMPLATE.md` for anything that doesn't match
+expectations.
+
+## Packaging
+
+The end user sees `Aegis.exe` / `Aegis.app`, not the source language — a
+GUI app doesn't need to be C#/Swift to look and feel native. Package with
+`PyInstaller` or `Nuitka` for Windows, `py2app`/`Briefcase` for macOS
+(`.app` → `.dmg`). Reach for native code (Rust/Swift) later only for a
+specific capability gap — e.g. holding the macOS EndpointSecurity
+entitlement conversation, or replacing `pywintrace` if it becomes
+unmaintained — not for performance; nothing in this pipeline is
+performance-bound. The collector architecture already supports this: a
+native binary that prints JSON lines to stdout slots into the existing
+queue with no changes to `core/`.
+
+**Known PyInstaller gotcha, check this before debugging anything else:**
+`config/config.yaml`, `assets/logo.png`, and `assets/tray_icon.png` are read
+relative to the script location — they will not be bundled automatically.
+`core/config.py` and `core/tray_app.py` already fall back gracefully if
+these are missing (defaults / placeholder shield icon), so a missing bundle
+won't crash the app, but it will silently run with the wrong config and the
+wrong icon, which looks like a bug and isn't one. Bundle them explicitly:
+
+```
+pyinstaller main.py --name Aegis --add-data "config;config" --add-data "assets;assets"
+```
+
+(macOS/Linux use `:` instead of `;` in `--add-data`.)
+
 ## Known gaps and deliberate tradeoffs
 
 1. **No EndpointSecurity on macOS.** ES is the only way to get Windows-ETW-
