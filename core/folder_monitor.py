@@ -52,6 +52,24 @@ class _Handler(FileSystemEventHandler):
     def on_deleted(self, event):
         self._emit("deleted", event.src_path, event.is_directory)
 
+    def on_moved(self, event):
+        # v2 fix: this was previously unhandled entirely, which meant a
+        # rename inside a watched folder was invisible to Aegis -- including
+        # the exact evasion the severity engine's extension check exists to
+        # catch (drop "payload.txt", then rename it to "payload.exe" -- no
+        # on_created/on_modified ever fires for the new name, only on_moved).
+        if event.is_directory:
+            return
+        self.out_queue.put(
+            MonitorEvent(
+                category=EventCategory.FILE_MOVED,
+                summary=f"File moved: {event.src_path} -> {event.dest_path}",
+                details={"path": event.src_path, "dest_path": event.dest_path},
+                source="folder",
+                confidence="certain",
+            )
+        )
+
 
 class FolderMonitor:
     def __init__(self, folders: list[str], out_queue: Queue):

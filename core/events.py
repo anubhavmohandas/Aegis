@@ -12,6 +12,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TypedDict
 
 
 class EventCategory(str, Enum):
@@ -23,6 +24,51 @@ class EventCategory(str, Enum):
     FILE_CREATED = "file_created"
     FILE_MODIFIED = "file_modified"
     FILE_DELETED = "file_deleted"
+    FILE_MOVED = "file_moved"        # v2: watchdog's on_moved was previously dropped entirely --
+                                       # a rename (e.g. payload.txt -> payload.exe) never fired
+                                       # on_created/on_modified, so it was invisible to Aegis.
+
+
+# --- Canonical per-category `details` shapes ------------------------------
+# These TypedDicts are NOT runtime-enforced (collectors build plain dicts,
+# and every one of them is honest about only filling in what it actually
+# has -- ETW gives you more than WMI polling does, NSWorkspace gives you
+# less than a full EndpointSecurity event would). They exist so a human
+# reading dispatcher.py/severity_engine.py/rule_engine.py/the UI code has one
+# place to check "what keys can I expect here" instead of grepping collector
+# files across three OSes. total=False on every one of these is deliberate --
+# treat every key as optional and use `.get()`, never `[...]`, against them.
+
+class ProcessDetails(TypedDict, total=False):
+    pid: int
+    ppid: int
+    image_name: str            # e.g. "powershell.exe" -- Windows/ETW+WMI naming
+    name: str                  # e.g. "Safari" -- macOS/NSWorkspace naming
+    exe: str                   # full path, when the collector could resolve one
+    executable_path: str       # alternate key some collectors use for the same thing
+    sha256: str                 # only present if the rule engine's hash check computed one
+    cmdline: str
+    username: str
+
+
+class UsbDetails(TypedDict, total=False):
+    device_id: str
+    serial_num: str
+    vendor_id: str
+    product_id: str
+    name: str
+    volume_uuid: str            # macOS SPStorageDataType-sourced events only
+
+
+class StartupDetails(TypedDict, total=False):
+    name: str
+    path: str
+    location: str                # e.g. "HKCU\\...\\Run", "~/Library/LaunchAgents", "~/.config/autostart"
+
+
+class FolderDetails(TypedDict, total=False):
+    path: str
+    dest_path: str               # only present on FILE_MOVED -- the new path after rename/move
 
 
 @dataclass

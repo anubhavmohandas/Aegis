@@ -16,6 +16,13 @@ import threading
 import time
 from pathlib import Path
 
+# Version tag embedded INSIDE every persisted details_json blob (not on the
+# MonitorEvent dataclass -- that object never crosses a process boundary,
+# this JSON blob is what actually gets written to disk and read back months
+# later). Bump this if a collector's `details` shape changes in a way that
+# would make old rows ambiguous to a future reader of the timeline.
+DETAILS_SCHEMA_VERSION = 1
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,11 +72,12 @@ class EventStore:
                confidence: str, severity: str = "medium", explanation: str | None = None,
                risk_hint: str | None = None, ai_skipped: bool = False,
                timestamp: float | None = None) -> int:
+        versioned_details = {"_schema": DETAILS_SCHEMA_VERSION, **details}
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO events (timestamp, source, category, summary, details_json, "
                 "confidence, severity, explanation, risk_hint, ai_skipped) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (timestamp or time.time(), source, category, summary, json.dumps(details),
+                (timestamp or time.time(), source, category, summary, json.dumps(versioned_details),
                  confidence, severity, explanation, risk_hint, int(ai_skipped)),
             )
             self._conn.commit()

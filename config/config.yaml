@@ -26,4 +26,11 @@ trusted_process_names:        # populated from your real macOS test run -- routi
   - com.apple.iCloudHelper
   - AddressBookSourceSync
   - AddressBookManager
+trusted_process_hashes: []    # sha256 of a trusted binary's file on disk -- harder to spoof than a
+                               # name match, since it requires replacing the actual file at that path
+                               # rather than just naming something the same thing. Get one locally with
+                               # `shasum -a 256 /path/to/binary` (mac/linux) or `certutil -hashfile
+                               # C:\path\to.exe SHA256` (Windows), then paste the hex digest here.
+                               # NOT YET VALIDATED against a real locked/running Windows or macOS
+                               # process -- see core/rule_engine.py's docstring caveat.
 trusted_usb_ids: []           # e.g. ["usb\\vid_0781&pid_5581\\...\\"] (Windows DeviceID) or a Mac serial_num

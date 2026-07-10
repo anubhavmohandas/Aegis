@@ -105,6 +105,11 @@ def main(use_tray: bool = True):
     def on_quit():
         logger.info("Shutting down...")
         dispatcher.stop()
+        dispatcher_thread.join(timeout=5)
+        if dispatcher_thread.is_alive():
+            logger.warning("Dispatcher thread did not exit within 5s of stop() -- "
+                            "it's daemonized so it won't block process exit, but an "
+                            "in-flight AI call or DB write may get cut off.")
         for m in all_monitors:
             try:
                 m.stop()

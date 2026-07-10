@@ -61,7 +61,8 @@ class Dispatcher:
         self.in_queue = in_queue
         self.config = config
         self.explainer = AIExplainer(config)
-        self.rules = RuleEngine(config.trusted_process_names, config.trusted_usb_ids)
+        self.rules = RuleEngine(config.trusted_process_names, config.trusted_usb_ids,
+                                 config.trusted_process_hashes)
         self.severity = SeverityEngine()
         self.store = event_store or EventStore(config.db_path)
         self._recent_summaries: deque[tuple[str, float]] = deque()
@@ -80,42 +81,79 @@ class Dispatcher:
     def stop(self):
         self._stop.set()
 
+    # --- pipeline entry point -------------------------------------------
+    # Decomposed into one method per stage (v2 cleanup -- this was previously
+    # one long _handle() body). Each stage either returns a terminal verdict
+    # (persist-and-stop) or hands off to the next stage; the shape of that
+    # handoff is deliberately uniform ("_StageResult") so the order documented
+    # at the top of this file is enforced by the code, not just the comments.
+
     def _handle(self, event: MonitorEvent):
         self._log_raw(event)
 
-        if self._is_duplicate(event):
-            logger.debug("Suppressed duplicate event: %s", event.summary)
-            self._persist(event, severity="low", explanation=None, ai_skipped=True,
-                          risk_hint="duplicate_suppressed")
+        if self._stage_dedupe(event):
             return
 
+        verdict, severity = self._stage_classify(event)
+
+        if self._stage_rule_gate(event, verdict, severity):
+            return
+
+        if self._stage_rate_limit(event, severity):
+            return
+
+        self._stage_explain_and_notify(event, severity)
+
+    # --- individual stages ------------------------------------------------
+    # Each returns True if it fully handled (persisted + stopped) the event,
+    # False if the event should continue to the next stage.
+
+    def _stage_dedupe(self, event: MonitorEvent) -> bool:
+        if not self._is_duplicate(event):
+            return False
+        logger.debug("Suppressed duplicate event: %s", event.summary)
+        self._persist(event, severity="low", explanation=None, ai_skipped=True,
+                      risk_hint="duplicate_suppressed")
+        return True
+
+    def _stage_classify(self, event: MonitorEvent) -> tuple:
+        """Runs the rule engine and severity engine. Neither stage is
+        terminal on its own -- this just computes the verdict/severity pair
+        that the later gating stages act on."""
         verdict = self.rules.evaluate(event)
         severity = self.severity.evaluate(event, verdict)
+        return verdict, severity
 
-        if verdict.skip_ai:
-            # Deliberately silent: a user-trusted item is the one case where
-            # NOT notifying is correct. The whole point of trusted_process_names
-            # is "stop bugging me about this" -- still logged and persisted to
-            # the timeline for the audit trail, just no popup.
-            logger.info("Rule engine skipped AI call and notification (%s): %s", verdict.reason, event.summary)
-            self._persist(event, severity=severity, explanation=verdict.canned_explanation,
-                          ai_skipped=True, risk_hint=verdict.reason)
-            return
+    def _stage_rule_gate(self, event: MonitorEvent, verdict, severity: str) -> bool:
+        if not verdict.skip_ai:
+            return False
+        # Deliberately silent: a user-trusted item is the one case where
+        # NOT notifying is correct. The whole point of trusted_process_names/
+        # trusted_process_hashes is "stop bugging me about this" -- still
+        # logged and persisted to the timeline for the audit trail, just no
+        # popup.
+        logger.info("Rule engine skipped AI call and notification (%s): %s", verdict.reason, event.summary)
+        self._persist(event, severity=severity, explanation=verdict.canned_explanation,
+                      ai_skipped=True, risk_hint=verdict.reason)
+        return True
 
-        if severity not in RATE_LIMIT_EXEMPT_SEVERITIES and not self._under_rate_limit():
-            # Also deliberately silent -- notifying once per rate-limited event
-            # defeated the purpose of rate limiting: a burst of 6 events in
-            # 400ms became 6 "rate-limited" popups instead of 6 AI-explained
-            # ones, which is worse, not better. Still logged (at WARNING, so
-            # it's visible if you're watching the console) and persisted to
-            # the timeline -- just no popup for something whose entire
-            # premise is "too much is happening to explain individually."
-            logger.warning("Rate limit hit (%s/min) -- skipping AI call and notification for: %s",
-                            MAX_EVENTS_PER_MINUTE, event.summary)
-            self._persist(event, severity=severity, explanation=None, ai_skipped=True,
-                          risk_hint="rate_limited")
-            return
+    def _stage_rate_limit(self, event: MonitorEvent, severity: str) -> bool:
+        if severity in RATE_LIMIT_EXEMPT_SEVERITIES or self._under_rate_limit():
+            return False
+        # Also deliberately silent -- notifying once per rate-limited event
+        # defeated the purpose of rate limiting: a burst of 6 events in
+        # 400ms became 6 "rate-limited" popups instead of 6 AI-explained
+        # ones, which is worse, not better. Still logged (at WARNING, so
+        # it's visible if you're watching the console) and persisted to
+        # the timeline -- just no popup for something whose entire
+        # premise is "too much is happening to explain individually."
+        logger.warning("Rate limit hit (%s/min) -- skipping AI call and notification for: %s",
+                        MAX_EVENTS_PER_MINUTE, event.summary)
+        self._persist(event, severity=severity, explanation=None, ai_skipped=True,
+                      risk_hint="rate_limited")
+        return True
 
+    def _stage_explain_and_notify(self, event: MonitorEvent, severity: str) -> None:
         explanation = self.explainer.explain(event, severity)
         notify(self._title_for(event, severity), explanation)
         self._persist(event, severity=severity, explanation=explanation, ai_skipped=False)
@@ -129,15 +167,33 @@ class Dispatcher:
         }.get(event.source, "System event")
         return f"{base} [{severity.upper()}]"
 
+    def _dedupe_key(self, event: MonitorEvent) -> str:
+        # Prefer (category, pid) over the raw summary string when a pid is
+        # present. Found via code review, not guessed: macOS's process
+        # monitor has two independent collection paths (NSWorkspace and
+        # psutil) that can both report the SAME real process launch with
+        # DIFFERENT summary text ("New application launched: Safari" vs
+        # "New process: Safari (PID 1234)") -- summary-string dedupe would
+        # never catch that, letting one real event through twice. Every
+        # collector across all three OSes already puts "pid" in `details`
+        # under the same key name, so this generalizes without needing
+        # per-platform special-casing. Falls back to the summary string for
+        # event types that have no pid (USB, startup, folder).
+        pid = event.details.get("pid")
+        if pid is not None:
+            return f"{event.category.value}:{pid}"
+        return event.summary
+
     def _is_duplicate(self, event: MonitorEvent) -> bool:
         now = time.time()
+        key = self._dedupe_key(event)
         # drop expired entries
         while self._recent_summaries and now - self._recent_summaries[0][1] > DEDUPE_WINDOW_SECONDS:
             self._recent_summaries.popleft()
-        for summary, ts in self._recent_summaries:
-            if summary == event.summary:
+        for seen_key, ts in self._recent_summaries:
+            if seen_key == key:
                 return True
-        self._recent_summaries.append((event.summary, now))
+        self._recent_summaries.append((key, now))
         return False
 
     def _under_rate_limit(self) -> bool:

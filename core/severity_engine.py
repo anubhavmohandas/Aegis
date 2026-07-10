@@ -42,6 +42,7 @@ _CATEGORY_BASELINE = {
     EventCategory.FILE_CREATED: "low",
     EventCategory.FILE_MODIFIED: "low",
     EventCategory.FILE_DELETED: "low",
+    EventCategory.FILE_MOVED: "low",
 }
 
 _SUSPICIOUS_PATH_FRAGMENTS = (
@@ -82,5 +83,16 @@ class SeverityEngine:
             path = str(event.details.get("path", "")).lower()
             if any(path.endswith(ext) for ext in _EXECUTABLE_EXTENSIONS):
                 level = _bump(level, steps=2)  # low -> high: an executable dropped in a watched folder is worth surfacing
+
+        if event.category == EventCategory.FILE_MOVED:
+            # Check the DESTINATION name, not the source. This is the specific
+            # evasion on_moved was added to catch: drop "payload.txt" (fires
+            # on_created, extension check finds nothing suspicious), then
+            # rename it to "payload.exe" (only on_moved fires -- if this checked
+            # src_path instead of dest_path, the rename to an executable
+            # extension would go completely unclassified).
+            dest = str(event.details.get("dest_path", "")).lower()
+            if any(dest.endswith(ext) for ext in _EXECUTABLE_EXTENSIONS):
+                level = _bump(level, steps=2)
 
         return level

@@ -25,6 +25,7 @@ class AppConfig:
     log_path: str = "events.log"
     db_path: str = "aegis_events.db"        # SQLite event history for the timeline UI
     trusted_process_names: list[str] = field(default_factory=list)  # opt-in AI-call skip, see core/rule_engine.py
+    trusted_process_hashes: list[str] = field(default_factory=list)  # sha256, harder to spoof than name -- see core/rule_engine.py
     trusted_usb_ids: list[str] = field(default_factory=list)        # opt-in AI-call skip, see core/rule_engine.py
 
     @property
@@ -54,6 +55,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         log_path=raw.get("log_path", "events.log"),
         db_path=raw.get("db_path", "aegis_events.db"),
         trusted_process_names=raw.get("trusted_process_names") or [],
+        trusted_process_hashes=raw.get("trusted_process_hashes") or [],
         trusted_usb_ids=raw.get("trusted_usb_ids") or [],
     )
     if not cfg.watched_folders:
@@ -74,4 +76,16 @@ def _with_default_folders(cfg: AppConfig) -> AppConfig:
         candidate = home / name
         if candidate.exists():
             cfg.watched_folders.append(str(candidate))
+    if not cfg.watched_folders:
+        # None of the three default folders exist under this home directory
+        # (unusual account setup, containerized environment, etc). Silently
+        # running with zero folder coverage looks identical to "everything's
+        # fine, nothing's happened" -- say so explicitly instead.
+        print(
+            "[config] WARNING: no watched_folders configured and none of "
+            "Desktop/Downloads/Documents exist under your home folder -- "
+            "folder monitoring is effectively disabled. Set watched_folders "
+            "explicitly in config.yaml if this isn't intentional.",
+            file=sys.stderr,
+        )
     return cfg

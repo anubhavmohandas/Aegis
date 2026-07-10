@@ -12,8 +12,12 @@ in full regardless of what the AI says, so nothing is silently dropped.
 
 from __future__ import annotations
 
+import logging
+
 from .config import AppConfig
 from .events import MonitorEvent
+
+logger = logging.getLogger("aegis.ai_explainer")
 
 SYSTEM_PROMPT = """You are a plain-English security explainer for a personal desktop \
 monitoring tool. You will be given a single system event (a new process starting, a USB \
@@ -66,7 +70,16 @@ class AIExplainer:
         except Exception as e:
             # Never let an AI/network failure crash the monitor loop -- fall back
             # to the raw event so the user still gets *something* useful.
-            return f"[AI explainer failed: {e}]\nRaw event: {event.summary}"
+            #
+            # The raw exception is logged (console only) but deliberately NOT put
+            # into the returned string -- that string ends up in a desktop
+            # notification banner and the persisted timeline, both of which are
+            # more exposed than a log file. Provider client errors can echo back
+            # things like partial API keys, internal URLs, or proxy config in
+            # their message text; there's no reason to surface that to whoever's
+            # glancing at a notification.
+            logger.error("AI explainer failed for event %r: %s", event.summary, e)
+            return f"[AI explainer unavailable -- see logs] Raw event: {event.summary}"
 
     def _explain_anthropic(self, prompt: str) -> str:
         client = self._get_client()

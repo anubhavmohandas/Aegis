@@ -29,6 +29,8 @@ import logging
 import threading
 from queue import Queue
 
+import psutil
+
 from core.events import EventCategory, MonitorEvent
 
 logger = logging.getLogger("aegis.windows.process_monitor")
@@ -85,11 +87,26 @@ class WindowsProcessMonitor:
                     image_name = event_tuple.get("ImageName", "unknown")
                     pid = event_tuple.get("ProcessID", "unknown")
                     parent_pid = event_tuple.get("ParentProcessID", "unknown")
+                    details = {"image_name": image_name, "pid": pid, "parent_pid": parent_pid}
+
+                    # v2 fix: the raw ETW ProcessStart event carries no exe path,
+                    # so RuleEngine's hash-trust branch (core/rule_engine.py) could
+                    # never fire on this backend -- the highest-fidelity Windows
+                    # event source. Resolve it via psutil immediately, since ETW
+                    # fires at/near process creation; a short-lived process can
+                    # still exit before this runs, so failure here must degrade
+                    # to "no exe available," never crash the callback (this thread
+                    # feeds the whole ETW pipeline).
+                    try:
+                        details["executable_path"] = psutil.Process(pid).exe()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError) as e:
+                        logger.debug("Could not resolve exe path for PID %s: %s", pid, e)
+
                     self.out_queue.put(
                         MonitorEvent(
                             category=EventCategory.PROCESS_STARTED,
                             summary=f"New process: {image_name} (PID {pid}, parent PID {parent_pid})",
-                            details={"image_name": image_name, "pid": pid, "parent_pid": parent_pid},
+                            details=details,
                             source="process",
                             confidence="certain",
                         )

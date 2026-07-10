@@ -86,10 +86,29 @@ class MacProcessMonitor:
                     name = app.localizedName()
                     bundle_id = app.bundleIdentifier()
                     pid = app.processIdentifier()
+                    details = {"app_name": str(name), "bundle_id": str(bundle_id), "pid": int(pid)}
+
+                    # v2 fix: this event previously carried no `exe`/`executable_path`
+                    # key, so RuleEngine's hash-trust branch (core/rule_engine.py)
+                    # could never fire for GUI app launches -- the most common,
+                    # highest-fidelity process event on macOS. NSRunningApplication
+                    # already hands us the executable URL directly via the
+                    # notification object, no second PID lookup required, so there's
+                    # no PID-reuse race to worry about here (unlike a psutil.Process(pid)
+                    # lookup done after the fact).
+                    try:
+                        exe_url = app.executableURL()
+                        if exe_url is not None:
+                            exe_path = exe_url.path()
+                            if exe_path:
+                                details["exe"] = str(exe_path)
+                    except Exception as e:
+                        logger.debug("Could not resolve executableURL for PID %s: %s", pid, e)
+
                     out_queue.put(MonitorEvent(
                         category=EventCategory.PROCESS_STARTED,
                         summary=f"New application launched: {name} (PID {pid})",
-                        details={"app_name": str(name), "bundle_id": str(bundle_id), "pid": int(pid)},
+                        details=details,
                         source="process",
                         confidence="certain",
                     ))
