@@ -49,10 +49,21 @@ def notify(title: str, message: str) -> None:
 
     if platform.system() == "Darwin":
         try:
-            safe_title = branded_title.replace('"', '\\"')
-            safe_message = message.replace('"', '\\"')
+            # Pass title/message as argv, never interpolated into the script
+            # source. The previous version escaped `"` but not `\`, so a
+            # message containing `\"` (e.g. a crafted filename in a watched
+            # folder, echoed into the notification text) closed the
+            # AppleScript string literal and executed attacker-chosen
+            # AppleScript -- including `do shell script`. argv values are
+            # plain data to osascript; there is nothing to escape.
             subprocess.run(
-                ["osascript", "-e", f'display notification "{safe_message}" with title "{safe_title}"'],
+                [
+                    "osascript",
+                    "-e", "on run argv",
+                    "-e", "display notification (item 1 of argv) with title (item 2 of argv)",
+                    "-e", "end run",
+                    message, branded_title,
+                ],
                 check=True, capture_output=True, timeout=5,
             )
             return
