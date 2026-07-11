@@ -6,6 +6,7 @@ ONLY (never stored in the yaml file) so you don't accidentally commit them.
 from __future__ import annotations
 
 import os
+import platform
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +15,28 @@ import yaml
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "config.yaml"
 ENV_FILE_PATH = Path(__file__).resolve().parent.parent / ".env"
+
+
+def _is_frozen() -> bool:
+    # True when running from a PyInstaller bundle (packaging/aegis.spec).
+    return bool(getattr(sys, "frozen", False))
+
+
+def runtime_data_dir() -> Path:
+    """Per-user writable directory for a PACKAGED install. Running from
+    source keeps v1 behavior (log/db relative to the checkout) -- but a
+    Finder-launched .app has CWD `/` and a Program Files install isn't
+    user-writable, so relative runtime paths would silently fail exactly
+    when a non-developer is the one running Aegis. Frozen builds anchor
+    them here instead; users can also drop a `.env` or a `config.yaml`
+    override in this directory (see load_config)."""
+    system = platform.system()
+    if system == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "Aegis"
+    if system == "Windows":
+        base = os.environ.get("LOCALAPPDATA")
+        return (Path(base) if base else Path.home() / "AppData" / "Local") / "Aegis"
+    return Path.home() / ".local" / "share" / "aegis"
 
 
 def _load_env_file(path: Path = ENV_FILE_PATH) -> None:
@@ -45,6 +68,9 @@ class AppConfig:
     watched_folders: list[str] = field(default_factory=list)
     poll_interval_seconds: int = 3          # used by every polling-based monitor (USB/startup/process fallback)
     notify_on_startup_scan: bool = True     # send a summary notification when the app first starts
+    notify_min_severity: str = "low"        # popup floor: "low" (everything, v1 behavior) .. "critical".
+                                            # Gates ONLY the desktop popup -- events below the floor are
+                                            # still AI-explained, logged, and persisted to the timeline.
     log_path: str = "events.log"
     db_path: str = "aegis_events.db"        # SQLite event history for the timeline UI
     trusted_process_names: list[str] = field(default_factory=list)  # opt-in AI-call skip, see core/rule_engine.py
@@ -58,6 +84,16 @@ class AppConfig:
 
 def load_config(path: Path | None = None) -> AppConfig:
     _load_env_file()
+    if _is_frozen():
+        # Packaged builds: the checkout-relative .env baked into the bundle
+        # doesn't exist, so also read one from the per-user data dir, and
+        # prefer a user-edited config.yaml there over the bundled default
+        # (editing a yaml inside an installed .app/Program Files is not a
+        # reasonable ask).
+        _load_env_file(runtime_data_dir() / ".env")
+        user_config = runtime_data_dir() / "config.yaml"
+        if path is None and user_config.exists():
+            path = user_config
     path = path or DEFAULT_CONFIG_PATH
     if not path.exists():
         print(f"[config] no config.yaml found at {path}, using defaults", file=sys.stderr)
@@ -76,6 +112,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         watched_folders=raw.get("watched_folders") or [],
         poll_interval_seconds=int(raw.get("poll_interval_seconds", 3)),
         notify_on_startup_scan=bool(raw.get("notify_on_startup_scan", True)),
+        notify_min_severity=_parse_min_severity(raw.get("notify_min_severity", "low")),
         log_path=raw.get("log_path", "events.log"),
         db_path=raw.get("db_path", "aegis_events.db"),
         trusted_process_names=raw.get("trusted_process_names") or [],
@@ -85,6 +122,8 @@ def load_config(path: Path | None = None) -> AppConfig:
     if not cfg.watched_folders:
         cfg = _with_default_folders(cfg)
 
+    _anchor_runtime_paths(cfg)
+
     if not cfg.api_key:
         print(
             f"[config] WARNING: environment variable '{cfg.ai_api_key_env}' is not set. "
@@ -92,6 +131,36 @@ def load_config(path: Path | None = None) -> AppConfig:
             file=sys.stderr,
         )
     return cfg
+
+
+def _anchor_runtime_paths(cfg: AppConfig) -> None:
+    """Frozen builds only: rewrite relative log/db paths to the per-user
+    data dir (see runtime_data_dir). Absolute paths in config.yaml are
+    always respected as-is, frozen or not."""
+    if not _is_frozen():
+        return
+    data_dir = runtime_data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    for attr in ("log_path", "db_path"):
+        p = Path(getattr(cfg, attr))
+        if not p.is_absolute():
+            setattr(cfg, attr, str(data_dir / p))
+
+
+def _parse_min_severity(value) -> str:
+    """A typo'd severity floor must degrade to 'show everything', never to
+    'show nothing' -- silently suppressing all popups because someone wrote
+    `notify_min_severity: hgih` would look identical to a healthy, quiet
+    system, which is the same failure mode ADR-002/ADR-003 exist to avoid."""
+    level = str(value).strip().lower()
+    if level in ("low", "medium", "high", "critical"):
+        return level
+    print(
+        f"[config] WARNING: notify_min_severity '{value}' is not one of "
+        f"low/medium/high/critical -- falling back to 'low' (notify on everything).",
+        file=sys.stderr,
+    )
+    return "low"
 
 
 def _parse_ai_block(raw: dict) -> dict:

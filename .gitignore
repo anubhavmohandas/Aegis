@@ -20,6 +20,8 @@ build/
 dist/
 *.manifest
 *.spec
+# but keep the checked-in build recipe -- only ad-hoc generated specs are ignored
+!packaging/*.spec
 *.app
 *.dmg
 *.pkg

@@ -24,6 +24,14 @@ watched_folders: []
 
 poll_interval_seconds: 3      # used by every polling-based monitor (registry, login items, USB on Mac, WMI fallback)
 notify_on_startup_scan: true
+
+# Popup severity floor: low | medium | high | critical.
+# "low" = notify on everything (v1 behavior). "high" = only interrupt for
+# high/critical. This gates ONLY the desktop popup -- events below the floor
+# are still AI-explained, logged, and stored in the timeline (that's where
+# you review what you opted out of being interrupted for). Invalid values
+# fall back to "low" with a warning, never to silence.
+notify_min_severity: low
 log_path: events.log
 db_path: aegis_events.db      # SQLite event history read by ui/timeline_app.py
 

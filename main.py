@@ -34,6 +34,7 @@ from core.dispatcher import Dispatcher
 from core.folder_monitor import FolderMonitor
 from core.notifier import notify
 from core.tray_app import TrayApp
+from core.version import __version__
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,7 +82,7 @@ def build_platform_monitors(system: str, event_queue: Queue, poll_interval: int)
 
 def main(use_tray: bool = True):
     system = platform.system()
-    logger.info("Starting Aegis on %s", system)
+    logger.info("Starting Aegis %s on %s", __version__, system)
 
     config = load_config()
     event_queue: Queue = Queue()
