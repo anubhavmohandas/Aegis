@@ -73,7 +73,7 @@ class WindowsStartupMonitor:
         self._stop = threading.Event()
         self._registry_thread: threading.Thread | None = None
         self._observer = Observer()
-        self._last_snapshot: dict[str, str] = {}
+        self._last_snapshot: dict[str, dict] = {}
 
     def start(self):
         self._start_folder_watch()
@@ -115,8 +115,8 @@ class WindowsStartupMonitor:
             self._diff_and_emit(self._last_snapshot, current)
             self._last_snapshot = current
 
-    def _read_all_run_keys(self, winreg) -> dict[str, str]:
-        values: dict[str, str] = {}
+    def _read_all_run_keys(self, winreg) -> dict[str, dict]:
+        values: dict[str, dict] = {}
         for hive_name, subkey in REGISTRY_RUN_KEYS:
             hive = getattr(winreg, hive_name)
             try:
@@ -125,7 +125,19 @@ class WindowsStartupMonitor:
                     while True:
                         try:
                             name, data, _ = winreg.EnumValue(key, i)
-                            values[f"{hive_name}\\{subkey}\\{name}"] = str(data)
+                            location = f"{hive_name}\\{subkey}"
+                            # v2 fix: this used to emit {"registry_path": key,
+                            # "value": value} -- neither key matches
+                            # core/events.py's StartupDetails TypedDict
+                            # (name/path/location), the same kind of silent
+                            # key-name mismatch already fixed for
+                            # trusted_process_names/trusted_usb_ids elsewhere.
+                            # Nothing reads these yet, but a future
+                            # trusted-startup-path feature would have hit the
+                            # exact same "silently never matches" bug.
+                            values[f"{location}\\{name}"] = {
+                                "name": name, "path": str(data), "location": location,
+                            }
                             i += 1
                         except OSError:
                             break
@@ -135,22 +147,22 @@ class WindowsStartupMonitor:
                 logger.warning("Could not read %s\\%s: %s", hive_name, subkey, e)
         return values
 
-    def _diff_and_emit(self, old: dict[str, str], new: dict[str, str]):
-        for key, value in new.items():
+    def _diff_and_emit(self, old: dict[str, dict], new: dict[str, dict]):
+        for key, info in new.items():
             if key not in old:
                 self.out_queue.put(MonitorEvent(
                     category=EventCategory.STARTUP_ITEM_ADDED,
-                    summary=f"Startup registry entry added: {key} = {value}",
-                    details={"registry_path": key, "value": value},
+                    summary=f"Startup registry entry added: {key} = {info['path']}",
+                    details=info,
                     source="startup",
                     confidence="polled",
                 ))
-        for key, value in old.items():
+        for key, info in old.items():
             if key not in new:
                 self.out_queue.put(MonitorEvent(
                     category=EventCategory.STARTUP_ITEM_REMOVED,
                     summary=f"Startup registry entry removed: {key}",
-                    details={"registry_path": key, "value": value},
+                    details=info,
                     source="startup",
                     confidence="polled",
                 ))

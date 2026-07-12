@@ -113,6 +113,8 @@ class MacProcessMonitor:
         self._stop = threading.Event()
         self._poll_thread: threading.Thread | None = None
         self._nsworkspace_thread: threading.Thread | None = None
+        self._ns_observer = None
+        self._ns_notification_center = None
 
     def start(self):
         self._poll_thread = threading.Thread(target=self._poll_psutil, daemon=True)
@@ -125,9 +127,38 @@ class MacProcessMonitor:
         self._stop.set()
         if self._poll_thread:
             self._poll_thread.join(timeout=5)
-        # The NSWorkspace run loop thread is daemonized; it exits with the process.
+        self._stop_nsworkspace_observer()
 
     # ---- Coverage 1: GUI app launches via NSWorkspace (real-time) --------
+
+    def _stop_nsworkspace_observer(self):
+        # Confirmed bug: stop() previously only joined _poll_thread and left
+        # a comment claiming the NSWorkspace run loop thread "exits with the
+        # process" -- true only at final process exit, not at this stop().
+        # desktop_app.py's Start/Stop Monitoring button rebuilds a fresh
+        # MacProcessMonitor (and a fresh Queue) on every restart *within one
+        # running process* -- so each stop/start cycle left the previous
+        # NSWorkspace observer registered and its blocking run loop alive
+        # forever, permanently pinned to the old, now-orphaned queue: one
+        # leaked OS thread + one leaked notification registration per cycle.
+        if _LaunchObserver is None:
+            return
+        try:
+            if self._ns_notification_center is not None and self._ns_observer is not None:
+                self._ns_notification_center.removeObserver_(self._ns_observer)
+        except Exception as e:
+            logger.debug("Could not remove NSWorkspace observer: %s", e)
+        try:
+            from PyObjCTools import AppHelper
+            AppHelper.stopEventLoop()
+        except Exception as e:
+            logger.debug("Could not stop NSWorkspace run loop: %s", e)
+        if self._nsworkspace_thread:
+            self._nsworkspace_thread.join(timeout=5)
+            if self._nsworkspace_thread.is_alive():
+                logger.warning("NSWorkspace observer thread did not exit within 5s of stop().")
+        self._ns_observer = None
+        self._ns_notification_center = None
 
     def _run_nsworkspace_observer(self):
         if _LaunchObserver is None:
@@ -145,6 +176,8 @@ class MacProcessMonitor:
             nc.addObserver_selector_name_object_(
                 observer, "appLaunched:", NSWorkspaceDidLaunchApplicationNotification, None
             )
+            self._ns_observer = observer
+            self._ns_notification_center = nc
             logger.info("NSWorkspace GUI-app-launch observer started.")
             AppHelper.runConsoleEventLoop(installInterrupt=False)
         except Exception as e:
@@ -154,7 +187,18 @@ class MacProcessMonitor:
     # ---- Coverage 2: everything else via psutil polling diff -------------
 
     def _poll_psutil(self):
-        known_pids = {p.pid for p in psutil.process_iter()}
+        # Confirmed bug: this initial baseline snapshot ran outside any
+        # try/except, unlike the per-iteration psutil call inside the loop
+        # below (which already handles failure). If this call raised, the
+        # thread died before the loop ever ran -- with zero log output --
+        # silently taking down the psutil half of process monitoring.
+        try:
+            known_pids = {p.pid for p in psutil.process_iter()}
+        except Exception as e:
+            logger.error("Initial psutil.process_iter baseline failed (%s) -- starting from an "
+                         "empty baseline, so the first poll will report every already-running "
+                         "process as newly started.", e)
+            known_pids = set()
         while not self._stop.is_set():
             self._stop.wait(self.poll_interval_seconds)
             if self._stop.is_set():

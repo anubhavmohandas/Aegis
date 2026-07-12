@@ -109,6 +109,16 @@ class RuleEngine:
                 if exe_path:
                     digest = _sha256_of(exe_path)
                     if digest and digest.lower() in self.trusted_process_hashes:
+                        # Confirmed bug: this hash was computed and used for the
+                        # match but never written back into event.details --
+                        # core/events.py's ProcessDetails TypedDict documents
+                        # `sha256` as "present if the rule engine's hash check
+                        # computed one," but it never actually was. The event
+                        # persisted to the DB for a hash-matched process (whose
+                        # own canned_explanation literally cites "its sha256
+                        # matches...") carried no sha256, so the audit trail
+                        # couldn't show what value was actually matched.
+                        event.details["sha256"] = digest
                         return RuleVerdict(
                             skip_ai=True,
                             canned_explanation=f"{name or exe_path} started. Its sha256 matches your "

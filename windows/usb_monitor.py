@@ -41,42 +41,54 @@ class WindowsUsbMonitor:
     def _watch(self, notification_type: str, category: EventCategory):
         try:
             import wmi
+            import pythoncom
         except ImportError:
-            logger.error("`wmi` package not installed -- USB monitoring disabled. pip install wmi pywin32")
+            logger.error("`wmi`/`pywin32` package not installed -- USB monitoring disabled. "
+                         "pip install wmi pywin32")
             return
 
+        # Confirmed bug (same as windows/process_monitor.py's WMI fallback):
+        # wmi.WMI() requires COM initialized on the calling thread. start()
+        # spawns two of these on separate background threads with no COM
+        # init on either -- the first WMI call raised
+        # pywintypes.com_error("CoInitialize has not been called"), silently
+        # disabling USB monitoring entirely.
+        pythoncom.CoInitialize()
         try:
-            conn = wmi.WMI()
-            watcher = conn.Win32_PnPEntity.watch_for(notification_type=notification_type)
-        except Exception as e:
-            logger.error("Failed to set up WMI PnP watcher (%s): %s", notification_type, e)
-            return
-
-        while not self._stop.is_set():
             try:
-                entity = watcher(timeout_ms=2000)
-            except wmi.x_wmi_timed_out:
-                continue
+                conn = wmi.WMI()
+                watcher = conn.Win32_PnPEntity.watch_for(notification_type=notification_type)
             except Exception as e:
-                logger.error("WMI PnP watcher error: %s", e)
-                continue
+                logger.error("Failed to set up WMI PnP watcher (%s): %s", notification_type, e)
+                return
 
-            device_id = getattr(entity, "DeviceID", "") or ""
-            pnp_class = getattr(entity, "PNPClass", "") or ""
-            # Filter to USB devices specifically -- Win32_PnPEntity fires for
-            # every plug-and-play device (Bluetooth, virtual adapters, etc),
-            # not just USB.
-            if "USB" not in device_id.upper() and pnp_class.upper() != "USB":
-                continue
+            while not self._stop.is_set():
+                try:
+                    entity = watcher(timeout_ms=2000)
+                except wmi.x_wmi_timed_out:
+                    continue
+                except Exception as e:
+                    logger.error("WMI PnP watcher error: %s", e)
+                    continue
 
-            name = getattr(entity, "Name", "Unknown device")
-            action = "connected" if category == EventCategory.USB_CONNECTED else "removed"
-            self.out_queue.put(
-                MonitorEvent(
-                    category=category,
-                    summary=f"USB device {action}: {name}",
-                    details={"device_id": device_id, "name": name, "pnp_class": pnp_class},
-                    source="usb",
-                    confidence="certain",
+                device_id = getattr(entity, "DeviceID", "") or ""
+                pnp_class = getattr(entity, "PNPClass", "") or ""
+                # Filter to USB devices specifically -- Win32_PnPEntity fires for
+                # every plug-and-play device (Bluetooth, virtual adapters, etc),
+                # not just USB.
+                if "USB" not in device_id.upper() and pnp_class.upper() != "USB":
+                    continue
+
+                name = getattr(entity, "Name", "Unknown device")
+                action = "connected" if category == EventCategory.USB_CONNECTED else "removed"
+                self.out_queue.put(
+                    MonitorEvent(
+                        category=category,
+                        summary=f"USB device {action}: {name}",
+                        details={"device_id": device_id, "name": name, "pnp_class": pnp_class},
+                        source="usb",
+                        confidence="certain",
+                    )
                 )
-            )
+        finally:
+            pythoncom.CoUninitialize()

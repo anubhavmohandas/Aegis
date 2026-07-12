@@ -116,7 +116,19 @@ class SecretsStore:
 
     def _save_all(self, values: dict) -> None:
         plaintext = json.dumps(values).encode("utf-8")
-        self._blob_path.write_bytes(_encrypt(self._key, plaintext))
+        blob = _encrypt(self._key, plaintext)
+        # Confirmed bug: a single write_bytes() call is not atomic -- and
+        # get_secret() (core/config.py's AppConfig.api_key) is called on
+        # essentially every dispatched event. Saving a new key from the
+        # dashboard's Settings page while events are actively flowing could
+        # let a concurrent read see a partially-written file, fail the HMAC
+        # check in _decrypt(), and transiently report a real, just-configured
+        # key as unset. Write to a sibling temp file and os.replace() into
+        # place instead -- atomic on both POSIX and Windows.
+        tmp_path = self._blob_path.with_name(self._blob_path.name + ".tmp")
+        tmp_path.write_bytes(blob)
+        _chmod_user_only(tmp_path)
+        os.replace(tmp_path, self._blob_path)
         _chmod_user_only(self._blob_path)
 
     def get(self, name: str) -> str | None:

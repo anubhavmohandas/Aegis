@@ -44,25 +44,36 @@ class LinuxUsbMonitor:
             self._observer.stop()
 
     def _on_event(self, action: str, device: pyudev.Device):
-        # udev fires for every USB node (hub ports, interfaces, etc) --
-        # keep to device-level "add"/"remove" to match one notification per
-        # physical device, not one per interface.
-        if device.device_type not in ("usb_device",) and device.get("DEVTYPE") != "usb_device":
-            return
-        if action not in ("add", "remove"):
-            return
+        # Confirmed bug: unlike every sibling collector in this codebase
+        # (Windows process/USB, macOS process/USB/startup, Linux process),
+        # this callback had no exception guard. pyudev.MonitorObserver does
+        # not itself protect callback exceptions in its dispatch loop, so a
+        # failure here (e.g. extended udev properties becoming unreadable
+        # during rapid device removal) would propagate and silently kill the
+        # observer thread -- ending USB monitoring for the rest of the
+        # session with no error, no restart, nothing visible to the user.
+        try:
+            # udev fires for every USB node (hub ports, interfaces, etc) --
+            # keep to device-level "add"/"remove" to match one notification
+            # per physical device, not one per interface.
+            if device.device_type not in ("usb_device",) and device.get("DEVTYPE") != "usb_device":
+                return
+            if action not in ("add", "remove"):
+                return
 
-        name = device.get("ID_MODEL", None) or device.get("ID_MODEL_FROM_DATABASE", None) or "Unknown USB device"
-        vendor = device.get("ID_VENDOR", "unknown")
-        serial = device.get("ID_SERIAL_SHORT", device.sys_path)
+            name = device.get("ID_MODEL", None) or device.get("ID_MODEL_FROM_DATABASE", None) or "Unknown USB device"
+            vendor = device.get("ID_VENDOR", "unknown")
+            serial = device.get("ID_SERIAL_SHORT", device.sys_path)
 
-        category = EventCategory.USB_CONNECTED if action == "add" else EventCategory.USB_REMOVED
-        verb = "connected" if action == "add" else "removed"
+            category = EventCategory.USB_CONNECTED if action == "add" else EventCategory.USB_REMOVED
+            verb = "connected" if action == "add" else "removed"
 
-        self.out_queue.put(MonitorEvent(
-            category=category,
-            summary=f"USB device {verb}: {name} ({vendor})",
-            details={"name": name, "vendor": vendor, "serial": str(serial), "device_id": str(serial)},
-            source="usb",
-            confidence="certain",
-        ))
+            self.out_queue.put(MonitorEvent(
+                category=category,
+                summary=f"USB device {verb}: {name} ({vendor})",
+                details={"name": name, "vendor": vendor, "serial": str(serial), "device_id": str(serial)},
+                source="usb",
+                confidence="certain",
+            ))
+        except Exception as e:
+            logger.error("Error handling udev USB event (action=%s): %s", action, e)

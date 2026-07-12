@@ -134,16 +134,16 @@ def load_config(path: Path | None = None) -> AppConfig:
         ai_api_key_env=ai["api_key_env"],
         ai_model=ai["model"],
         ai_temperature=ai["temperature"],
-        watched_folders=raw.get("watched_folders") or [],
-        poll_interval_seconds=int(raw.get("poll_interval_seconds", 3)),
+        watched_folders=_parse_str_list(raw, "watched_folders"),
+        poll_interval_seconds=_parse_int(raw, "poll_interval_seconds", 3),
         notify_enabled=bool(raw.get("notify_enabled", False)),
         notify_on_startup_scan=bool(raw.get("notify_on_startup_scan", True)),
         notify_min_severity=_parse_min_severity(raw.get("notify_min_severity", "low")),
         log_path=raw.get("log_path", "events.log"),
         db_path=raw.get("db_path", "aegis_events.db"),
-        trusted_process_names=raw.get("trusted_process_names") or [],
-        trusted_process_hashes=raw.get("trusted_process_hashes") or [],
-        trusted_usb_ids=raw.get("trusted_usb_ids") or [],
+        trusted_process_names=_parse_str_list(raw, "trusted_process_names"),
+        trusted_process_hashes=_parse_str_list(raw, "trusted_process_hashes"),
+        trusted_usb_ids=_parse_str_list(raw, "trusted_usb_ids"),
     )
     if not cfg.watched_folders:
         cfg = _with_default_folders(cfg)
@@ -189,6 +189,55 @@ def _parse_min_severity(value) -> str:
     return "low"
 
 
+def _parse_int(raw: dict, key: str, default: int) -> int:
+    # Confirmed bug: this used to be a bare `int(raw.get(key, default))` with
+    # no exception handling, called unconditionally from load_config(). A
+    # user typo in config.yaml (e.g. `poll_interval_seconds: "3s"`) raised an
+    # uncaught ValueError and crashed the whole app before the tray/dispatcher
+    # ever came up -- the same "unhandled exception on user-controlled input"
+    # pattern as the folder_monitor.py bug, just in config parsing instead of
+    # a collector. Degrade to the default instead, same as _parse_min_severity
+    # already does right next to this.
+    value = raw.get(key, default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        print(f"[config] WARNING: '{key}' value {value!r} is not a valid integer -- "
+              f"using default {default}.", file=sys.stderr)
+        return default
+
+
+def _parse_float(raw: dict, key: str, default: float) -> float:
+    value = raw.get(key, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        print(f"[config] WARNING: '{key}' value {value!r} is not a valid number -- "
+              f"using default {default}.", file=sys.stderr)
+        return default
+
+
+def _parse_str_list(raw: dict, key: str) -> list[str]:
+    # Confirmed bug: watched_folders/trusted_process_names/trusted_process_hashes/
+    # trusted_usb_ids were all assigned straight from `raw.get(key) or []` with
+    # no type check. YAML scalar syntax (e.g. `trusted_process_names: notepad.exe`
+    # instead of a `- notepad.exe` list) parses as a plain string -- which
+    # RuleEngine then iterates character-by-character ({'n','o','t','e',...}),
+    # silently turning "the trust list never matches" into a bug indistinguishable
+    # from "everything is working, nothing suspicious happened yet." Same failure
+    # shape as the already-fixed trusted_process_names/trusted_usb_ids key-name
+    # mismatches, just introduced one layer up at the config-parsing stage.
+    value = raw.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        print(f"[config] WARNING: '{key}' must be a YAML list (e.g. '- item1' / '- item2'), "
+              f"got {type(value).__name__} ({value!r}) -- ignoring it. This feature is "
+              f"effectively disabled until config.yaml is fixed.", file=sys.stderr)
+        return []
+    return [str(v) for v in value]
+
+
 def _parse_ai_block(raw: dict) -> dict:
     """Resolve the `ai:` config block, falling back to the pre-v0.3 flat
     `ai_provider`/`ai_model` keys so old config files keep working."""
@@ -223,7 +272,7 @@ def _parse_ai_block(raw: dict) -> dict:
             "ANTHROPIC_API_KEY" if provider == "anthropic" else defaults.ai_api_key_env,
         ),
         "model": ai_raw.get("model", defaults.ai_model),
-        "temperature": float(ai_raw.get("temperature", defaults.ai_temperature)),
+        "temperature": _parse_float(ai_raw, "temperature", defaults.ai_temperature),
     }
 
 

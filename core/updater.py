@@ -29,6 +29,7 @@ import platform
 import re
 import shlex
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -36,12 +37,27 @@ import urllib.request
 from pathlib import Path
 from urllib.error import URLError
 
+import certifi
+
 from .version import __version__
 
 logger = logging.getLogger("aegis.updater")
 
 GITHUB_REPO = "anubhavmohandas/Aegis"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+
+# Confirmed bug: urllib's plain ssl.create_default_context() has ZERO trust
+# anchors on some Python installs (verified on a real venv here -- a fresh
+# `ssl.create_default_context().cert_store_stats()` reported {'x509': 0, ...}).
+# That's a widely-known gotcha for python.org/Homebrew macOS Pythons that
+# never had the OS's root certs wired in, and there's no equivalent of
+# "Install Certificates.command" available inside a packaged, non-interactive
+# app -- every self-update check failed CERTIFICATE_VERIFY_FAILED and (before
+# the check_failed distinction above) silently read as "you're up to date."
+# certifi is already an install dependency (pulled in by anthropic/openai's
+# httpx), so use its CA bundle explicitly instead of trusting the platform
+# default to have one.
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 
 class UpdateError(Exception):
@@ -90,7 +106,7 @@ def check_for_update(timeout: int = 10) -> dict | None:
         RELEASES_API, headers={"Accept": "application/vnd.github+json", "User-Agent": "Aegis-updater"}
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CONTEXT) as resp:
             data = json.loads(resp.read())
     except (URLError, OSError, json.JSONDecodeError) as e:
         logger.warning("Update check failed: %s", e)
@@ -128,11 +144,33 @@ def _trim_notes(body: str, limit: int = 400) -> str:
     return body[:cut].rstrip() + "…"
 
 
+_ASSET_URL_PREFIX = f"https://github.com/{GITHUB_REPO}/releases/download/"
+
+
 def download_update(download_url: str, asset_name: str) -> Path:
+    # Confirmed bug: dashboard/server.py's /api/update/install used to hand
+    # whatever download_url/asset_name it received in the POST body straight
+    # to this function -- since that's a plain authenticated API call, not a
+    # value this module fetched itself, anything that can reach the endpoint
+    # with a valid session (malware running as the same user, a stolen
+    # session cookie, a future auth-bypass regression) could point Aegis's
+    # self-updater at an arbitrary URL and have the result *executed* as if
+    # it were a real release, or use a crafted asset_name like
+    # "../../../Library/LaunchAgents/x" to write outside the temp directory.
+    # server.py's install_update() now independently re-verifies against a
+    # fresh check_for_update() call before ever getting here, but this
+    # function guards the same two things again on its own -- defense in
+    # depth, not reliant on the caller having done it right.
+    safe_name = Path(asset_name).name
+    if not safe_name or safe_name != asset_name:
+        raise UpdateError(f"refusing to save update asset with an unsafe name: {asset_name!r}")
+    if not download_url.startswith(_ASSET_URL_PREFIX):
+        raise UpdateError(f"refusing to download update from an unexpected URL: {download_url!r}")
+
     dest_dir = Path(tempfile.mkdtemp(prefix="aegis-update-"))
-    dest = dest_dir / asset_name
+    dest = dest_dir / safe_name
     req = urllib.request.Request(download_url, headers={"User-Agent": "Aegis-updater"})
-    with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as f:
+    with urllib.request.urlopen(req, timeout=120, context=_SSL_CONTEXT) as resp, open(dest, "wb") as f:
         shutil.copyfileobj(resp, f)
     return dest
 
@@ -151,8 +189,17 @@ def _install_macos(installer_path: Path) -> None:
     mounts the DMG, swaps /Applications/Aegis.app, relaunches, and cleans up
     after itself -- then this function returns and the caller quits."""
     app_path = _current_app_bundle_macos()
+    new_app_path = app_path.with_name(app_path.name + ".new")
+    bak_app_path = app_path.with_name(app_path.name + ".bak")
     pid = os.getpid()
     q = shlex.quote
+    # Confirmed bug: this used to `rm -rf` the live app bundle BEFORE `cp -R`
+    # of the replacement -- if the copy failed partway (disk full,
+    # permissions, DMG unmounted early), the old app was already gone with
+    # nothing to fall back to and no automatic recovery. Now the new bundle
+    # is built fully alongside the old one first (old app untouched the
+    # whole time), and the swap itself is two `mv`s (fast, same-volume
+    # renames) with an explicit rollback if the second one fails.
     script = f"""#!/bin/bash
 set -e
 while kill -0 {pid} 2>/dev/null; do sleep 0.5; done
@@ -164,10 +211,23 @@ if [ -z "$SRC_APP" ]; then
     rmdir "$MOUNT_DIR" 2>/dev/null || true
     exit 1
 fi
-rm -rf {q(str(app_path))}
-cp -R "$SRC_APP" {q(str(app_path))}
+rm -rf {q(str(new_app_path))} {q(str(bak_app_path))}
+if ! cp -R "$SRC_APP" {q(str(new_app_path))}; then
+    rm -rf {q(str(new_app_path))}
+    hdiutil detach "$MOUNT_DIR" -quiet || true
+    rmdir "$MOUNT_DIR" 2>/dev/null || true
+    exit 1
+fi
 hdiutil detach "$MOUNT_DIR" -quiet || true
 rmdir "$MOUNT_DIR" 2>/dev/null || true
+mv {q(str(app_path))} {q(str(bak_app_path))}
+if mv {q(str(new_app_path))} {q(str(app_path))}; then
+    rm -rf {q(str(bak_app_path))}
+else
+    mv {q(str(bak_app_path))} {q(str(app_path))}
+    rm -rf {q(str(new_app_path))}
+    exit 1
+fi
 open {q(str(app_path))}
 rm -f {q(str(installer_path))}
 rm -- "$0"

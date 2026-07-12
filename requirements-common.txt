@@ -9,3 +9,7 @@ openai>=1.50
 fpdf2>=2.7     # pure-Python PDF rendering for the dashboard's AI report export -- no system deps
 pywebview>=5.0 # native window shell for desktop_app.py (wraps the dashboard) -- Cocoa/WebView2/GTK per OS
 PySide6>=6.8   # only needed to run ui/timeline_app.py -- the background monitor (main.py) doesn't require it
+certifi        # was only ever an indirect dep (anthropic/openai's httpx) -- core/updater.py now imports it
+               # directly for its CA bundle, since some Python installs ship an ssl module with ZERO
+               # trust anchors loaded by default (confirmed here), which made every self-update check
+               # fail CERTIFICATE_VERIFY_FAILED regardless of real network/GitHub availability

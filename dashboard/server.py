@@ -627,12 +627,30 @@ def check_update() -> dict:
 
 
 def install_update(download_url: str, asset_name: str) -> dict:
-    from core.updater import download_update, install_update as do_install, UpdateError
+    from core.updater import check_for_update, download_update, install_update as do_install, UpdateError
 
     if not (DashboardHandler.in_process_monitor and _is_frozen()):
         return {"error": "self-update is only available in the packaged desktop app"}
     if DashboardHandler.quit_callback is None:
         return {"error": "no quit hook wired up -- cannot safely restart"}
+
+    # Confirmed bug: this used to hand the client-supplied download_url/
+    # asset_name straight to download_update()/do_install() -- i.e. anything
+    # that could send one authenticated POST to this endpoint (malware
+    # running as the same OS user, a stolen session cookie, a future
+    # auth-bypass elsewhere) could point Aegis's self-updater at an arbitrary
+    # URL and have the result downloaded and *executed* as a routine update.
+    # Never trust these two values on their own -- re-derive them from a
+    # fresh, authoritative GitHub API call right here and require an exact
+    # match before downloading or installing anything.
+    try:
+        info = check_for_update()
+    except UpdateError as e:
+        return {"error": f"could not verify this update before installing it: {e}"}
+    if info is None or info["download_url"] != download_url or info["asset_name"] != asset_name:
+        return {"error": "update info is stale or does not match the latest published release -- "
+                          "refresh and try again"}
+
     try:
         installer_path = download_update(download_url, asset_name)
         do_install(installer_path, DashboardHandler.quit_callback)

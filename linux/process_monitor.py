@@ -48,7 +48,18 @@ class LinuxProcessMonitor:
             self._thread.join(timeout=5)
 
     def _poll(self):
-        known_pids = {p.pid for p in psutil.process_iter()}
+        # Confirmed bug: this initial baseline snapshot ran outside any
+        # try/except, unlike the per-iteration psutil call inside the loop
+        # below (which already handles failure). If this call raised, the
+        # thread died before the loop ever ran -- with zero log output --
+        # silently taking down process monitoring entirely.
+        try:
+            known_pids = {p.pid for p in psutil.process_iter()}
+        except Exception as e:
+            logger.error("Initial psutil.process_iter baseline failed (%s) -- starting from an "
+                         "empty baseline, so the first poll will report every already-running "
+                         "process as newly started.", e)
+            known_pids = set()
         while not self._stop.is_set():
             self._stop.wait(self.poll_interval_seconds)
             if self._stop.is_set():

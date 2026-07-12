@@ -200,14 +200,31 @@ def main():
         if http_server is not None:
             http_server.shutdown()
 
-    window = webview.create_window(
-        WINDOW_TITLE,
-        f"http://{HOST}:{PORT}",
-        width=1500, height=940, min_size=(1080, 680),
-    )
-    window.events.closed += _on_closed
-    window.events.shown += lambda: _darken_titlebar(window)
-    webview.start(icon=str(APP_ICON) if APP_ICON.is_file() else None)
+    # Confirmed bug: create_window()/start() were called with no try/except.
+    # All monitor/dispatcher threads are daemonic, so the *process* still
+    # exits fine either way -- but if window creation fails (missing
+    # WebView2 runtime on Windows, no GTK/QtWebEngine on a headless Linux
+    # box), _on_closed() never fires, so pipeline.stop()/http_server.shutdown()
+    # were skipped: in-flight AI calls/DB writes got cut off ungracefully,
+    # and in the "another instance already has the dashboard" branch above,
+    # the second monitor pipeline this process just started (still writing
+    # to the shared DB) was never stopped either.
+    try:
+        window = webview.create_window(
+            WINDOW_TITLE,
+            f"http://{HOST}:{PORT}",
+            width=1500, height=940, min_size=(1080, 680),
+        )
+        window.events.closed += _on_closed
+        window.events.shown += lambda: _darken_titlebar(window)
+        webview.start(icon=str(APP_ICON) if APP_ICON.is_file() else None)
+    except Exception:
+        logger.exception("Failed to open the desktop window -- shutting down cleanly instead of "
+                          "leaving the monitor pipeline/HTTP server running with no window.")
+        pipeline.stop()
+        if http_server is not None:
+            http_server.shutdown()
+        raise
 
 
 if __name__ == "__main__":

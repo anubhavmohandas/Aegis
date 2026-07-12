@@ -129,40 +129,52 @@ class WindowsProcessMonitor:
     def _run_wmi_fallback(self):
         try:
             import wmi
+            import pythoncom
         except ImportError:
-            logger.error("`wmi` package not installed -- process monitoring disabled entirely. "
+            logger.error("`wmi`/`pywin32` package not installed -- process monitoring disabled entirely. "
                          "pip install wmi pywin32")
             return
 
         self._backend = "wmi"
+        # Confirmed bug: wmi.WMI() goes through win32com.client, which requires
+        # COM to be initialized on the calling thread -- this runs on a
+        # background thread (see start()), which gets no automatic COM init.
+        # Without this, the very first WMI call here raised
+        # pywintypes.com_error("CoInitialize has not been called"), which the
+        # broad except below swallowed into a single ERROR log line --
+        # process monitoring went silently dark with no further symptom.
+        pythoncom.CoInitialize()
         try:
-            conn = wmi.WMI()
-            watcher = conn.Win32_Process.watch_for("creation")
-        except Exception as e:
-            logger.error("Failed to set up WMI process watcher: %s", e)
-            return
-
-        while not self._stop.is_set():
             try:
-                # watch_for blocks; use a short timeout so we can check _stop.
-                new_process = watcher(timeout_ms=self.poll_interval_seconds * 1000)
-            except wmi.x_wmi_timed_out:
-                continue
+                conn = wmi.WMI()
+                watcher = conn.Win32_Process.watch_for("creation")
             except Exception as e:
-                logger.error("WMI watcher error: %s", e)
-                continue
+                logger.error("Failed to set up WMI process watcher: %s", e)
+                return
 
-            self.out_queue.put(
-                MonitorEvent(
-                    category=EventCategory.PROCESS_STARTED,
-                    summary=f"New process: {new_process.Caption} (PID {new_process.ProcessId})",
-                    details={
-                        "image_name": new_process.Caption,
-                        "pid": new_process.ProcessId,
-                        "executable_path": getattr(new_process, "ExecutablePath", "unknown"),
-                        "command_line": getattr(new_process, "CommandLine", "unknown"),
-                    },
-                    source="process",
-                    confidence="polled",  # honest: WMI creation events lag real spawn time
+            while not self._stop.is_set():
+                try:
+                    # watch_for blocks; use a short timeout so we can check _stop.
+                    new_process = watcher(timeout_ms=self.poll_interval_seconds * 1000)
+                except wmi.x_wmi_timed_out:
+                    continue
+                except Exception as e:
+                    logger.error("WMI watcher error: %s", e)
+                    continue
+
+                self.out_queue.put(
+                    MonitorEvent(
+                        category=EventCategory.PROCESS_STARTED,
+                        summary=f"New process: {new_process.Caption} (PID {new_process.ProcessId})",
+                        details={
+                            "image_name": new_process.Caption,
+                            "pid": new_process.ProcessId,
+                            "executable_path": getattr(new_process, "ExecutablePath", "unknown"),
+                            "cmdline": getattr(new_process, "CommandLine", "unknown"),
+                        },
+                        source="process",
+                        confidence="polled",  # honest: WMI creation events lag real spawn time
+                    )
                 )
-            )
+        finally:
+            pythoncom.CoUninitialize()
