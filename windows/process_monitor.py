@@ -78,41 +78,15 @@ class WindowsProcessMonitor:
                 GUID("{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"),
             )
 
+            # TEMPORARY DIAGNOSTIC: pywintrace 0.2.0's callback payload shape is
+            # undocumented; log the raw value so the parser can be rewritten
+            # against real data. Restore the real callback from git history
+            # (audit-fixes-2026-07-11) once the shape is known.
             def _callback(event_tuple):
-                try:
-                    event_id = event_tuple.get("EventId") or event_tuple.get("EventHeader", {}).get("EventDescriptor", {}).get("Id")
-                    # EventId 1 == ProcessStart on this provider (per public docs).
-                    if event_id != 1:
-                        return
-                    image_name = event_tuple.get("ImageName", "unknown")
-                    pid = event_tuple.get("ProcessID", "unknown")
-                    parent_pid = event_tuple.get("ParentProcessID", "unknown")
-                    details = {"image_name": image_name, "pid": pid, "parent_pid": parent_pid}
-
-                    # v2 fix: the raw ETW ProcessStart event carries no exe path,
-                    # so RuleEngine's hash-trust branch (core/rule_engine.py) could
-                    # never fire on this backend -- the highest-fidelity Windows
-                    # event source. Resolve it via psutil immediately, since ETW
-                    # fires at/near process creation; a short-lived process can
-                    # still exit before this runs, so failure here must degrade
-                    # to "no exe available," never crash the callback (this thread
-                    # feeds the whole ETW pipeline).
-                    try:
-                        details["executable_path"] = psutil.Process(pid).exe()
-                    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError) as e:
-                        logger.debug("Could not resolve exe path for PID %s: %s", pid, e)
-
-                    self.out_queue.put(
-                        MonitorEvent(
-                            category=EventCategory.PROCESS_STARTED,
-                            summary=f"New process: {image_name} (PID {pid}, parent PID {parent_pid})",
-                            details=details,
-                            source="process",
-                            confidence="certain",
-                        )
-                    )
-                except Exception as e:
-                    logger.error("Error handling ETW event: %s", e)
+                logger.info("=" * 80)
+                logger.info("ETW callback type: %s", type(event_tuple))
+                logger.info("ETW callback repr: %r", event_tuple)
+                logger.info("=" * 80)
 
             etw_trace = ETW(providers=[provider], event_callback=_callback)
             etw_trace.start()

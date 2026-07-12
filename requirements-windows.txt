@@ -1,7 +1,7 @@
 -r requirements-common.txt
 pywin32>=306
 wmi>=1.5.1
-pywintrace>=0.3.0
+pywintrace>=0.2.0
 # pywintrace is sparsely maintained -- if `pip install` fails or the ETW
 # backend errors on import, the app still runs via the WMI polling fallback
 # (see windows/process_monitor.py). Check the package's repo for current
