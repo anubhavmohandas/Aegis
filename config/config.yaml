@@ -23,6 +23,11 @@ ai:
 watched_folders: []
 
 poll_interval_seconds: 3      # used by every polling-based monitor (registry, login items, USB on Mac, WMI fallback)
+
+# Master switch for OS desktop popups. Default OFF -- the dashboard timeline
+# already shows every event live, so popups are an opt-in interruption, not
+# the primary way to see activity. Everything below only matters if this is true.
+notify_enabled: false
 notify_on_startup_scan: true
 
 # Popup severity floor: low | medium | high | critical.

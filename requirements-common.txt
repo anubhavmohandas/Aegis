@@ -6,4 +6,5 @@ Pillow>=10.0
 psutil>=5.9
 anthropic>=0.40
 openai>=1.50
+fpdf2>=2.7     # pure-Python PDF rendering for the dashboard's AI report export -- no system deps
 PySide6>=6.8   # only needed to run ui/timeline_app.py -- the background monitor (main.py) doesn't require it

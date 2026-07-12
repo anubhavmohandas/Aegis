@@ -38,6 +38,24 @@ You will also be told a locally-computed severity level (low/medium/high/critica
 from a deterministic heuristic, not from you -- treat it as one input, not a fact to defer to. \
 You may agree, disagree, or add nuance to it in your explanation."""
 
+REPORT_SYSTEM_PROMPT = """You are writing the executive summary section of a personal desktop \
+security activity report, covering everything a monitoring tool observed over a given time \
+period. You will be given aggregate stats (event counts by severity/source/category) and a \
+list of the highest-severity events from the period.
+
+Write in this exact structure, plain text (no markdown headers, may use "- " bullets):
+
+Overview: 2-3 sentences summarizing overall activity level and whether anything stands out.
+Notable events: up to 4 bullets, each one specific event or pattern worth the user's attention
+  (skip this section entirely -- write nothing -- if nothing rises above routine background
+  activity).
+Recommendation: 1-2 sentences of concrete next steps, or a brief reassurance if nothing needs
+  action.
+
+Be honest about uncertainty and never claim to be an antivirus or threat-intel source -- you are \
+summarizing locally-computed severity heuristics and prior AI explanations, not issuing a \
+verdict. Keep the whole thing under 180 words. Plain English, no jargon."""
+
 
 class AIExplainer:
     def __init__(self, config: AppConfig):
@@ -110,3 +128,42 @@ class AIExplainer:
             ],
         )
         return resp.choices[0].message.content
+
+    def summarize_period(self, stats_block: str) -> str:
+        """Executive-summary narrative for the PDF activity report (see
+        core/report_generator.py). Same client/provider as explain(), a
+        different system prompt -- this is summarizing a whole time window
+        of already-computed stats and prior explanations, not a single
+        event."""
+        if not self.config.api_key:
+            return (f"[No AI summary -- {self.config.ai_api_key_env} is not set] "
+                     f"See the event table below for the raw activity.")
+        try:
+            if self.config.ai_provider == "anthropic":
+                client = self._get_client()
+                resp = client.messages.create(
+                    model=self.config.ai_model,
+                    max_tokens=400,
+                    temperature=self.config.ai_temperature,
+                    system=REPORT_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": stats_block}],
+                )
+                return resp.content[0].text
+            else:
+                client = self._get_client()
+                resp = client.chat.completions.create(
+                    model=self.config.ai_model,
+                    max_tokens=400,
+                    temperature=self.config.ai_temperature,
+                    messages=[
+                        {"role": "system", "content": REPORT_SYSTEM_PROMPT},
+                        {"role": "user", "content": stats_block},
+                    ],
+                )
+                return resp.choices[0].message.content
+        except Exception as e:
+            # Same rationale as explain(): never surface the raw exception
+            # text (may echo keys/URLs) into a document that gets exported
+            # and shared. The report still ships with its stats/table.
+            logger.error("AI period summary failed: %s", e)
+            return "[AI summary unavailable -- see logs] The stats and event table below are unaffected."

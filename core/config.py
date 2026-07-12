@@ -67,6 +67,9 @@ class AppConfig:
     ai_temperature: float = 0.2             # low on purpose: consistent, boring explanations
     watched_folders: list[str] = field(default_factory=list)
     poll_interval_seconds: int = 3          # used by every polling-based monitor (USB/startup/process fallback)
+    notify_enabled: bool = False            # master switch for OS desktop popups. Default OFF: the dashboard
+                                            # timeline is already a live view of every event, so popups are an
+                                            # opt-in interruption, not the primary way to see activity.
     notify_on_startup_scan: bool = True     # send a summary notification when the app first starts
     notify_min_severity: str = "low"        # popup floor: "low" (everything, v1 behavior) .. "critical".
                                             # Gates ONLY the desktop popup -- events below the floor are
@@ -111,6 +114,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         ai_temperature=ai["temperature"],
         watched_folders=raw.get("watched_folders") or [],
         poll_interval_seconds=int(raw.get("poll_interval_seconds", 3)),
+        notify_enabled=bool(raw.get("notify_enabled", False)),
         notify_on_startup_scan=bool(raw.get("notify_on_startup_scan", True)),
         notify_min_severity=_parse_min_severity(raw.get("notify_min_severity", "low")),
         log_path=raw.get("log_path", "events.log"),

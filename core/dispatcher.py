@@ -155,7 +155,9 @@ class Dispatcher:
 
     def _stage_explain_and_notify(self, event: MonitorEvent, severity: str) -> None:
         explanation = self.explainer.explain(event, severity)
-        if self._severity_meets_notify_floor(severity):
+        if not self.config.notify_enabled:
+            logger.debug("notify_enabled=false -- no popup for [%s] %s", severity, event.summary)
+        elif self._severity_meets_notify_floor(severity):
             notify(self._title_for(event, severity), explanation)
         else:
             logger.info("Below notify_min_severity=%s -- no popup for [%s] %s",

@@ -63,6 +63,7 @@
     </div>
     <button class="btn" id="export-json" title="Export current view as JSON">Export JSON</button>
     <button class="btn" id="export-csv" title="Export current view as CSV">Export CSV</button>
+    <button class="btn btn-primary" id="export-pdf-btn" title="Generate an AI-summarized PDF report">PDF Report</button>
     <button class="btn btn-ghost" id="logout-btn" title="End this session">Sign out</button>
   </div>
 </header>
@@ -185,10 +186,18 @@
 
   <div class="settings-card">
     <h2 class="settings-title">Notifications</h2>
-    <p class="settings-desc">The severity floor gates only desktop popups — every event is still
-       explained, logged, and kept in the timeline.</p>
+    <p class="settings-desc">The console already shows every event live — desktop popups are an
+       optional, separate interruption on top of that. Off by default.</p>
 
-    <div class="field">
+    <label class="switch-row" for="set-notify-enabled">
+      <span>
+        <span class="switch-label">Desktop popups</span>
+        <span class="switch-desc">Show OS notification popups for new events</span>
+      </span>
+      <input type="checkbox" id="set-notify-enabled" class="switch">
+    </label>
+
+    <div class="field" id="notify-subfields">
       <label>Popup severity floor</label>
       <div class="chip-group" id="severity-floor">
         <button class="chip chip-sev" data-value="low">Low — everything</button>
@@ -263,6 +272,43 @@
     </div>
   </div>
   <pre class="log-pre" id="log-pre">Loading…</pre>
+</div>
+
+<div class="drawer-overlay" id="report-overlay" hidden></div>
+<div class="log-modal report-modal" id="report-modal" hidden aria-label="Export PDF report">
+  <div class="drawer-head">
+    <span class="drawer-title">EXPORT PDF REPORT</span>
+    <button class="drawer-close" id="report-modal-close" aria-label="Close">✕</button>
+  </div>
+  <div class="drawer-body">
+    <p class="settings-desc">AI writes an executive summary of this period; the report also includes a
+       severity breakdown and the full event log.</p>
+
+    <div class="field">
+      <label>Period</label>
+      <div class="chip-group" id="report-range-chips">
+        <button class="chip active" data-range="today">Today</button>
+        <button class="chip" data-range="7d">Last 7 Days</button>
+        <button class="chip" data-range="30d">Last 30 Days</button>
+        <button class="chip" data-range="custom">Custom Range</button>
+      </div>
+    </div>
+
+    <div class="field-row" id="report-custom-range" hidden>
+      <div class="field">
+        <label for="report-start">From</label>
+        <input type="date" id="report-start" class="text-input">
+      </div>
+      <div class="field">
+        <label for="report-end">To</label>
+        <input type="date" id="report-end" class="text-input">
+      </div>
+    </div>
+  </div>
+  <div class="settings-actions report-modal-actions">
+    <span class="settings-note" id="report-note"></span>
+    <button class="btn btn-primary" id="report-generate">Generate Report</button>
+  </div>
 </div>
 
 <button class="new-events-pill" id="new-events-pill" hidden>

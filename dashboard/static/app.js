@@ -469,6 +469,81 @@ async function refreshStatsOnly() {
   try { renderStats(await api("/api/stats")); } catch { /* poll() will retry */ }
 }
 
+/* ---------- PDF report modal ---------- */
+
+function openReportModal() {
+  $("report-overlay").hidden = false;
+  $("report-modal").hidden = false;
+  $("report-note").textContent = "";
+}
+function closeReportModal() {
+  $("report-overlay").hidden = true;
+  $("report-modal").hidden = true;
+}
+
+function selectReportRange(range) {
+  document.querySelectorAll("#report-range-chips .chip").forEach((c) =>
+    c.classList.toggle("active", c.dataset.range === range));
+  $("report-custom-range").hidden = range !== "custom";
+}
+
+function reportRangeBounds() {
+  const active = document.querySelector("#report-range-chips .chip.active")?.dataset.range || "today";
+  const now = Date.now() / 1000;
+  if (active === "today") {
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    return { since: start.getTime() / 1000, until: now, label: "Today" };
+  }
+  if (active === "7d") return { since: now - 7 * 86400, until: now, label: "Last 7 Days" };
+  if (active === "30d") return { since: now - 30 * 86400, until: now, label: "Last 30 Days" };
+
+  // custom
+  const startVal = $("report-start").value;
+  const endVal = $("report-end").value;
+  if (!startVal || !endVal) return null;
+  const since = new Date(startVal + "T00:00:00").getTime() / 1000;
+  const until = new Date(endVal + "T23:59:59").getTime() / 1000;
+  if (since > until) return null;
+  return { since, until, label: `${startVal} - ${endVal}` };
+}
+
+async function generateReport() {
+  const bounds = reportRangeBounds();
+  if (!bounds) {
+    $("report-note").textContent = "Pick a valid start and end date.";
+    return;
+  }
+  const btn = $("report-generate");
+  btn.disabled = true;
+  btn.textContent = "Generating…";
+  $("report-note").textContent = "Asking the AI to summarize this period — this can take a few seconds.";
+  try {
+    const qs = new URLSearchParams({ since: bounds.since, until: bounds.until, label: bounds.label });
+    const res = await fetch(`/api/report/pdf?${qs.toString()}`);
+    if (res.status === 401) { location.replace("/login"); return; }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `report failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `aegis-report-${new Date().toISOString().slice(0, 10)}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    closeReportModal();
+    toast("Report downloaded");
+  } catch (err) {
+    $("report-note").textContent = String(err.message || err);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Generate Report";
+  }
+}
+
 /* ---------- monitor log modal ---------- */
 
 async function openLogModal() {
@@ -683,7 +758,9 @@ async function loadSettings() {
 
     document.querySelectorAll("#severity-floor .chip").forEach((c) =>
       c.classList.toggle("active", c.dataset.value === s.notify_min_severity));
+    $("set-notify-enabled").checked = s.notify_enabled;
     $("set-startup-scan").checked = s.notify_on_startup_scan;
+    applyNotifyEnabledState(s.notify_enabled);
     $("set-folders").value = s.watched_folders.join("\n");
     $("set-poll").value = s.poll_interval_seconds;
     $("set-trusted-names").value = s.trusted_process_names.join("\n");
@@ -693,6 +770,11 @@ async function loadSettings() {
     if (String(err).includes("unauthenticated")) return;
     toast("Could not load settings", true);
   }
+}
+
+function applyNotifyEnabledState(enabled) {
+  $("notify-subfields").classList.toggle("disabled", !enabled);
+  $("set-startup-scan").closest(".switch-row").classList.toggle("disabled", !enabled);
 }
 
 const splitLines = (id) => $(id).value.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -716,6 +798,7 @@ async function saveSettings() {
           temperature: Number($("set-temp").value),
           api_key: $("set-api-key").value,   // blank = keep existing
         },
+        notify_enabled: $("set-notify-enabled").checked,
         notify_min_severity: floor,
         notify_on_startup_scan: $("set-startup-scan").checked,
         watched_folders: splitLines("set-folders"),
@@ -742,6 +825,10 @@ async function saveSettings() {
 function bindSettings() {
   document.querySelectorAll(".view-tab").forEach((t) =>
     t.addEventListener("click", () => switchView(t.dataset.view)));
+
+  $("set-notify-enabled").addEventListener("change", (e) => {
+    applyNotifyEnabledState(e.target.checked);
+  });
 
   $("severity-floor").addEventListener("click", (e) => {
     const chip = e.target.closest(".chip");
@@ -796,8 +883,17 @@ function bind() {
   $("log-overlay").addEventListener("click", closeLogModal);
   $("log-refresh").addEventListener("click", refreshLogModal);
 
+  $("export-pdf-btn").addEventListener("click", openReportModal);
+  $("report-modal-close").addEventListener("click", closeReportModal);
+  $("report-overlay").addEventListener("click", closeReportModal);
+  $("report-range-chips").addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (chip) selectReportRange(chip.dataset.range);
+  });
+  $("report-generate").addEventListener("click", generateReport);
+
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { closeDrawer(); closeLogModal(); }
+    if (e.key === "Escape") { closeDrawer(); closeLogModal(); closeReportModal(); }
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "");
     if (e.key === "/" && !typing && !$("view-console").hidden) {
       e.preventDefault();

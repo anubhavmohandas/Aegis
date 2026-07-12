@@ -41,6 +41,8 @@ import psutil  # already a core Aegis dependency (requirements-common.txt)
 
 STATIC_DIR = Path(__file__).parent / "static"
 REPO_ROOT = Path(__file__).parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))  # lets the report endpoint lazily `import core.*` -- see _handle_report_pdf
 ASSETS_DIR = REPO_ROOT / "assets"                       # brand logo lives with the app assets
 CONFIG_PATH = REPO_ROOT / "config" / "config.yaml"      # same file core/config.py loads
 ENV_PATH = REPO_ROOT / ".env"                           # API keys live here, never in yaml
@@ -224,6 +226,7 @@ def read_settings() -> dict:
         },
         "watched_folders": raw.get("watched_folders") or [],
         "poll_interval_seconds": int(raw.get("poll_interval_seconds", 3)),
+        "notify_enabled": bool(raw.get("notify_enabled", False)),
         "notify_on_startup_scan": bool(raw.get("notify_on_startup_scan", True)),
         "notify_min_severity": raw.get("notify_min_severity", "low"),
         "trusted_process_names": raw.get("trusted_process_names") or [],
@@ -297,6 +300,7 @@ def write_settings(body: dict) -> dict:
         },
         "watched_folders": _clean_str_list(body.get("watched_folders")),
         "poll_interval_seconds": poll,
+        "notify_enabled": bool(body.get("notify_enabled", False)),
         "notify_on_startup_scan": bool(body.get("notify_on_startup_scan", True)),
         "notify_min_severity": severity,
         # runtime paths aren't editable from the UI on purpose -- pass through
@@ -609,6 +613,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({"log": monitor_log_tail(n)})
                 elif parsed.path == "/api/export":
                     self._handle_export(params)
+                elif parsed.path == "/api/report/pdf":
+                    self._handle_report_pdf(params)
                 else:
                     self._send_json({"error": "not found"}, status=404)
             elif parsed.path in ("/", "/index.html"):
@@ -638,6 +644,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
             body = json.dumps({"exported_at": time.time(), "events": events}, indent=2).encode()
             self._send(200, body, "application/json; charset=utf-8",
                        {"Content-Disposition": f'attachment; filename="aegis-events-{stamp}.json"'})
+
+    def _handle_report_pdf(self, params: dict):
+        # Lazy imports: core.ai_explainer pulls in anthropic/openai, which
+        # aren't stdlib -- keep the module docstring's "zero dependencies
+        # unless you use the AI features" promise intact for requests that
+        # never hit this endpoint (same pattern as read_settings' `import yaml`).
+        from core.config import load_config
+        from core.report_generator import format_range_label, generate_pdf_report
+
+        events = query_events(self.db_path, params, limit_cap=100_000)
+        try:
+            since = float(params.get("since", ["0"])[0] or 0)
+        except ValueError:
+            since = 0.0
+        try:
+            until = float(params.get("until", [str(time.time())])[0] or time.time())
+        except ValueError:
+            until = time.time()
+        label = params.get("label", [""])[0].strip() or format_range_label(since, until)
+
+        try:
+            config = load_config()
+            pdf_bytes = generate_pdf_report(events, label, since, until, config)
+        except Exception as exc:
+            self._send_json({"error": f"report generation failed: {exc}"}, status=500)
+            return
+
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        self._send(200, pdf_bytes, "application/pdf",
+                   {"Content-Disposition": f'attachment; filename="aegis-report-{stamp}.pdf"'})
 
     def _serve_static(self, path: str):
         name = path.lstrip("/") or "index.html"

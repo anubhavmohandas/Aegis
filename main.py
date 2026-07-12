@@ -99,7 +99,7 @@ def main(use_tray: bool = True):
     dispatcher_thread = threading.Thread(target=dispatcher.run_forever, daemon=True)
     dispatcher_thread.start()
 
-    if config.notify_on_startup_scan:
+    if config.notify_enabled and config.notify_on_startup_scan:
         notify("Aegis", f"Now monitoring your system ({system}). Watching: "
                          f"{', '.join(config.watched_folders) or 'no folders configured'}")
 

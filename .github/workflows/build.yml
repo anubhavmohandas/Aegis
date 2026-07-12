@@ -1,0 +1,73 @@
+name: Build packages
+
+# Manual trigger (Actions tab -> Build packages -> Run workflow) so a build
+# can be produced on demand, plus an automatic build whenever a version tag
+# is pushed. Windows can only be honestly built on windows-latest --
+# PyInstaller does not cross-compile -- so this replaces trying to produce a
+# Windows .exe from a non-Windows machine.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-common.txt -r requirements-windows.txt pyinstaller
+
+      - name: Build PyInstaller bundle
+        run: pyinstaller packaging/aegis.spec
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile Windows installer
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\windows-installer.iss'
+
+      - name: Upload onedir bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-windows-bundle
+          path: dist/Aegis/
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-windows-installer
+          path: packaging/output/*.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-common.txt -r requirements-macos.txt pyinstaller
+
+      - name: Build PyInstaller bundle
+        run: pyinstaller packaging/aegis.spec
+
+      - name: Build DMG
+        run: packaging/make_dmg.sh
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-macos-dmg
+          path: dist/*.dmg

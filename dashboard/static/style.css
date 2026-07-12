@@ -357,6 +357,13 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .stats-band > *:nth-child(4) { animation-delay: .12s; }
 .stats-band > *:nth-child(5) { animation-delay: .16s; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* Variants for elements whose resting position ALREADY depends on a
+   translate() (centering via top/left: 50% + transform, typically) --
+   `rise`'s bare `transform: none` end state would cancel that out once the
+   animation's fill-mode locks it in. Keep the base translate in both the
+   from/to states here; only the extra 6px settle-in offset animates away. */
+@keyframes rise-x { from { opacity: 0; transform: translateX(-50%) translateY(6px); } to { opacity: 1; transform: translateX(-50%); } }
+@keyframes rise-modal { from { opacity: 0; transform: translate(-50%, -50%) translateY(6px); } to { opacity: 1; transform: translate(-50%, -50%); } }
 
 .stat-label {
   display: block;
@@ -471,6 +478,7 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   gap: 14px; align-items: baseline;
   width: 100%; text-align: left;
   padding: 9px 12px;
+  margin-bottom: 6px;
   border: 1px solid transparent;
   border-left: 2px solid var(--sev-color, var(--border));
   border-radius: var(--radius);
@@ -549,7 +557,7 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 /* ---------- new events pill ---------- */
 
 .new-events-pill {
-  position: fixed; top: 74px; left: 50%; transform: translateX(-50%);
+  position: fixed; top: 74px; left: 50%;
   z-index: 50;
   display: inline-flex; align-items: center; gap: 8px;
   font-family: var(--font-display); font-size: 11px; font-weight: 600; letter-spacing: .1em;
@@ -560,7 +568,7 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   border-radius: 99px;
   padding: 8px 16px;
   box-shadow: var(--shadow-float);
-  animation: rise .25s ease both;
+  animation: rise-x .25s ease both;
 }
 
 /* ---------- drawer ---------- */
@@ -717,6 +725,7 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 .field { margin-bottom: 14px; }
 .field:last-child { margin-bottom: 0; }
+.field.disabled, .switch-row.disabled { opacity: .4; pointer-events: none; }
 .field label {
   display: block;
   font-family: var(--font-display);
@@ -822,7 +831,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 /* ---------- log modal ---------- */
 
 .log-modal {
-  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  position: fixed; top: 50%; left: 50%;
   z-index: 61;
   width: min(720px, 92vw);
   max-height: 76vh;
@@ -831,10 +840,21 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   border-radius: 10px;
   box-shadow: var(--shadow-float);
   display: flex; flex-direction: column;
-  animation: rise .2s ease both;
+  /* dedicated keyframes, not the shared `rise` -- `rise` ends on
+     `transform: none`, which would strip the translate(-50%, -50%) that
+     centers this modal the instant the animation finished (fill-mode
+     "both" locks in the keyframe's end value), leaving it anchored by its
+     top-left corner at the viewport's midpoint and hanging off the bottom
+     and right edges instead of centered. See also .toast / .new-events-pill
+     below, which have the same centering-transform + `rise` conflict. */
+  animation: rise-modal .2s ease both;
 }
 .log-modal .drawer-head { border-radius: 10px 10px 0 0; }
 .log-modal-actions { display: flex; gap: 8px; align-items: center; }
+
+.report-modal { width: min(460px, 92vw); max-height: none; }
+.report-modal .drawer-body { padding: 18px 20px 4px; }
+.report-modal-actions { padding: 14px 20px 18px; border-top: 1px solid var(--border); }
 .log-pre {
   margin: 0; padding: 16px 20px 20px;
   overflow: auto;
@@ -846,7 +866,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 /* ---------- toast ---------- */
 
 .toast {
-  position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%);
+  position: fixed; bottom: 60px; left: 50%;
   z-index: 90;
   font-family: var(--font-display);
   font-size: 12px; font-weight: 600; letter-spacing: .08em;
@@ -856,7 +876,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   border-radius: 99px;
   padding: 10px 20px;
   box-shadow: var(--shadow-float);
-  animation: rise .25s ease both;
+  animation: rise-x .25s ease both;
 }
 .toast.toast-error { border-color: var(--sev-critical); color: var(--sev-critical); }
 
