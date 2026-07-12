@@ -14,4 +14,4 @@ copy (Inno Setup can't import Python; keep them in sync by hand, and the
 packaging docs call that out).
 """
 
-__version__ = "2.0.1-alpha"
+__version__ = "2.0.2-alpha"
