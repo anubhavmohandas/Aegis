@@ -480,7 +480,7 @@ html.js .reveal.in{opacity:1;transform:none}
 <header class="hero" id="top">
   <div class="wrap hero-grid">
     <div>
-      <div class="status-pill"><span class="dot"></span>v2.0.0-alpha &nbsp;·&nbsp; <span class="flag">WATCHING</span></div>
+      <div class="status-pill"><span class="dot"></span>v2.0.2-alpha &nbsp;·&nbsp; <span class="flag">WATCHING</span></div>
       <h1>Know what your <span class="accent">machine</span> is actually doing.</h1>
       <p class="lede">
         Aegis is an AI-powered desktop security assistant for Windows, macOS, and Linux.
@@ -552,8 +552,8 @@ html.js .reveal.in{opacity:1;transform:none}
 
   <div class="ticker" aria-hidden="true">
     <div class="ticker-track">
-      <span>PROCESS MONITOR</span><span>USB DEVICES</span><span>STARTUP PERSISTENCE</span><span>WATCHED FOLDERS</span><span>LOCAL SEVERITY SCORING</span><span>PLAIN-ENGLISH EXPLANATIONS</span><span>SEARCHABLE TIMELINE</span>
-      <span>PROCESS MONITOR</span><span>USB DEVICES</span><span>STARTUP PERSISTENCE</span><span>WATCHED FOLDERS</span><span>LOCAL SEVERITY SCORING</span><span>PLAIN-ENGLISH EXPLANATIONS</span><span>SEARCHABLE TIMELINE</span>
+      <span>PROCESS MONITOR</span><span>USB DEVICES</span><span>STARTUP PERSISTENCE</span><span>WATCHED FOLDERS</span><span>LOCAL SEVERITY SCORING</span><span>PLAIN-ENGLISH EXPLANATIONS</span><span>SEARCHABLE TIMELINE</span><span>DASHBOARD UI</span><span>SELF-UPDATE</span><span>ENCRYPTED KEY STORAGE</span>
+      <span>PROCESS MONITOR</span><span>USB DEVICES</span><span>STARTUP PERSISTENCE</span><span>WATCHED FOLDERS</span><span>LOCAL SEVERITY SCORING</span><span>PLAIN-ENGLISH EXPLANATIONS</span><span>SEARCHABLE TIMELINE</span><span>DASHBOARD UI</span><span>SELF-UPDATE</span><span>ENCRYPTED KEY STORAGE</span>
     </div>
   </div>
 </header>
@@ -674,13 +674,14 @@ html.js .reveal.in{opacity:1;transform:none}
   <div class="wrap qs-grid">
     <div>
       <div class="sec-tag reveal">QUICK START</div>
-      <h2 class="reveal">Running in four commands.</h2>
-      <p class="sec-lede reveal">Python, a virtualenv, and optionally an API key. Aegis runs fine without one — you just lose the AI explanations, not the watching.</p>
+      <h2 class="reveal">Running in three commands.</h2>
+      <p class="sec-lede reveal"><b>desktop_app.py</b> is the real app — one window, a live event console, and a Settings page. Nothing to hand-edit first, and it runs fine without an API key — you just lose the AI explanations, not the watching.</p>
       <ul class="qs-notes reveal">
-        <li><b>Pick your provider</b> in <b>config/config.yaml</b> — NVIDIA, OpenAI, OpenRouter, local Ollama, or Anthropic.</li>
+        <li><b>First run:</b> sign in with <b>admin / admin</b>, then change it from <b>Settings → Account</b>.</li>
+        <li><b>API key</b> lives in <b>Settings → AI Explainer</b> — encrypted at rest and, unlike the old <b>.env</b>-file approach, survives every self-update.</li>
         <li><b>Windows:</b> run from an Administrator terminal for full process-monitoring power.</li>
         <li><b>macOS:</b> you'll get one Automation permission prompt the first time it checks login items.</li>
-        <li><b>Too noisy?</b> Set <b>notify_min_severity: high</b> — popups quiet down, the timeline still catches everything.</li>
+        <li><b>Headless / server box?</b> <b>python main.py</b> runs the same monitors as a system-tray app instead, configured via <b>config/config.yaml</b> or <b>.env</b>.</li>
       </ul>
     </div>
     <div class="reveal">
@@ -690,13 +691,13 @@ html.js .reveal.in{opacity:1;transform:none}
 <span class="c"># Windows: venv\Scripts\activate</span>
 <span class="p">$</span> pip install -r requirements-macos.txt
 <span class="c"># or -windows.txt / -linux.txt</span>
-<span class="p">$</span> echo "NVIDIA_API_KEY=nvapi-..." &gt; .env
-<span class="c"># optional — runs fine without one</span>
-<span class="p">$</span> python main.py</pre>
+<span class="p">$</span> python desktop_app.py
+<span class="c"># opens the dashboard in its own window — sign in with admin / admin</span></pre>
       </div>
       <div class="codebox" style="margin-top:14px">
-        <div class="cb-bar"><span>browse history</span><span>timeline</span></div>
-        <pre><span class="p">$</span> python ui/timeline_app.py</pre>
+        <div class="cb-bar"><span>headless / no window</span><span>tray only</span></div>
+        <pre><span class="p">$</span> python main.py
+<span class="c"># same monitors, no window — reads config/config.yaml + .env</span></pre>
       </div>
     </div>
   </div>
@@ -704,20 +705,23 @@ html.js .reveal.in{opacity:1;transform:none}
 
 <section id="status">
   <div class="wrap">
-    <div class="sec-tag reveal">STATUS — v2.0.0-ALPHA</div>
+    <div class="sec-tag reveal">STATUS — v2.0.2-ALPHA</div>
     <h2 class="reveal">Versioning tracks validation, not features.</h2>
     <p class="sec-lede reveal">Alpha means the features are done and macOS is validated on real hardware. Beta means Windows is too. 2.0.0 means public release.</p>
     <div class="status-grid">
-      <div class="st done reveal"><span class="mark">✓</span><div><h4>Multi-provider AI</h4><p>OpenAI-compatible endpoints + Anthropic, chosen per config.</p></div></div>
-      <div class="st done reveal"><span class="mark">✓</span><div><h4>macOS validated on real hardware</h4><p>Process, folder, USB, notifications — three real bugs found and fixed along the way.</p></div></div>
-      <div class="st done reveal"><span class="mark">✓</span><div><h4>Noise reduction</h4><p>Opt-in trusted lists, dedupe, rate limiting, configurable popup severity floor.</p></div></div>
-      <div class="st done reveal"><span class="mark">✓</span><div><h4>macOS packaging</h4><p>PyInstaller .app built and smoke-run on real hardware.</p></div></div>
-      <div class="st todo reveal"><span class="mark">◻</span><div><h4>Windows validation</h4><p>From source first, then the packaged build — in progress.</p></div></div>
-      <div class="st todo reveal"><span class="mark">◻</span><div><h4>Installer, dashboard &amp; signed releases</h4><p>Inno Setup installer, dashboard UI, screenshots — deliberately after validation.</p></div></div>
+      <div class="st done reveal"><span class="mark">✓</span><div><h4>Desktop app &amp; dashboard</h4><p>One window: live timeline with filters/search, a details drawer with AI explanations, AI-generated PDF reports, and a Settings page.</p></div></div>
+      <div class="st done reveal"><span class="mark">✓</span><div><h4>Encrypted local API-key storage</h4><p>Set once from Settings — survives self-updates, unlike the old .env-file approach.</p></div></div>
+      <div class="st done reveal"><span class="mark">✓</span><div><h4>Self-update</h4><p>Checks GitHub Releases, downloads, and installs in place from Settings. Verified on macOS; Windows install path implemented, not yet run on real hardware.</p></div></div>
+      <div class="st done reveal"><span class="mark">✓</span><div><h4>Changeable login password</h4><p>Settings → Account — no longer a fixed admin/admin.</p></div></div>
+      <div class="st done reveal"><span class="mark">✓</span><div><h4>macOS validated on real hardware</h4><p>Process, folder, USB, notifications, packaging — several real bugs found and fixed along the way.</p></div></div>
+      <div class="st done reveal"><span class="mark">✓</span><div><h4>Multi-provider AI &amp; noise reduction</h4><p>OpenAI-compatible endpoints + Anthropic; opt-in trusted lists, dedupe, rate limiting, configurable popup floor.</p></div></div>
+      <div class="st todo reveal"><span class="mark">◻</span><div><h4>Windows validation</h4><p>Running from source on real hardware now. Real-time process monitoring depends on a third-party ETW library whose delivery path is currently blocked — its WMI-polling fallback is being fixed before this ships as validated.</p></div></div>
+      <div class="st todo reveal"><span class="mark">◻</span><div><h4>Windows packaged build &amp; Linux validation</h4><p>Windows installer/self-update implemented but unverified on hardware; Linux implemented, not yet run on real hardware.</p></div></div>
     </div>
     <p class="version-note reveal">
       Full verification log, architecture, and every known gap live in ARCHITECTURE.md —
-      the gaps are documented, not hidden.
+      engineering decisions and their reasoning in docs/DECISIONS.md. The gaps are
+      documented, not hidden.
     </p>
   </div>
 </section>
