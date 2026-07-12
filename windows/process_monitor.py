@@ -78,41 +78,24 @@ class WindowsProcessMonitor:
                 GUID("{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"),
             )
 
+            # TEMPORARY DIAGNOSTIC: pywintrace 0.2.0 invokes the callback as
+            # event_callback((event_id, out)) -- a 2-tuple, not a dict (see
+            # site-packages/etw/etw.py:839). The payload keys of `out` are
+            # undocumented, so log them raw before rewriting the parser.
+            # Restore the real callback from git history (audit-fixes-2026-07-11)
+            # once the payload shape is confirmed.
             def _callback(event_tuple):
                 try:
-                    event_id = event_tuple.get("EventId") or event_tuple.get("EventHeader", {}).get("EventDescriptor", {}).get("Id")
-                    # EventId 1 == ProcessStart on this provider (per public docs).
-                    if event_id != 1:
-                        return
-                    image_name = event_tuple.get("ImageName", "unknown")
-                    pid = event_tuple.get("ProcessID", "unknown")
-                    parent_pid = event_tuple.get("ParentProcessID", "unknown")
-                    details = {"image_name": image_name, "pid": pid, "parent_pid": parent_pid}
+                    event_id, out = event_tuple
 
-                    # v2 fix: the raw ETW ProcessStart event carries no exe path,
-                    # so RuleEngine's hash-trust branch (core/rule_engine.py) could
-                    # never fire on this backend -- the highest-fidelity Windows
-                    # event source. Resolve it via psutil immediately, since ETW
-                    # fires at/near process creation; a short-lived process can
-                    # still exit before this runs, so failure here must degrade
-                    # to "no exe available," never crash the callback (this thread
-                    # feeds the whole ETW pipeline).
-                    try:
-                        details["executable_path"] = psutil.Process(pid).exe()
-                    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError) as e:
-                        logger.debug("Could not resolve exe path for PID %s: %s", pid, e)
+                    logger.info("=" * 80)
+                    logger.info("Event ID: %s", event_id)
+                    logger.info("Payload type: %s", type(out))
+                    logger.info("Payload: %r", out)
+                    logger.info("=" * 80)
 
-                    self.out_queue.put(
-                        MonitorEvent(
-                            category=EventCategory.PROCESS_STARTED,
-                            summary=f"New process: {image_name} (PID {pid}, parent PID {parent_pid})",
-                            details=details,
-                            source="process",
-                            confidence="certain",
-                        )
-                    )
-                except Exception as e:
-                    logger.error("Error handling ETW event: %s", e)
+                except Exception:
+                    logger.exception("Diagnostic callback failed")
 
             etw_trace = ETW(providers=[provider], event_callback=_callback)
             etw_trace.start()
