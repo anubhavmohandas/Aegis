@@ -45,7 +45,7 @@ from .database import EventStore
 from .events import MonitorEvent
 from .notifier import notify
 from .rule_engine import RuleEngine
-from .severity_engine import SeverityEngine
+from .severity_engine import SEVERITY_ORDER, SeverityEngine
 
 logger = logging.getLogger("aegis.dispatcher")
 
@@ -155,8 +155,24 @@ class Dispatcher:
 
     def _stage_explain_and_notify(self, event: MonitorEvent, severity: str) -> None:
         explanation = self.explainer.explain(event, severity)
-        notify(self._title_for(event, severity), explanation)
+        if self._severity_meets_notify_floor(severity):
+            notify(self._title_for(event, severity), explanation)
+        else:
+            logger.info("Below notify_min_severity=%s -- no popup for [%s] %s",
+                        self.config.notify_min_severity, severity, event.summary)
         self._persist(event, severity=severity, explanation=explanation, ai_skipped=False)
+
+    def _severity_meets_notify_floor(self, severity: str) -> bool:
+        # Gates ONLY the popup. The AI explanation above still ran and is
+        # persisted -- the timeline is where a user who set the floor to
+        # "high" goes to review the medium/low events they opted out of
+        # being interrupted for. An unknown severity string fails open
+        # (notify) for the same reason config.py falls back to "low":
+        # a bug here must produce more noise, never silent suppression.
+        try:
+            return SEVERITY_ORDER.index(severity) >= SEVERITY_ORDER.index(self.config.notify_min_severity)
+        except ValueError:
+            return True
 
     def _title_for(self, event: MonitorEvent, severity: str) -> str:
         base = {

@@ -1,5 +1,8 @@
 """
-Turns a MonitorEvent into a plain-English explanation using Claude or OpenAI.
+Turns a MonitorEvent into a plain-English explanation using any OpenAI-compatible
+endpoint (NVIDIA Build, OpenAI, OpenRouter, a local Ollama, ...) or Anthropic's
+native API. Which one answers is decided entirely by config -- this module only
+knows two API *shapes*, never individual vendors.
 
 IMPORTANT LIMITATION (read this before relying on it):
 This is a convenience/UX layer, NOT a security verdict. The model has no
@@ -47,18 +50,21 @@ class AIExplainer:
         if self.config.ai_provider == "anthropic":
             import anthropic
             self._client = anthropic.Anthropic(api_key=self.config.api_key)
-        elif self.config.ai_provider == "openai":
-            import openai
-            self._client = openai.OpenAI(api_key=self.config.api_key)
         else:
-            raise ValueError(f"Unknown ai_provider: {self.config.ai_provider}")
+            # Everything that isn't Anthropic speaks the OpenAI wire format;
+            # base_url alone decides who actually answers.
+            import openai
+            self._client = openai.OpenAI(
+                base_url=self.config.ai_base_url,
+                api_key=self.config.api_key,
+            )
         return self._client
 
     def explain(self, event: MonitorEvent, severity: str = "medium") -> str:
         if not self.config.api_key:
             return (
                 f"[No API key configured] Raw event: {event.summary}\n"
-                f"Set ANTHROPIC_API_KEY or OPENAI_API_KEY to get AI explanations."
+                f"Set {self.config.ai_api_key_env} to get AI explanations."
             )
 
         prompt = event.as_prompt_block() + f"\nLocally-computed severity: {severity}"
@@ -66,7 +72,7 @@ class AIExplainer:
             if self.config.ai_provider == "anthropic":
                 return self._explain_anthropic(prompt)
             else:
-                return self._explain_openai(prompt)
+                return self._explain_openai_compatible(prompt)
         except Exception as e:
             # Never let an AI/network failure crash the monitor loop -- fall back
             # to the raw event so the user still gets *something* useful.
@@ -86,16 +92,18 @@ class AIExplainer:
         resp = client.messages.create(
             model=self.config.ai_model,
             max_tokens=300,
+            temperature=self.config.ai_temperature,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
         return resp.content[0].text
 
-    def _explain_openai(self, prompt: str) -> str:
+    def _explain_openai_compatible(self, prompt: str) -> str:
         client = self._get_client()
         resp = client.chat.completions.create(
             model=self.config.ai_model,
             max_tokens=300,
+            temperature=self.config.ai_temperature,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},

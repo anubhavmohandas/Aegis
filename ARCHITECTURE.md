@@ -17,7 +17,7 @@ Aegis/
     severity_engine.py  local low/medium/high/critical heuristic (runs before the AI call)
     database.py        SQLite event history (read by ui/timeline_app.py)
     dispatcher.py       queue -> dedupe -> rule engine -> severity -> rate-limit -> AI -> notify -> persist
-    notifier.py         cross-platform desktop notifications (plyer)
+    notifier.py         desktop notifications, per platform (macOS: osascript primary; Windows/Linux: plyer)
     folder_monitor.py   watchdog-based folder watching (real-time on all OSes)
     tray_app.py         system tray icon (pystray)
   windows/            Windows collector
@@ -149,7 +149,11 @@ fix against. What that surfaced, in order:
   installs `pyobjc`, a different library). Confirmed via a real
   `ModuleNotFoundError` traceback, not guessed. Fixed by adding an
   `osascript -e 'display notification ...'` fallback in `core/notifier.py`
-  — ships on every Mac, no new dependency needed.
+  — ships on every Mac, no new dependency needed. (v2 follow-through: since
+  the plyer attempt was failing on *every* stock-install macOS notification
+  before falling back anyway, osascript is now the *primary* macOS backend
+  and plyer isn't tried at all on Darwin — it remains the backend on
+  Windows/Linux, untouched per ADR-008.)
 - **A real design bug in the dispatcher**: rule-engine-trusted events and
   rate-limited events were still calling `notify()`, defeating the purpose
   of both mechanisms — confirmed by a real flood of `mdworker_shared`
@@ -194,7 +198,13 @@ macOS, from source (python3 main.py):
   [ ] Tray icon visually confirmed in the menu bar -- never explicitly checked
   [ ] AI explanations against a real API key -- only tested key-less so far
   [ ] Timeline UI (ui/timeline_app.py) -- never run
-  [ ] Packaged .app via py2app/Briefcase -- not attempted
+  [x] Packaged .app -- built with PyInstaller (packaging/aegis.spec) and
+      smoke-run on real Apple Silicon hardware: version banner, NSWorkspace
+      observer, USB baseline, rule-engine gating of real daemons, a real
+      Desktop file-create classified HIGH and persisted, notifications via
+      osascript with zero fallbacks, log/db correctly anchored under
+      ~/Library/Application Support/Aegis. Tray icon visibility still not
+      explicitly confirmed (same caveat as the source run).
 
 Windows: nothing tested yet, still zero real-hardware evidence.
 ```
@@ -225,19 +235,26 @@ performance-bound. The collector architecture already supports this: a
 native binary that prints JSON lines to stdout slots into the existing
 queue with no changes to `core/`.
 
-**Known PyInstaller gotcha, check this before debugging anything else:**
-`config/config.yaml`, `assets/logo.png`, and `assets/tray_icon.png` are read
-relative to the script location — they will not be bundled automatically.
-`core/config.py` and `core/tray_app.py` already fall back gracefully if
-these are missing (defaults / placeholder shield icon), so a missing bundle
-won't crash the app, but it will silently run with the wrong config and the
-wrong icon, which looks like a bug and isn't one. Bundle them explicitly:
+**This is no longer hypothetical:** the build recipe is checked in at
+`packaging/aegis.spec` (one spec, platform-conditional), with the full flow
+— including the "validate from source first" rule and where a frozen build
+keeps its files — documented in `packaging/PACKAGING.md`. The macOS `.app`
+has been built and smoke-run on real hardware; the Windows branch of the
+spec and the Inno Setup installer template
+(`packaging/windows-installer.iss`) are written but have never been run on
+Windows (ADR-008 applies).
 
-```
-pyinstaller main.py --name Aegis --add-data "config;config" --add-data "assets;assets"
-```
-
-(macOS/Linux use `:` instead of `;` in `--add-data`.)
+**Known PyInstaller gotchas the spec already handles — check these before
+debugging anything else if you modify it:** `config/config.yaml` and
+`assets/tray_icon.png` are read relative to the module location and must be
+bundled explicitly as data files (`core/config.py` and `core/tray_app.py`
+fall back gracefully if missing — defaults / placeholder shield icon — so a
+missing bundle silently runs with the wrong config and icon, which looks
+like a bug and isn't one). plyer loads its per-OS backend by string name at
+runtime, so on Windows it must be a hidden import or notifications silently
+drop to the print fallback. And relative `log_path`/`db_path` would be
+written to `/` from a Finder-launched `.app` — `core/config.py` anchors
+them to a per-user data dir when running frozen.
 
 ## Known gaps and deliberate tradeoffs
 

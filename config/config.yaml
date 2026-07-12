@@ -1,15 +1,37 @@
 # Aegis configuration.
-# API keys are NOT set here -- set ANTHROPIC_API_KEY or OPENAI_API_KEY as
-# environment variables instead, so you never accidentally commit a key.
+# API keys are NOT set here -- name the environment variable that holds the key
+# in ai.api_key_env instead, so you never accidentally commit a key.
 
-ai_provider: anthropic        # "anthropic" or "openai"
-ai_model: claude-sonnet-5     # current Claude model as of mid-2026; check docs.claude.com for the latest if this drifts
+# The AI layer talks to any OpenAI-compatible endpoint: only base_url and model
+# change between providers, never the code. Shipped default is NVIDIA Build's
+# free endpoint. Other examples:
+#
+#   OpenAI:      base_url: https://api.openai.com/v1        api_key_env: OPENAI_API_KEY     model: gpt-4.1-mini
+#   OpenRouter:  base_url: https://openrouter.ai/api/v1     api_key_env: OPENROUTER_API_KEY model: <any>
+#   Ollama:      base_url: http://localhost:11434/v1        api_key_env: OLLAMA_API_KEY     model: llama3 (key can be any non-empty value)
+#
+# Anthropic's API is not OpenAI-shaped, so it keeps its own provider value:
+#   provider: anthropic   api_key_env: ANTHROPIC_API_KEY   model: claude-sonnet-5   (base_url ignored)
+ai:
+  provider: openai-compatible   # "openai-compatible" or "anthropic"
+  base_url: https://integrate.api.nvidia.com/v1
+  api_key_env: NVIDIA_API_KEY
+  model: nvidia/nemotron-3-ultra-550b-a55b
+  temperature: 0.2              # low on purpose: explanations should be consistent and boring, not creative
 
 # Leave empty to auto-default to Desktop/Downloads/Documents in your home folder.
 watched_folders: []
 
 poll_interval_seconds: 3      # used by every polling-based monitor (registry, login items, USB on Mac, WMI fallback)
 notify_on_startup_scan: true
+
+# Popup severity floor: low | medium | high | critical.
+# "low" = notify on everything (v1 behavior). "high" = only interrupt for
+# high/critical. This gates ONLY the desktop popup -- events below the floor
+# are still AI-explained, logged, and stored in the timeline (that's where
+# you review what you opted out of being interrupted for). Invalid values
+# fall back to "low" with a warning, never to silence.
+notify_min_severity: low
 log_path: events.log
 db_path: aegis_events.db      # SQLite event history read by ui/timeline_app.py
 

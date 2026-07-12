@@ -140,6 +140,70 @@ behind them.
 
 ---
 
+## ADR-009: osascript is the PRIMARY macOS notification backend, not a fallback
+
+v1 tried plyer first on every platform, falling back to osascript on macOS.
+But the fallback was firing on *every single notification* on a stock macOS
+install (plyer's macOS backend needs `pyobjus`, which requirements-macos.txt
+never installs) — a doomed import attempt plus a spurious warning per popup.
+v2 dispatches per platform: Darwin goes straight to osascript, plyer is only
+used on Windows/Linux.
+
+**Why not UNUserNotificationCenter via pyobjc:** registering for native
+notifications requires being a signed, bundled .app — exactly what
+`python main.py` from a clone is not. Revisit when signed releases exist.
+
+**Would become wrong if:** Apple removes/breaks `display notification` in
+AppleScript (stable for a decade+), or Aegis ships signed. Verified live on
+real macOS hardware, both from source and from the packaged .app (zero
+fallback prints across a full smoke run). Source: `core/notifier.py`.
+
+---
+
+## ADR-010: `notify_min_severity` gates ONLY the popup, and fails open
+
+The noise-reduction floor (`notify_min_severity: low|medium|high|critical`
+in config.yaml) suppresses desktop popups below the floor — but the event is
+still AI-explained, logged, and persisted. The timeline is where a user who
+set the floor to "high" reviews what they opted out of being interrupted for.
+
+**Why fail-open:** a typo'd floor value (`hgih`) falls back to "low" (notify
+on everything) with a warning, and an unrecognized severity string inside
+the dispatcher notifies rather than suppresses. Silently suppressing all
+popups would look identical to a healthy, quiet system — the same failure
+mode ADR-002/ADR-003 exist to avoid.
+
+**Would become wrong if:** AI cost at scale makes "explain everything,
+notify selectively" too expensive — at that point add a *separate*,
+explicitly-named option for skipping AI below a floor, don't overload this
+one. Verified with a synthetic dispatcher test (mocked notify, real SQLite).
+Source: `core/config.py`, `core/dispatcher.py`.
+
+---
+
+## ADR-011: Frozen builds anchor runtime paths to a per-user data dir; source runs don't
+
+Running from source keeps relative `log_path`/`db_path` (checkout-relative,
+v1 behavior). A PyInstaller build (`sys.frozen`) rewrites relative paths to
+`~/Library/Application Support/Aegis` / `%LOCALAPPDATA%\Aegis` /
+`~/.local/share/aegis`, creates the directory, and also reads `.env` and an
+overriding `config.yaml` from there.
+
+**Why:** a Finder-launched .app has `/` as its CWD and Program Files isn't
+user-writable — relative paths would silently fail exactly when a
+non-developer is the one running Aegis. And editing files inside an
+installed bundle is not a reasonable ask, so user config moves to the data
+dir for packaged installs. Absolute paths in config.yaml are always
+respected as-is, frozen or not.
+
+**Would become wrong if:** the v2 dashboard grows a real settings UI — at
+that point the data dir stays but hand-edited `.env`/yaml stop being the
+interface. Verified on real hardware: the packaged .app wrote its log/db to
+Application Support on first launch. Source: `core/config.py`,
+`packaging/PACKAGING.md`.
+
+---
+
 ## A note on "tested" language
 
 This repo's own docs (`ARCHITECTURE.md`, `README.md`) are already precise
