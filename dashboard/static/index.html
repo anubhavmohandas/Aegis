@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aegis — Event Console</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<script>
+  // apply the saved theme before first paint so there's no flash
+  document.documentElement.dataset.theme = localStorage.getItem("aegis-theme") || "obsidian";
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Archivo:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="boot" id="boot" aria-hidden="true">
+  <div class="boot-logo-wrap">
+    <img class="boot-logo" src="assets/logo.png" alt="Aegis">
+    <span class="boot-scan"></span>
+  </div>
+  <div class="boot-bar"><span></span></div>
+  <div class="boot-sub">Event Console</div>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-logo" role="img" aria-label="Aegis logo"></span>
+    <div class="brand-text">
+      <span class="brand-name">AEGIS</span>
+      <span class="brand-sub">Event Console</span>
+    </div>
+  </div>
+
+  <nav class="view-nav" aria-label="Views">
+    <button class="view-tab active" data-view="console">Console</button>
+    <button class="view-tab" data-view="settings">Settings</button>
+  </nav>
+
+  <div class="topbar-status">
+    <span class="live-indicator" id="live-indicator">
+      <span class="live-dot"></span><span id="live-label">CHECKING…</span>
+    </span>
+    <span class="sync-time" id="sync-time"></span>
+  </div>
+
+  <div class="topbar-actions">
+    <button class="btn btn-ghost" id="monitor-log-btn" title="View the monitor process log">Log</button>
+    <button class="btn" id="monitor-toggle" disabled>—</button>
+    <div class="theme-wrap">
+      <button class="btn" id="theme-btn" aria-haspopup="true" aria-expanded="false" title="Switch theme">
+        <svg class="theme-btn-icon" viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M8 2 A6 6 0 0 1 8 14 Z" fill="currentColor"/>
+        </svg>Theme
+      </button>
+      <div class="theme-pop" id="theme-pop" hidden>
+        <div class="theme-pop-label">Console theme</div>
+        <div class="theme-grid" id="theme-grid"></div>
+      </div>
+    </div>
+    <button class="btn" id="export-json" title="Export current view as JSON">Export JSON</button>
+    <button class="btn" id="export-csv" title="Export current view as CSV">Export CSV</button>
+    <button class="btn btn-ghost" id="logout-btn" title="End this session">Sign out</button>
+  </div>
+</header>
+
+<main class="layout">
+
+<div id="view-console">
+
+  <section class="stats-band" id="stats-band" aria-label="Last 24 hours">
+    <div class="stat-tile">
+      <span class="stat-label">Events · 24h</span>
+      <span class="stat-value" id="stat-24h">—</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-label">High / Critical · 24h</span>
+      <span class="stat-value" id="stat-hicrit">—</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-label">Active sources · 24h</span>
+      <span class="stat-value" id="stat-sources">—</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-label">Total logged</span>
+      <span class="stat-value" id="stat-total">—</span>
+    </div>
+
+    <div class="severity-panel">
+      <span class="stat-label">Severity · 24h</span>
+      <div class="severity-bar" id="severity-bar" role="img" aria-label="Severity distribution, last 24 hours"></div>
+      <div class="severity-legend" id="severity-legend"></div>
+    </div>
+  </section>
+
+  <section class="filter-row" aria-label="Filters">
+    <div class="search-wrap">
+      <svg viewBox="0 0 16 16" class="search-icon" aria-hidden="true">
+        <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <line x1="10.5" y1="10.5" x2="14" y2="14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+      <input type="search" id="search" placeholder="Search events…  ( / )" autocomplete="off">
+    </div>
+
+    <div class="chip-group" id="severity-chips" data-filter="severity">
+      <button class="chip chip-sev" data-value="critical">Critical</button>
+      <button class="chip chip-sev" data-value="high">High</button>
+      <button class="chip chip-sev" data-value="medium">Medium</button>
+      <button class="chip chip-sev" data-value="low">Low</button>
+    </div>
+
+    <div class="chip-group" id="source-chips" data-filter="source">
+      <button class="chip" data-value="process">Process</button>
+      <button class="chip" data-value="usb">USB</button>
+      <button class="chip" data-value="startup">Startup</button>
+      <button class="chip" data-value="folder">Folder</button>
+    </div>
+
+    <select id="category-select" class="select" aria-label="Category">
+      <option value="">All categories</option>
+    </select>
+
+    <select id="range-select" class="select" aria-label="Time range">
+      <option value="">All time</option>
+      <option value="3600">Last hour</option>
+      <option value="86400">Last 24 hours</option>
+      <option value="604800">Last 7 days</option>
+      <option value="2592000">Last 30 days</option>
+    </select>
+
+    <button class="btn btn-ghost" id="clear-filters" hidden>Clear</button>
+  </section>
+
+  <section class="timeline" id="timeline" aria-label="Event timeline" aria-live="polite"></section>
+
+  <div class="load-older-wrap" id="load-older-wrap" hidden>
+    <button class="btn" id="load-older">Load older events</button>
+  </div>
+
+</div><!-- /view-console -->
+
+<section id="view-settings" class="settings" hidden>
+
+  <div class="settings-card">
+    <h2 class="settings-title">AI Explainer</h2>
+    <p class="settings-desc">Which model writes the plain-English explanation for each event.
+       Any OpenAI-compatible endpoint works; Anthropic has its own API shape.</p>
+
+    <div class="field">
+      <label>Provider</label>
+      <div class="provider-grid" id="provider-grid"></div>
+    </div>
+
+    <div class="field">
+      <label for="set-base-url">Endpoint base URL</label>
+      <input id="set-base-url" class="text-input" spellcheck="false" autocomplete="off">
+    </div>
+
+    <div class="field">
+      <label for="set-model">Model</label>
+      <input id="set-model" class="text-input" list="model-list" spellcheck="false" autocomplete="off">
+      <datalist id="model-list"></datalist>
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <label for="set-key-env">API key env var</label>
+        <input id="set-key-env" class="text-input" spellcheck="false" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="set-temp">Temperature <span class="temp-val" id="temp-val">0.2</span></label>
+        <input type="range" id="set-temp" min="0" max="1" step="0.05" value="0.2">
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="set-api-key">API key <span class="key-status" id="key-status"></span></label>
+      <input id="set-api-key" class="text-input" type="password"
+             placeholder="leave blank to keep the current key" autocomplete="new-password">
+    </div>
+  </div>
+
+  <div class="settings-card">
+    <h2 class="settings-title">Notifications</h2>
+    <p class="settings-desc">The severity floor gates only desktop popups — every event is still
+       explained, logged, and kept in the timeline.</p>
+
+    <div class="field">
+      <label>Popup severity floor</label>
+      <div class="chip-group" id="severity-floor">
+        <button class="chip chip-sev" data-value="low">Low — everything</button>
+        <button class="chip chip-sev" data-value="medium">Medium</button>
+        <button class="chip chip-sev" data-value="high">High</button>
+        <button class="chip chip-sev" data-value="critical">Critical only</button>
+      </div>
+    </div>
+
+    <label class="switch-row" for="set-startup-scan">
+      <span>
+        <span class="switch-label">Startup scan summary</span>
+        <span class="switch-desc">Notify with a summary when Aegis first starts</span>
+      </span>
+      <input type="checkbox" id="set-startup-scan" class="switch">
+    </label>
+  </div>
+
+  <div class="settings-card">
+    <h2 class="settings-title">Monitoring</h2>
+    <p class="settings-desc">Folders watched for file activity, and how often the polling-based
+       monitors check for changes.</p>
+
+    <div class="field">
+      <label for="set-folders">Watched folders <span class="field-hint">one per line · empty = Desktop, Downloads, Documents</span></label>
+      <textarea id="set-folders" class="text-area" rows="4" spellcheck="false"></textarea>
+    </div>
+
+    <div class="field field-narrow">
+      <label for="set-poll">Poll interval (seconds)</label>
+      <input id="set-poll" class="text-input" type="number" min="1" max="3600" step="1">
+    </div>
+  </div>
+
+  <div class="settings-card">
+    <h2 class="settings-title">Trust Lists</h2>
+    <p class="settings-desc">Opt-in noise reduction: things YOU trust enough to skip the AI call
+       for. They are still logged to the timeline.</p>
+
+    <div class="field">
+      <label for="set-trusted-names">Trusted process names <span class="field-hint">one per line</span></label>
+      <textarea id="set-trusted-names" class="text-area" rows="4" spellcheck="false"></textarea>
+    </div>
+    <div class="field">
+      <label for="set-trusted-hashes">Trusted binary hashes (SHA-256) <span class="field-hint">one per line</span></label>
+      <textarea id="set-trusted-hashes" class="text-area" rows="3" spellcheck="false"></textarea>
+    </div>
+    <div class="field">
+      <label for="set-trusted-usb">Trusted USB IDs <span class="field-hint">one per line</span></label>
+      <textarea id="set-trusted-usb" class="text-area" rows="3" spellcheck="false"></textarea>
+    </div>
+  </div>
+
+  <div class="settings-actions">
+    <span class="settings-note" id="settings-note">Saved to config.yaml / .env — restart the Aegis
+      monitors to apply.</span>
+    <button class="btn btn-primary" id="settings-save">Save changes</button>
+  </div>
+
+</section>
+</main>
+
+<div class="toast" id="toast" hidden></div>
+
+<div class="drawer-overlay" id="log-overlay" hidden></div>
+<div class="log-modal" id="log-modal" hidden aria-label="Monitor log">
+  <div class="drawer-head">
+    <span class="drawer-title">MONITOR LOG</span>
+    <div class="log-modal-actions">
+      <button class="btn btn-ghost" id="log-refresh">Refresh</button>
+      <button class="drawer-close" id="log-modal-close" aria-label="Close">✕</button>
+    </div>
+  </div>
+  <pre class="log-pre" id="log-pre">Loading…</pre>
+</div>
+
+<button class="new-events-pill" id="new-events-pill" hidden>
+  <span class="live-dot"></span><span id="new-events-count"></span> new — jump to top
+</button>
+
+<div class="drawer-overlay" id="drawer-overlay" hidden></div>
+<aside class="drawer" id="drawer" aria-label="Event details" hidden>
+  <div class="drawer-head">
+    <span class="drawer-title">EVENT DETAIL</span>
+    <button class="drawer-close" id="drawer-close" aria-label="Close">✕</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</aside>
+
+<footer class="statusbar">
+  <span id="footer-shown"></span>
+  <span class="statusbar-sep"></span>
+  <span>read-only view over the event store</span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

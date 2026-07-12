@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aegis — Sign in</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<script>
+  // apply the saved theme before first paint so there's no flash
+  document.documentElement.dataset.theme = localStorage.getItem("aegis-theme") || "obsidian";
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Archivo:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="login-body">
+
+<div class="login-card" id="card">
+  <div class="login-logo-wrap">
+    <span class="login-logo" role="img" aria-label="Aegis logo"></span>
+  </div>
+  <div class="login-title">AEGIS</div>
+  <div class="login-sub">Event Console</div>
+
+  <form class="login-form" id="form" autocomplete="off">
+    <div class="login-error" id="error" hidden></div>
+    <div class="login-field">
+      <label for="username">Operator</label>
+      <input id="username" name="username" type="text" autocapitalize="none"
+             autocorrect="off" spellcheck="false" autofocus required>
+    </div>
+    <div class="login-field">
+      <label for="password">Passphrase</label>
+      <input id="password" name="password" type="password" required>
+    </div>
+    <button class="login-submit" id="submit" type="submit">Authenticate</button>
+  </form>
+
+  <div class="login-foot">local console · sessions expire after 12h</div>
+</div>
+
+<script>
+  const form = document.getElementById("form");
+  const errorBox = document.getElementById("error");
+  const submit = document.getElementById("submit");
+  const card = document.getElementById("card");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    errorBox.hidden = true;
+    submit.disabled = true;
+    submit.textContent = "Authenticating…";
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: document.getElementById("username").value,
+          password: document.getElementById("password").value,
+        }),
+      });
+      if (res.ok) {
+        submit.textContent = "Access granted";
+        location.replace("/");
+        return;
+      }
+      errorBox.textContent = res.status === 401
+        ? "Invalid credentials — access denied."
+        : `Sign-in failed (${res.status}).`;
+    } catch {
+      errorBox.textContent = "Console unreachable — is the server running?";
+    }
+    errorBox.hidden = false;
+    card.classList.remove("shake");
+    void card.offsetWidth;              // restart the animation
+    card.classList.add("shake");
+    document.getElementById("password").value = "";
+    document.getElementById("password").focus();
+    submit.disabled = false;
+    submit.textContent = "Authenticate";
+  });
+</script>
+</body>
+</html>

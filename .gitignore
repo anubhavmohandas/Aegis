@@ -38,6 +38,8 @@ events.log
 *.db
 *.db-journal
 *.log
+.aegis_monitor.json
+config/config.yaml.orig
 
 # --- Testing / coverage ---
 .pytest_cache/

@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aegis — AI-powered desktop security assistant</title>
+<meta name="description" content="Aegis watches your machine in the background and explains what it sees in plain English. Local severity scoring, AI explanations, searchable timeline. Not antivirus — a personal awareness tool.">
+<link rel="icon" href="assets/aegis.ico">
+<meta property="og:title" content="Aegis — know what your machine is doing">
+<meta property="og:description" content="AI-powered desktop security assistant for Windows, macOS, and Linux. Not antivirus — a personal awareness tool.">
+<meta property="og:image" content="assets/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script>document.documentElement.classList.add('js')</script>
+<style>
+:root{
+  --bg:#04070e;
+  --bg-2:#070c17;
+  --panel:#0a1120;
+  --line:rgba(140,170,210,.14);
+  --line-soft:rgba(140,170,210,.08);
+  --chrome:#dbe4f0;
+  --body:#93a3ba;
+  --dim:#5c6b84;
+  --blue:#39a1ff;
+  --blue-deep:#1467c4;
+  --violet:#6a5adf;
+  --low:#5e7fa0; /* fallback, overridden below */
+  --sev-low:#5e7fa0;
+  --sev-med:#e8b23a;
+  --sev-high:#f27a2e;
+  --sev-crit:#ef3b4e;
+  --font-display:"Chakra Petch",sans-serif;
+  --font-body:"IBM Plex Sans",sans-serif;
+  --font-mono:"IBM Plex Mono",monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg);
+  color:var(--body);
+  font-family:var(--font-body);
+  font-size:16.5px;
+  line-height:1.65;
+  overflow-x:hidden;
+}
+::selection{background:rgba(57,161,255,.35);color:#fff}
+
+/* ---- backdrop: fine grid + glow ---- */
+.backdrop{
+  position:fixed;inset:0;z-index:-2;pointer-events:none;
+  background:
+    radial-gradient(1100px 600px at 78% -10%, rgba(31,90,180,.22), transparent 60%),
+    radial-gradient(900px 700px at -10% 30%, rgba(90,70,190,.10), transparent 55%),
+    var(--bg);
+}
+.backdrop::after{
+  content:"";position:absolute;inset:0;
+  background-image:
+    linear-gradient(rgba(120,160,220,.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120,160,220,.05) 1px, transparent 1px);
+  background-size:44px 44px;
+  mask-image:radial-gradient(ellipse 90% 70% at 50% 0%, #000 30%, transparent 80%);
+  -webkit-mask-image:radial-gradient(ellipse 90% 70% at 50% 0%, #000 30%, transparent 80%);
+}
+
+.wrap{max-width:1120px;margin:0 auto;padding:0 28px}
+
+/* ---- nav ---- */
+nav{
+  position:sticky;top:0;z-index:50;
+  backdrop-filter:blur(14px);
+  background:rgba(4,7,14,.72);
+  border-bottom:1px solid var(--line-soft);
+}
+.nav-inner{display:flex;align-items:center;gap:28px;height:64px}
+.brand{display:flex;align-items:center;gap:11px;text-decoration:none;margin-right:auto}
+.brand img{width:34px;height:34px;border-radius:8px}
+.brand span{
+  font-family:var(--font-display);font-weight:700;font-size:19px;letter-spacing:.24em;
+  color:var(--chrome);
+}
+.nav-links{display:flex;gap:26px;align-items:center}
+.nav-links a{
+  color:var(--dim);text-decoration:none;font-size:13.5px;
+  font-family:var(--font-mono);letter-spacing:.04em;
+  transition:color .2s;
+}
+.nav-links a:hover{color:var(--chrome)}
+.btn{
+  display:inline-flex;align-items:center;gap:9px;
+  font-family:var(--font-display);font-weight:600;font-size:14.5px;letter-spacing:.06em;
+  padding:11px 22px;border-radius:6px;text-decoration:none;
+  transition:transform .18s, box-shadow .18s, background .18s;
+}
+.btn-primary{
+  background:linear-gradient(180deg,#4aacff,#1d7fe8);
+  color:#03101f;
+  box-shadow:0 0 0 1px rgba(90,180,255,.4), 0 8px 28px -8px rgba(40,140,255,.5);
+}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 0 0 1px rgba(120,195,255,.6), 0 14px 34px -8px rgba(40,140,255,.65)}
+.btn-ghost{
+  color:var(--chrome);border:1px solid var(--line);background:rgba(120,160,220,.04);
+}
+.btn-ghost:hover{border-color:rgba(140,180,230,.4);background:rgba(120,160,220,.09)}
+.nav-links .btn{padding:8px 16px;font-size:13px}
+
+/* ---- hero ---- */
+.hero{padding:88px 0 40px;position:relative}
+.hero-grid{display:grid;grid-template-columns:1.02fr .98fr;gap:56px;align-items:center}
+.status-pill{
+  display:inline-flex;align-items:center;gap:9px;
+  font-family:var(--font-mono);font-size:12px;letter-spacing:.1em;
+  color:#7fc0ff;
+  border:1px solid rgba(57,161,255,.3);
+  background:rgba(57,161,255,.07);
+  padding:6px 14px;border-radius:100px;margin-bottom:26px;
+}
+.status-pill .dot{
+  width:7px;height:7px;border-radius:50%;background:var(--blue);
+  box-shadow:0 0 0 0 rgba(57,161,255,.6);
+  animation:ping 2.2s infinite;
+}
+@keyframes ping{
+  0%{box-shadow:0 0 0 0 rgba(57,161,255,.55)}
+  70%{box-shadow:0 0 0 9px rgba(57,161,255,0)}
+  100%{box-shadow:0 0 0 0 rgba(57,161,255,0)}
+}
+h1{
+  font-family:var(--font-display);font-weight:700;
+  font-size:clamp(38px,4.6vw,58px);
+  line-height:1.08;letter-spacing:.005em;
+  color:var(--chrome);
+  margin-bottom:22px;
+}
+h1 .accent{
+  background:linear-gradient(92deg,#5ab4ff 10%,#8f7bff 90%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.hero p.lede{font-size:18px;max-width:33em;margin-bottom:14px}
+.hero .honest{
+  font-family:var(--font-mono);font-size:13px;color:var(--dim);
+  border-left:2px solid var(--sev-med);padding-left:14px;margin:20px 0 32px;
+  max-width:36em;line-height:1.7;
+}
+.hero .honest b{color:#c9d5e6;font-weight:500}
+.cta-row{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.platforms{
+  margin-top:34px;display:flex;gap:22px;align-items:center;
+  font-family:var(--font-mono);font-size:12.5px;letter-spacing:.08em;color:var(--dim);
+}
+.platforms span{display:flex;align-items:center;gap:7px}
+.platforms i{width:5px;height:5px;background:var(--blue);border-radius:1px;display:inline-block;transform:rotate(45deg)}
+
+/* ---- hero console ---- */
+.console-zone{position:relative}
+.console .emblem{
+  position:absolute;right:-34px;bottom:-6px;width:250px;z-index:0;
+  mix-blend-mode:screen;opacity:.5;pointer-events:none;
+  animation:float 7s ease-in-out infinite;
+}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+.console{
+  position:relative;z-index:1;
+  background:linear-gradient(180deg,#0b1322,#070d19);
+  border:1px solid var(--line);
+  border-radius:12px;
+  box-shadow:0 40px 90px -30px rgba(0,0,0,.8), 0 0 80px -30px rgba(30,110,220,.35);
+  overflow:hidden;
+  font-family:var(--font-mono);font-size:12.5px;
+}
+.console-bar{
+  display:flex;align-items:center;gap:8px;
+  padding:11px 16px;border-bottom:1px solid var(--line-soft);
+  background:rgba(120,160,220,.03);
+}
+.console-bar .dots{display:flex;gap:6px}
+.console-bar .dots i{width:10px;height:10px;border-radius:50%;background:#22304a;display:block}
+.console-bar .title{margin:0 auto;color:var(--dim);font-size:11.5px;letter-spacing:.08em}
+.console-bar .live{color:#6ee7a0;font-size:10.5px;letter-spacing:.14em;display:flex;align-items:center;gap:6px}
+.console-bar .live::before{content:"";width:6px;height:6px;border-radius:50%;background:#43d97e;animation:ping 2.2s infinite}
+.console-body,.console-foot{position:relative;z-index:1}
+.console-body{padding:8px 0 14px}
+.evt{
+  display:grid;grid-template-columns:66px 84px 1fr;gap:12px;align-items:baseline;
+  padding:11px 18px;border-bottom:1px solid var(--line-soft);
+  opacity:0;transform:translateY(8px);
+  animation:evtIn .5s ease forwards;
+}
+.evt:nth-child(1){animation-delay:.5s}
+.evt:nth-child(2){animation-delay:1.15s}
+.evt:nth-child(3){animation-delay:1.8s}
+.evt:nth-child(4){animation-delay:2.45s}
+@keyframes evtIn{to{opacity:1;transform:translateY(0)}}
+.evt .t{color:var(--dim);font-size:11px}
+.chip{
+  font-size:10px;letter-spacing:.12em;font-weight:500;
+  padding:3px 8px;border-radius:4px;text-align:center;
+}
+.chip.low{color:#9db8d4;background:rgba(94,127,160,.16);border:1px solid rgba(94,127,160,.35)}
+.chip.med{color:#f5cd6e;background:rgba(232,178,58,.12);border:1px solid rgba(232,178,58,.4)}
+.chip.high{color:#ffa46b;background:rgba(242,122,46,.13);border:1px solid rgba(242,122,46,.45)}
+.chip.crit{color:#ff8b97;background:rgba(239,59,78,.13);border:1px solid rgba(239,59,78,.5)}
+.evt .what{color:#c5d2e4;line-height:1.5}
+.evt .ai{
+  display:block;color:var(--dim);margin-top:5px;font-size:11.5px;line-height:1.6;
+  border-left:2px solid rgba(57,161,255,.4);padding-left:10px;
+}
+.evt .ai b{color:#7fc0ff;font-weight:500}
+.console-foot{
+  padding:10px 18px 2px;color:var(--dim);font-size:11px;letter-spacing:.06em;
+  display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;
+}
+.console-foot .k{color:#3d4c63}
+
+/* ---- ticker ---- */
+.ticker{
+  border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);
+  margin-top:72px;overflow:hidden;
+  background:rgba(120,160,220,.02);
+}
+.ticker-track{
+  display:flex;gap:0;white-space:nowrap;width:max-content;
+  animation:scroll 30s linear infinite;
+}
+.ticker-track span{
+  font-family:var(--font-mono);font-size:12px;letter-spacing:.22em;
+  color:var(--dim);padding:13px 34px;display:flex;align-items:center;gap:34px;
+}
+.ticker-track span::after{content:"◆";color:var(--blue-deep);font-size:8px}
+@keyframes scroll{to{transform:translateX(-50%)}}
+
+/* ---- sections ---- */
+section{padding:96px 0}
+.sec-tag{
+  font-family:var(--font-mono);font-size:12px;letter-spacing:.26em;color:var(--blue);
+  margin-bottom:16px;display:flex;align-items:center;gap:12px;
+}
+.sec-tag::before{content:"";width:26px;height:1px;background:var(--blue)}
+h2{
+  font-family:var(--font-display);font-weight:700;
+  font-size:clamp(28px,3.2vw,40px);color:var(--chrome);
+  line-height:1.15;margin-bottom:16px;max-width:20em;
+}
+.sec-lede{max-width:38em;font-size:17px}
+
+/* watch cards */
+.watch-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:52px}
+.watch{
+  background:linear-gradient(180deg,rgba(120,160,220,.05),rgba(120,160,220,.015));
+  border:1px solid var(--line);border-radius:10px;
+  padding:26px 22px 24px;position:relative;overflow:hidden;
+  transition:transform .25s, border-color .25s;
+}
+.watch:hover{transform:translateY(-5px);border-color:rgba(90,150,230,.45)}
+.watch::before{
+  content:"";position:absolute;top:0;left:22px;right:22px;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(90,170,255,.7),transparent);
+  opacity:0;transition:opacity .25s;
+}
+.watch:hover::before{opacity:1}
+.watch .tag{
+  font-family:var(--font-mono);font-size:11px;letter-spacing:.18em;
+  color:var(--blue);background:rgba(57,161,255,.08);
+  border:1px solid rgba(57,161,255,.25);
+  display:inline-block;padding:4px 10px;border-radius:4px;margin-bottom:18px;
+}
+.watch h3{
+  font-family:var(--font-display);font-weight:600;font-size:18px;
+  color:var(--chrome);margin-bottom:10px;letter-spacing:.02em;
+}
+.watch p{font-size:14.5px;color:var(--body);line-height:1.6}
+
+/* pipeline */
+.pipeline{background:var(--bg-2);border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft)}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin-top:56px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.step{
+  padding:34px 30px 32px;background:var(--panel);
+  border-right:1px solid var(--line-soft);position:relative;
+}
+.step:last-child{border-right:none}
+.step .num{
+  font-family:var(--font-display);font-weight:700;font-size:15px;color:var(--blue);
+  border:1px solid rgba(57,161,255,.35);width:34px;height:34px;border-radius:8px;
+  display:flex;align-items:center;justify-content:center;margin-bottom:20px;
+  background:rgba(57,161,255,.06);
+}
+.step h3{font-family:var(--font-display);font-size:19px;font-weight:600;color:var(--chrome);margin-bottom:10px}
+.step p{font-size:14.5px}
+.step .note{
+  margin-top:14px;font-family:var(--font-mono);font-size:11.5px;color:#7fc0ff;
+  letter-spacing:.04em;
+}
+/* severity scale */
+.sev-scale{margin-top:44px}
+.sev-scale .label{font-family:var(--font-mono);font-size:12px;letter-spacing:.18em;color:var(--dim);margin-bottom:14px}
+.sev-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.sev-bar div{
+  padding:13px 16px;border-radius:6px;
+  font-family:var(--font-mono);font-size:12px;letter-spacing:.14em;
+}
+.sev-bar .s1{background:rgba(94,127,160,.14);color:#9db8d4;border:1px solid rgba(94,127,160,.35)}
+.sev-bar .s2{background:rgba(232,178,58,.1);color:#f5cd6e;border:1px solid rgba(232,178,58,.35)}
+.sev-bar .s3{background:rgba(242,122,46,.1);color:#ffa46b;border:1px solid rgba(242,122,46,.4)}
+.sev-bar .s4{background:rgba(239,59,78,.1);color:#ff8b97;border:1px solid rgba(239,59,78,.45)}
+
+/* not antivirus */
+.not-av .frame{
+  border:1px solid var(--line);border-radius:14px;
+  padding:60px 56px;position:relative;overflow:hidden;
+  background:
+    radial-gradient(700px 300px at 85% 20%, rgba(106,90,223,.12), transparent 65%),
+    linear-gradient(180deg,rgba(120,160,220,.04),transparent);
+}
+.not-av .frame::before{
+  content:"NOT-AV";position:absolute;right:-18px;bottom:-38px;
+  font-family:var(--font-display);font-weight:700;font-size:130px;letter-spacing:.02em;
+  color:rgba(140,170,220,.045);pointer-events:none;user-select:none;
+}
+.not-av h2{max-width:16em}
+.no-list{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:40px}
+.no-item{border-top:1px solid var(--line);padding-top:18px}
+.no-item .x{
+  font-family:var(--font-mono);font-size:12px;color:var(--sev-crit);letter-spacing:.14em;
+  margin-bottom:8px;display:block;
+}
+.no-item .yes .x{color:#6ee7a0}
+.no-item h4{font-family:var(--font-display);font-weight:600;font-size:16px;color:var(--chrome);margin-bottom:7px}
+.no-item p{font-size:14px}
+
+/* quickstart */
+.quickstart{background:var(--bg-2);border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft)}
+.qs-grid{display:grid;grid-template-columns:.9fr 1.1fr;gap:56px;align-items:start}
+.qs-grid>*{min-width:0}
+.codebox{
+  background:#060b15;border:1px solid var(--line);border-radius:10px;overflow:hidden;
+  box-shadow:0 30px 70px -30px rgba(0,0,0,.7);
+}
+.codebox .cb-bar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:10px 16px;border-bottom:1px solid var(--line-soft);
+  font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;color:var(--dim);
+}
+.codebox pre{
+  padding:20px 22px;overflow-x:auto;
+  font-family:var(--font-mono);font-size:13px;line-height:1.85;color:#b9c8dd;
+}
+.codebox .c{color:#4a5a74}
+.codebox .p{color:#7fc0ff}
+.qs-notes{margin-top:26px;display:grid;gap:14px}
+.qs-notes li{
+  list-style:none;font-size:14.5px;padding-left:22px;position:relative;
+}
+.qs-notes li::before{
+  content:"▸";position:absolute;left:0;color:var(--blue);font-family:var(--font-mono);
+}
+.qs-notes b{color:#c9d5e6;font-weight:500}
+
+/* status */
+.status-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:48px}
+.st{
+  display:flex;gap:16px;align-items:flex-start;
+  border:1px solid var(--line);border-radius:10px;padding:20px 22px;
+  background:rgba(120,160,220,.02);
+}
+.st .mark{font-family:var(--font-mono);font-size:13px;margin-top:2px}
+.st.done .mark{color:#6ee7a0}
+.st.todo .mark{color:var(--dim)}
+.st h4{font-family:var(--font-display);font-weight:600;font-size:15.5px;color:var(--chrome);margin-bottom:4px}
+.st p{font-size:13.5px;color:var(--body)}
+.version-note{
+  margin-top:30px;font-family:var(--font-mono);font-size:12.5px;color:var(--dim);
+  border-left:2px solid var(--blue-deep);padding-left:14px;line-height:1.8;max-width:44em;
+}
+
+/* creator */
+.creator{padding-top:0}
+.creator .card{
+  border:1px solid var(--line);border-radius:14px;
+  padding:44px 48px;display:grid;grid-template-columns:auto 1fr auto;gap:34px;align-items:center;
+  background:
+    radial-gradient(500px 220px at 8% 0%, rgba(57,161,255,.1), transparent 65%),
+    linear-gradient(180deg,rgba(120,160,220,.04),transparent);
+  position:relative;overflow:hidden;
+}
+.creator .sigil{
+  width:74px;height:74px;border-radius:16px;
+  border:1px solid rgba(90,150,230,.35);
+  background:rgba(57,161,255,.05);
+  display:flex;align-items:center;justify-content:center;
+}
+.creator .sigil img{width:52px;height:52px;mix-blend-mode:screen}
+.creator .who .tag{
+  font-family:var(--font-mono);font-size:11px;letter-spacing:.26em;color:var(--blue);
+  display:block;margin-bottom:8px;
+}
+.creator .who h3{
+  font-family:var(--font-display);font-weight:700;font-size:22px;color:var(--chrome);
+  letter-spacing:.03em;margin-bottom:10px;
+}
+.creator .who p{font-size:14.5px;max-width:44em;line-height:1.7}
+.creator .who p b{color:#c9d5e6;font-weight:500}
+.creator .links{display:flex;flex-direction:column;gap:10px}
+.creator .links .btn{justify-content:center;white-space:nowrap}
+@media (max-width:820px){
+  .creator .card{grid-template-columns:1fr;gap:24px;padding:36px 28px}
+  .creator .links{flex-direction:row;flex-wrap:wrap}
+}
+
+/* footer */
+footer{border-top:1px solid var(--line-soft);padding:52px 0 60px}
+.foot-inner{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.foot-inner img{width:30px;height:30px;border-radius:7px}
+.foot-inner .fbrand{font-family:var(--font-display);font-weight:700;letter-spacing:.22em;color:var(--chrome);font-size:15px}
+.foot-inner .sep{color:#2a3852}
+.foot-inner a{color:var(--dim);text-decoration:none;font-family:var(--font-mono);font-size:12.5px;letter-spacing:.05em}
+.foot-inner a:hover{color:var(--chrome)}
+.foot-inner .made{margin-left:auto;font-size:13px;color:var(--dim)}
+.foot-disclaimer{
+  margin-top:22px;font-family:var(--font-mono);font-size:11.5px;color:#42506a;
+  letter-spacing:.04em;line-height:1.8;max-width:60em;
+}
+
+/* reveal on scroll (only when JS is available) */
+html.js .reveal{opacity:0;transform:translateY(26px);transition:opacity .7s ease,transform .7s ease}
+html.js .reveal.in{opacity:1;transform:none}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+  .evt{opacity:1;transform:none}
+  .reveal{opacity:1;transform:none}
+  html{scroll-behavior:auto}
+}
+
+@media (max-width:960px){
+  .hero-grid{grid-template-columns:1fr;gap:64px}
+  .console-zone .emblem{top:-60px;right:6px;width:130px}
+  .watch-grid{grid-template-columns:repeat(2,1fr)}
+  .steps{grid-template-columns:1fr}
+  .step{border-right:none;border-bottom:1px solid var(--line-soft)}
+  .step:last-child{border-bottom:none}
+  .qs-grid{grid-template-columns:1fr;gap:40px}
+  .no-list{grid-template-columns:1fr}
+  .status-grid{grid-template-columns:1fr}
+  .nav-links a:not(.btn){display:none}
+}
+@media (max-width:560px){
+  .watch-grid{grid-template-columns:1fr}
+  .sev-bar{grid-template-columns:repeat(2,1fr)}
+  .not-av .frame{padding:40px 26px}
+  section{padding:72px 0}
+}
+</style>
+</head>
+<body>
+
+<div class="backdrop"></div>
+
+<nav>
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top">
+      <img src="assets/tray_icon.png" alt="Aegis shield logo">
+      <span>AEGIS</span>
+    </a>
+    <div class="nav-links">
+      <a href="#watches">what it watches</a>
+      <a href="#how">how it works</a>
+      <a href="#honest">what it is not</a>
+      <a href="#quickstart">quick start</a>
+      <a class="btn btn-ghost" href="https://github.com/anubhavmohandas/Aegis" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap hero-grid">
+    <div>
+      <div class="status-pill"><span class="dot"></span>v2.0.0-alpha &nbsp;·&nbsp; WATCHING</div>
+      <h1>Know what your <span class="accent">machine</span> is actually doing.</h1>
+      <p class="lede">
+        Aegis is an AI-powered desktop security assistant for Windows, macOS, and Linux.
+        It watches your machine in the background — new processes, USB devices, startup
+        persistence, and your Desktop, Downloads &amp; Documents folders — and explains
+        what it sees in plain English.
+      </p>
+      <p class="honest">
+        <b>Honest by design:</b> Aegis is not antivirus and makes no security guarantees.
+        It doesn't block, quarantine, or remove anything. It's a personal awareness tool —
+        a second pair of eyes, not a detector.
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#quickstart">Get started →</a>
+        <a class="btn btn-ghost" href="https://github.com/anubhavmohandas/Aegis" target="_blank" rel="noopener">View source ↗</a>
+      </div>
+      <div class="platforms">
+        <span><i></i>WINDOWS</span>
+        <span><i></i>MACOS</span>
+        <span><i></i>LINUX</span>
+      </div>
+    </div>
+
+    <div class="console-zone">
+      <div class="console" role="img" aria-label="Mock of the Aegis event timeline showing scored events with plain-English AI explanations">
+        <img class="emblem" src="assets/logo.png" alt="" aria-hidden="true">
+        <div class="console-bar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="title">aegis — event timeline</div>
+          <div class="live">LIVE</div>
+        </div>
+        <div class="console-body">
+          <div class="evt">
+            <span class="t">14:02:11</span>
+            <span class="chip low">LOW</span>
+            <span class="what">process&nbsp; python3 spawned by Terminal
+              <span class="ai"><b>aegis:</b> A Python interpreter started from your terminal session. Typical for development work; nothing unusual about its parent or path.</span>
+            </span>
+          </div>
+          <div class="evt">
+            <span class="t">14:06:47</span>
+            <span class="chip med">MEDIUM</span>
+            <span class="what">usb&nbsp; SanDisk Ultra USB 3.0 connected
+              <span class="ai"><b>aegis:</b> A removable storage device was plugged in. If this wasn't you, it's worth checking what's on it before opening anything.</span>
+            </span>
+          </div>
+          <div class="evt">
+            <span class="t">14:11:03</span>
+            <span class="chip high">HIGH</span>
+            <span class="what">persistence&nbsp; new login item: UpdaterHelper
+              <span class="ai"><b>aegis:</b> Something registered itself to launch at startup. Legit installers do this — but so does unwanted software. Recently installed anything?</span>
+            </span>
+          </div>
+          <div class="evt">
+            <span class="t">14:11:04</span>
+            <span class="chip low">LOW</span>
+            <span class="what">filesystem&nbsp; report_final.pdf created in ~/Downloads
+              <span class="ai"><b>aegis:</b> A new PDF landed in Downloads. Matches your active browser session — expected.</span>
+            </span>
+          </div>
+        </div>
+        <div class="console-foot">
+          <span><span class="k">severity:</span> scored locally, before any AI call</span>
+          <span><span class="k">log:</span> aegis_events.db · searchable</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ticker" aria-hidden="true">
+    <div class="ticker-track">
+      <span>PROCESS MONITOR</span><span>USB DEVICES</span><span>STARTUP PERSISTENCE</span><span>WATCHED FOLDERS</span><span>LOCAL SEVERITY SCORING</span><span>PLAIN-ENGLISH EXPLANATIONS</span><span>SEARCHABLE TIMELINE</span>
+      <span>PROCESS MONITOR</span><span>USB DEVICES</span><span>STARTUP PERSISTENCE</span><span>WATCHED FOLDERS</span><span>LOCAL SEVERITY SCORING</span><span>PLAIN-ENGLISH EXPLANATIONS</span><span>SEARCHABLE TIMELINE</span>
+    </div>
+  </div>
+</header>
+
+<section id="watches">
+  <div class="wrap">
+    <div class="sec-tag reveal">SURFACE COVERAGE</div>
+    <h2 class="reveal">Four quiet watchers, running in the background.</h2>
+    <p class="sec-lede reveal">Aegis keeps an eye on the places where change on a personal machine tends to show up first.</p>
+    <div class="watch-grid">
+      <div class="watch reveal">
+        <span class="tag">[ PROC ]</span>
+        <h3>New processes</h3>
+        <p>Every process that starts gets noticed — what launched, and what launched it.</p>
+      </div>
+      <div class="watch reveal">
+        <span class="tag">[ USB ]</span>
+        <h3>USB devices</h3>
+        <p>Anything plugged in or removed is logged the moment it happens.</p>
+      </div>
+      <div class="watch reveal">
+        <span class="tag">[ PERSIST ]</span>
+        <h3>Startup persistence</h3>
+        <p>New login items and autostart entries — the classic way software outstays its welcome.</p>
+      </div>
+      <div class="watch reveal">
+        <span class="tag">[ FS ]</span>
+        <h3>Your folders</h3>
+        <p>Desktop, Downloads, and Documents — the folders where new files actually arrive.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="pipeline" id="how">
+  <div class="wrap">
+    <div class="sec-tag reveal">SIGNAL PATH</div>
+    <h2 class="reveal">Scored locally first. Explained by AI second. Logged forever.</h2>
+    <p class="sec-lede reveal">Every event follows the same path — and the severity score never depends on a network call.</p>
+
+    <div class="steps reveal">
+      <div class="step">
+        <div class="num">01</div>
+        <h3>Event captured</h3>
+        <p>A process starts, a USB device appears, a login item registers, a file lands in a watched folder.</p>
+      </div>
+      <div class="step">
+        <div class="num">02</div>
+        <h3>Severity scored locally</h3>
+        <p>A local rule engine assigns low / medium / high / critical — on your machine, before any AI is involved.</p>
+        <div class="note">// no API call required for scoring</div>
+      </div>
+      <div class="step">
+        <div class="num">03</div>
+        <h3>Explained &amp; logged</h3>
+        <p>Claude or OpenAI turns the event into plain English, and everything lands in a searchable timeline.</p>
+        <div class="note">// any OpenAI-compatible endpoint, Anthropic, or local Ollama</div>
+      </div>
+    </div>
+
+    <div class="sev-scale reveal">
+      <div class="label">LOCAL SEVERITY SCALE</div>
+      <div class="sev-bar">
+        <div class="s1">▁ LOW</div>
+        <div class="s2">▃ MEDIUM</div>
+        <div class="s3">▅ HIGH</div>
+        <div class="s4">█ CRITICAL</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="not-av" id="honest">
+  <div class="wrap">
+    <div class="frame reveal">
+      <div class="sec-tag">READ THIS PART</div>
+      <h2>Not antivirus. On purpose.</h2>
+      <p class="sec-lede">Security tools tend to overpromise. Aegis does the opposite — it tells you exactly what it is, and exactly what it isn't.</p>
+      <div class="no-list">
+        <div class="no-item">
+          <span class="x">✕ DOES NOT</span>
+          <h4>Detect malware</h4>
+          <p>No signatures, no heuristics engine, no verdicts. If you need a detector, run one — alongside Aegis.</p>
+        </div>
+        <div class="no-item">
+          <span class="x">✕ DOES NOT</span>
+          <h4>Block or remove anything</h4>
+          <p>Aegis observes and explains. It never quarantines, kills, or deletes. Your machine stays yours.</p>
+        </div>
+        <div class="no-item">
+          <span class="x">✕ DOES NOT</span>
+          <h4>Guarantee anything</h4>
+          <p>No security guarantees, stated plainly. Awareness is the product — judgment stays with you.</p>
+        </div>
+      </div>
+      <div class="no-list" style="margin-top:8px">
+        <div class="no-item yes">
+          <span class="x">✓ DOES</span>
+          <h4>Keep you aware</h4>
+          <p>A running, human-readable account of what changed on your machine and when.</p>
+        </div>
+        <div class="no-item yes">
+          <span class="x">✓ DOES</span>
+          <h4>Explain in plain English</h4>
+          <p>Events become sentences you can actually act on — not hex dumps and event IDs.</p>
+        </div>
+        <div class="no-item yes">
+          <span class="x">✓ DOES</span>
+          <h4>Remember everything</h4>
+          <p>Every event is logged to a searchable timeline you can browse whenever you like.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="quickstart" id="quickstart">
+  <div class="wrap qs-grid">
+    <div>
+      <div class="sec-tag reveal">QUICK START</div>
+      <h2 class="reveal">Running in four commands.</h2>
+      <p class="sec-lede reveal">Python, a virtualenv, and optionally an API key. Aegis runs fine without one — you just lose the AI explanations, not the watching.</p>
+      <ul class="qs-notes reveal">
+        <li><b>Pick your provider</b> in <b>config/config.yaml</b> — NVIDIA, OpenAI, OpenRouter, local Ollama, or Anthropic.</li>
+        <li><b>Windows:</b> run from an Administrator terminal for full process-monitoring power.</li>
+        <li><b>macOS:</b> you'll get one Automation permission prompt the first time it checks login items.</li>
+        <li><b>Too noisy?</b> Set <b>notify_min_severity: high</b> — popups quiet down, the timeline still catches everything.</li>
+      </ul>
+    </div>
+    <div class="reveal">
+      <div class="codebox">
+        <div class="cb-bar"><span>terminal</span><span>bash / powershell</span></div>
+        <pre><span class="p">$</span> python -m venv venv &amp;&amp; source venv/bin/activate
+<span class="c"># Windows: venv\Scripts\activate</span>
+<span class="p">$</span> pip install -r requirements-macos.txt
+<span class="c"># or -windows.txt / -linux.txt</span>
+<span class="p">$</span> echo "NVIDIA_API_KEY=nvapi-..." &gt; .env
+<span class="c"># optional — runs fine without one</span>
+<span class="p">$</span> python main.py</pre>
+      </div>
+      <div class="codebox" style="margin-top:14px">
+        <div class="cb-bar"><span>browse history</span><span>timeline</span></div>
+        <pre><span class="p">$</span> python ui/timeline_app.py</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="status">
+  <div class="wrap">
+    <div class="sec-tag reveal">STATUS — v2.0.0-ALPHA</div>
+    <h2 class="reveal">Versioning tracks validation, not features.</h2>
+    <p class="sec-lede reveal">Alpha means the features are done and macOS is validated on real hardware. Beta means Windows is too. 2.0.0 means public release.</p>
+    <div class="status-grid">
+      <div class="st done reveal"><span class="mark">✓</span><div><h4>Multi-provider AI</h4><p>OpenAI-compatible endpoints + Anthropic, chosen per config.</p></div></div>
+      <div class="st done reveal"><span class="mark">✓</span><div><h4>macOS validated on real hardware</h4><p>Process, folder, USB, notifications — three real bugs found and fixed along the way.</p></div></div>
+      <div class="st done reveal"><span class="mark">✓</span><div><h4>Noise reduction</h4><p>Opt-in trusted lists, dedupe, rate limiting, configurable popup severity floor.</p></div></div>
+      <div class="st done reveal"><span class="mark">✓</span><div><h4>macOS packaging</h4><p>PyInstaller .app built and smoke-run on real hardware.</p></div></div>
+      <div class="st todo reveal"><span class="mark">◻</span><div><h4>Windows validation</h4><p>From source first, then the packaged build — in progress.</p></div></div>
+      <div class="st todo reveal"><span class="mark">◻</span><div><h4>Installer, dashboard &amp; signed releases</h4><p>Inno Setup installer, dashboard UI, screenshots — deliberately after validation.</p></div></div>
+    </div>
+    <p class="version-note reveal">
+      Full verification log, architecture, and every known gap live in ARCHITECTURE.md —
+      the gaps are documented, not hidden.
+    </p>
+  </div>
+</section>
+
+<section class="creator" id="creator">
+  <div class="wrap">
+    <div class="card reveal">
+      <div class="sigil"><img src="assets/tray_icon.png" alt=""></div>
+      <div class="who">
+        <span class="tag">CREATOR</span>
+        <h3>Anubhav Mohandas</h3>
+        <p>
+          I built Aegis because I wanted to actually <b>understand</b> my own machine —
+          not trust a black box to grade it for me. Every design choice follows from that:
+          score locally, explain plainly, log everything, promise nothing. Built with love,
+          shipped with honesty. 🛡️
+        </p>
+      </div>
+      <div class="links">
+        <a class="btn btn-primary" href="https://anubhavmohandas.netlify.app" target="_blank" rel="noopener">Portfolio ↗</a>
+        <a class="btn btn-ghost" href="https://github.com/anubhavmohandas" target="_blank" rel="noopener">GitHub ↗</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <img src="assets/tray_icon.png" alt="">
+      <span class="fbrand">AEGIS</span>
+      <span class="sep">/</span>
+      <a href="https://github.com/anubhavmohandas/Aegis" target="_blank" rel="noopener">github.com/anubhavmohandas/Aegis</a>
+      <!-- <span class="made">Created with love by <a href="https://anubhavmohandas.netlify.app" target="_blank" rel="noopener" style="color:inherit">Anubhav</a> 🛡️</span> -->
+    </div>
+    <p class="foot-disclaimer">
+      AEGIS IS NOT ANTIVIRUS AND PROVIDES NO SECURITY GUARANTEES. IT IS A PERSONAL
+      AWARENESS TOOL, NOT A DETECTOR. EVENTS ARE SCORED LOCALLY; AI EXPLANATIONS ARE
+      OPTIONAL AND REQUIRE AN API KEY.
+    </p>
+  </div>
+</footer>
+
+<script>
+const io = new IntersectionObserver((entries)=>{
+  for (const e of entries){
+    if (e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); }
+  }
+},{threshold:.06});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+</script>
+
+</body>
+</html>
