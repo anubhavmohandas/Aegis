@@ -58,4 +58,4 @@ Full verification log, architecture, and every known gap:
 
 ---
 
-<p align="center">Created with love by Anubhav 🛡️</p>
+<p align="center">Created with ❤️ by Anubhav </p>
