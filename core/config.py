@@ -1,6 +1,9 @@
 """
-Loads config.yaml + environment variables. API keys are read from env vars
-ONLY (never stored in the yaml file) so you don't accidentally commit them.
+Loads config.yaml + environment variables. API keys are never stored in the
+yaml file (so you don't accidentally commit them): a real process env var
+always wins if set, otherwise the encrypted local store (core/secrets_store.py)
+is checked, with a legacy plaintext `.env` value as a last resort for anyone
+upgrading from before that store existed.
 """
 
 from __future__ import annotations
@@ -37,6 +40,17 @@ def runtime_data_dir() -> Path:
         base = os.environ.get("LOCALAPPDATA")
         return (Path(base) if base else Path.home() / "AppData" / "Local") / "Aegis"
     return Path.home() / ".local" / "share" / "aegis"
+
+
+def persistent_dir() -> Path:
+    """Where anything that must survive a self-update lives: self-update
+    (core/updater.py) replaces a packaged app's files wholesale (`rm -rf` the
+    old .app, copy in the new one), so state stored inside the app's own
+    checkout/bundle path -- like the old plaintext `.env` -- was silently
+    wiped on every update. This is the same per-user data dir already used
+    for the event database on a packaged build, or the repo root for a
+    from-source checkout (matching legacy .env/config.yaml behavior)."""
+    return runtime_data_dir() if _is_frozen() else Path(__file__).resolve().parent.parent
 
 
 def _load_env_file(path: Path = ENV_FILE_PATH) -> None:
@@ -82,7 +96,15 @@ class AppConfig:
 
     @property
     def api_key(self) -> str | None:
-        return os.environ.get(self.ai_api_key_env)
+        # A real shell/process env var always wins (lets a developer override
+        # with `NVIDIA_API_KEY=other python main.py` regardless of what's
+        # stored). Otherwise fall back to the encrypted local store the
+        # dashboard's Settings page writes to (see core/secrets_store.py).
+        env_value = os.environ.get(self.ai_api_key_env)
+        if env_value:
+            return env_value
+        from core.secrets_store import get_secret  # local import: keeps this module dependency-light
+        return get_secret(self.ai_api_key_env)
 
 
 def load_config(path: Path | None = None) -> AppConfig:

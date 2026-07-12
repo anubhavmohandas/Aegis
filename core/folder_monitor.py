@@ -9,12 +9,16 @@ of which are proper OS-level file change notification APIs (not polling).
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
 from queue import Queue
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from .events import EventCategory, MonitorEvent
+
+logger = logging.getLogger("aegis.folder_monitor")
 
 _CATEGORY_MAP = {
     "created": EventCategory.FILE_CREATED,
@@ -78,9 +82,21 @@ class FolderMonitor:
         self.observer = Observer()
 
     def start(self):
+        # Confirmed bug: watchdog's Windows backend (ReadDirectoryChangesW)
+        # calls CreateFileW synchronously inside Observer.start() itself --
+        # if `folder` doesn't exist, that raises straight out of start(),
+        # which propagates out of main.py's unguarded startup loop and kills
+        # the whole process before the dispatcher/tray ever comes up. macOS's
+        # FSEvents backend happens to be lenient about this, so the bug was
+        # Windows-only. Every other collector that schedules a watchdog path
+        # (macos/windows/linux startup_monitor.py) already guards with
+        # `if path.exists()`; this was the one place that guard was missing.
         handler = _Handler(self.out_queue)
         for folder in self.folders:
-            self.observer.schedule(handler, folder, recursive=False)
+            if Path(folder).is_dir():
+                self.observer.schedule(handler, folder, recursive=False)
+            else:
+                logger.warning("Watched folder does not exist, skipping: %s", folder)
         self.observer.start()
 
     def stop(self):

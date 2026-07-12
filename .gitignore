@@ -31,6 +31,8 @@ dist/
 .env.*
 *.pem
 *.key
+secrets.enc
+credentials.json
 
 # --- Aegis runtime artifacts (regenerated on every run, not source) ---
 aegis_events.db

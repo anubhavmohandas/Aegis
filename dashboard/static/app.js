@@ -841,18 +841,22 @@ async function checkForUpdate() {
     const data = await api("/api/update/check");
     if (data.reason) { card.hidden = true; return; }  // not a packaged desktop install -- nothing to show
     card.hidden = false;
+    latestUpdateInfo = null;
+    $("update-notes-field").hidden = true;
+    $("update-install-btn").hidden = true;
 
-    if (data.update_available) {
+    if (data.check_failed) {
+      // Distinct from "no update" -- the check itself didn't complete, so
+      // this must never be shown as a verified "you're up to date."
+      $("update-desc").textContent = "Could not check for updates — no network, or GitHub is unreachable.";
+    } else if (data.update_available) {
       latestUpdateInfo = data;
       $("update-desc").textContent = `Version ${data.version} is available (you're on ${data.current_version}).`;
       $("update-notes-field").hidden = !data.notes;
       $("update-notes").innerHTML = data.notes ? renderMarkdownLite(data.notes) : "";
       $("update-install-btn").hidden = false;
     } else {
-      latestUpdateInfo = null;
       $("update-desc").textContent = `You're on the latest version (${data.current_version}).`;
-      $("update-notes-field").hidden = true;
-      $("update-install-btn").hidden = true;
     }
   } catch {
     card.hidden = false;
@@ -888,6 +892,42 @@ async function installUpdate() {
     // desktop_app.py's _quit_for_update) -- a dropped connection here is
     // the EXPECTED outcome of a successful install, not a failure.
     $("update-status").textContent = "Installing — Aegis will restart in a moment…";
+  }
+}
+
+/* ---------- change password ---------- */
+
+async function changePassword() {
+  const current = $("pw-current").value;
+  const next = $("pw-new").value;
+  const confirm = $("pw-confirm").value;
+  const status = $("password-status");
+  const btn = $("password-save");
+
+  if (!current || !next) { status.textContent = "Fill in both password fields."; return; }
+  if (next !== confirm) { status.textContent = "New passwords don't match."; return; }
+  if (next.length < 8) { status.textContent = "New password must be at least 8 characters."; return; }
+
+  btn.disabled = true;
+  status.textContent = "Saving…";
+  try {
+    const res = await fetch("/api/settings/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password: current, new_password: next }),
+    });
+    if (res.status === 401) { location.replace("/login"); return; }
+    const data = await res.json();
+    if (!res.ok) { status.textContent = data.error || "Could not change password."; return; }
+    $("pw-current").value = "";
+    $("pw-new").value = "";
+    $("pw-confirm").value = "";
+    status.textContent = "Password changed.";
+    toast("Password changed");
+  } catch {
+    status.textContent = "Save failed — server unreachable.";
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -961,6 +1001,7 @@ function bindSettings() {
   });
 
   $("settings-save").addEventListener("click", saveSettings);
+  $("password-save").addEventListener("click", changePassword);
 
   $("update-check-btn").addEventListener("click", (e) => {
     e.target.disabled = true;

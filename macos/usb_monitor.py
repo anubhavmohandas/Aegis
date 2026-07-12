@@ -107,6 +107,14 @@ class MacUsbMonitor:
                     "name": item.get("_name", "Unknown USB device"),
                     "vendor_id": item.get("vendor_id", "unknown"),
                     "product_id": item.get("product_id", "unknown"),
+                    # v2 fix: this diff key was computed but never copied into
+                    # the event details -- core/rule_engine.py's trusted_usb_ids
+                    # check reads details["device_id"]/["serial_num"], which
+                    # were always absent, so no macOS USB event could ever
+                    # match a trust-listed device. Windows/Linux collectors
+                    # already include this key; macOS was the one gap.
+                    "device_id": str(key),
+                    "serial_num": str(item.get("serial_num", "")),
                 }
                 if "_items" in item:
                     walk(item["_items"])
@@ -162,6 +170,11 @@ class MacUsbMonitor:
                 "device_name": drive.get("device_name", "unknown"),
                 "media_name": drive.get("media_name", "unknown"),
                 "writable": entry.get("writable", "unknown"),
+                # v2 fix: same trusted_usb_ids gap as _snapshot_devices above --
+                # this diff key needs to be in `details` for the rule engine
+                # to ever see it.
+                "device_id": str(key),
+                "volume_uuid": str(entry.get("volume_uuid", "")),
             }
         return volumes
 

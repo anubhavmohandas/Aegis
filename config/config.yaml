@@ -53,6 +53,16 @@ trusted_process_names:        # populated from your real macOS test run -- routi
   - com.apple.iCloudHelper
   - AddressBookSourceSync
   - AddressBookManager
+  - system_profiler
+  - UVFSService
+  - PlugInLibraryService
+  - mdsync
+  # Deliberately NOT auto-added: "Disk Utility", "Messages", "Brave Browser
+  # Helper" -- these are user-facing apps, not background daemons. Their
+  # launches are a real signal (e.g. Disk Utility launching unexpectedly is
+  # worth knowing about), so silencing them by default trades away visibility
+  # you may actually want. Add them yourself if you've decided otherwise for
+  # your own machine.
 trusted_process_hashes: []    # sha256 of a trusted binary's file on disk -- harder to spoof than a
                                # name match, since it requires replacing the actual file at that path
                                # rather than just naming something the same thing. Get one locally with

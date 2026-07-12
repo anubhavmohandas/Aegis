@@ -256,6 +256,30 @@
     </div>
   </div>
 
+  <div class="settings-card">
+    <h2 class="settings-title">Account</h2>
+    <p class="settings-desc">Change the password used to sign in to this dashboard.</p>
+
+    <div class="field">
+      <label for="pw-current">Current password</label>
+      <input id="pw-current" class="text-input" type="password" autocomplete="current-password">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="pw-new">New password</label>
+        <input id="pw-new" class="text-input" type="password" autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label for="pw-confirm">Confirm new password</label>
+        <input id="pw-confirm" class="text-input" type="password" autocomplete="new-password">
+      </div>
+    </div>
+    <div class="field" style="display:flex; gap:10px; align-items:center;">
+      <button class="btn btn-primary" id="password-save">Change Password</button>
+      <span class="settings-note" id="password-status"></span>
+    </div>
+  </div>
+
   <div class="settings-card" id="update-card" hidden>
     <h2 class="settings-title">Updates</h2>
     <p class="settings-desc" id="update-desc">Checking…</p>

@@ -14,21 +14,35 @@ guarantees. A personal awareness tool, not a detector.**
 
 ## Quick start
 
+Works the same way on **Windows, macOS, and Linux** — swap only the
+requirements file and the venv-activate command below for your OS.
+
 ```
 python -m venv venv && source venv/bin/activate      # Windows: venv\Scripts\activate
 pip install -r requirements-macos.txt                # or -windows.txt / -linux.txt
-echo "NVIDIA_API_KEY=nvapi-..." > .env                # optional — runs fine without one
-python main.py
+python desktop_app.py
 ```
 
+`desktop_app.py` is the real app: one window, the live event console, and a
+Settings page — nothing to configure by hand first. Sign in with `admin` /
+`admin` on first run and change the password from Settings → Account. Add
+your AI provider's API key there too (Settings → AI Explainer) — it's
+encrypted at rest and, unlike the old `.env`-file approach, **survives every
+self-update**, so you only ever type it once.
+
+Prefer a headless/background process with no window (e.g. a server, or a
+machine you SSH into)? `python main.py` runs the same monitors as a system-tray
+app instead, and still reads `config/config.yaml` / an optional `.env` file
+(`NVIDIA_API_KEY=nvapi-...`) directly for anyone who'd rather configure by
+hand than through the dashboard.
+
 The AI layer speaks to any OpenAI-compatible endpoint (NVIDIA, OpenAI,
-OpenRouter, local Ollama) or Anthropic — pick provider/model/key in
-`config/config.yaml`. Windows needs an **Administrator** terminal for full
-process-monitoring power. macOS will prompt for Automation permission the
-first time it checks login items. Run `python ui/timeline_app.py` separately
-to browse history. Notification noise too high? Raise the popup floor with
-`notify_min_severity: high` in config — everything still lands in the
-timeline.
+OpenRouter, local Ollama) or Anthropic — pick provider/model/key from the
+dashboard, or in `config/config.yaml` if you're running headless. Windows
+needs an **Administrator** terminal for full process-monitoring power. macOS
+will prompt for Automation permission the first time it checks login items.
+Notification noise too high? Raise the popup floor with `notify_min_severity:
+high` from Settings — everything still lands in the timeline either way.
 
 ## Status — v2.0.0-alpha
 
@@ -38,18 +52,39 @@ public release.
 
 - ✅ Multi-provider AI (OpenAI-compatible + Anthropic)
 - ✅ macOS validation on real hardware — process, folder, USB, notifications;
-  three real bugs found and fixed along the way
+  several real bugs found and fixed along the way
 - ✅ Native macOS notification backend (osascript primary, plyer no longer
   involved on Mac)
 - ✅ Noise reduction: opt-in trusted lists, dedupe, rate limiting, and a
   configurable popup severity floor
-- ✅ Packaging: `pyinstaller packaging/aegis.spec` — macOS `.app` built and
-  smoke-run on real hardware ([`packaging/PACKAGING.md`](packaging/PACKAGING.md))
-- 🔲 Windows validation — run from source first, then the packaged build
+- ✅ Desktop app (`desktop_app.py`) — one window: live console + Settings,
+  wrapping the dashboard below; `main.py`'s tray-only mode still exists for
+  headless use
+- ✅ Dashboard UI — live timeline with filters/search, a details drawer with
+  AI explanation, AI-generated PDF report export, and a Settings page
+  (AI provider/key, notifications, watched folders, trust lists)
+- ✅ Encrypted local API-key storage — set once from Settings, survives
+  self-updates (previously had to be re-entered after every update: the key
+  was written next to the app's own code, which self-update replaces
+  wholesale)
+- ✅ Changeable dashboard login password (Settings → Account) — no longer
+  fixed `admin`/`admin`
+- ✅ Self-update — checks GitHub Releases, downloads, and installs in place
+  from Settings (packaged builds only); verified for real on macOS, Windows
+  install path implemented per Inno Setup's documented behavior but not yet
+  run on real Windows hardware
+- ✅ Packaging: `pyinstaller packaging/aegis.spec` — macOS `.app`/`.dmg` built
+  and smoke-run on real hardware; CI workflow builds both platforms
+  ([`packaging/PACKAGING.md`](packaging/PACKAGING.md))
+- ✅ Windows validation, from source, on real hardware — process/USB/startup
+  monitoring confirmed working via the WMI polling fallback. Real-time ETW
+  was attempted and is blocked inside a third-party library's delivery path
+  (not Aegis's own code); parked in favor of the working WMI fallback rather
+  than shipping unverified ETW (see [`docs/DECISIONS.md`](docs/DECISIONS.md))
+- 🔲 Windows **packaged build**, installer, and self-update — implemented,
+  not yet run on real Windows hardware
   ([`TEST_REPORT_TEMPLATE.md`](TEST_REPORT_TEMPLATE.md))
-- 🔲 Windows installer — Inno Setup template written, never compiled
-- 🔲 Dashboard UI (settings, timeline, search) — planned, deliberately after
-  validation
+- 🔲 Linux validation — implemented, not yet run on real Linux hardware
 - 🔲 Signed releases, screenshots & demo
 
 Full verification log, architecture, and every known gap:

@@ -51,9 +51,20 @@ MARGIN = 14
 CONTENT_W = PAGE_W - 2 * MARGIN
 
 
+def _no_pad_date(ts: float) -> str:
+    # time.strftime's "%-d" (no leading zero) is a glibc/BSD libc extension --
+    # Windows' CRT-backed strftime doesn't support it and raises ValueError.
+    # Confirmed bug: this ran on every "Export PDF Report" click, so the
+    # report feature would crash outright on Windows. tm_mday is already an
+    # int, so building the string by hand sidesteps the platform-specific
+    # flag entirely instead of trying to find a portable format-string spin.
+    t = time.localtime(ts)
+    return f"{time.strftime('%b', t)} {t.tm_mday}, {t.tm_year}"
+
+
 def format_range_label(start: float, end: float) -> str:
-    s = time.strftime("%b %-d, %Y", time.localtime(start))
-    e = time.strftime("%b %-d, %Y", time.localtime(end))
+    s = _no_pad_date(start)
+    e = _no_pad_date(end)
     return s if s == e else f"{s} - {e}"
 
 
@@ -204,7 +215,12 @@ def _draw_cover(pdf: _ReportPDF, stats: dict, range_label: str):
 
     pdf.set_font("Helvetica", "", 9.5)
     pdf.set_text_color(140, 155, 178)
-    generated = time.strftime("Generated %B %-d, %Y at %-I:%M %p")
+    # Same non-portable "%-d"/"%-I" issue as _no_pad_date above -- built by
+    # hand rather than strftime so this doesn't crash on Windows.
+    _now = time.localtime()
+    _hour12 = _now.tm_hour % 12 or 12
+    generated = (f"Generated {time.strftime('%B', _now)} {_now.tm_mday}, {_now.tm_year} "
+                 f"at {_hour12}:{_now.tm_min:02d} {time.strftime('%p', _now)}")
     pdf.cell(0, 7, generated, align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # cover stat trio, echoing the dashboard's own stat tiles

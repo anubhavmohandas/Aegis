@@ -14,9 +14,9 @@ available for anyone who explicitly wants headless/background operation).
 Run with:
     python desktop_app.py
 
-First screen is the dashboard's own login (default admin/admin -- see
-dashboard/server.py's module docstring); the session cookie persists for the
-window's lifetime.
+First screen is the dashboard's own login (admin/admin on first run, then
+whatever you change it to from Settings -- see dashboard/server.py's module
+docstring); the session cookie persists for the window's lifetime.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ import webview
 from core.config import load_config
 from core.dispatcher import Dispatcher
 from core.folder_monitor import FolderMonitor
-from dashboard.server import build_server
+from dashboard.server import MONITOR_LOG_PATH, build_server
 from main import build_platform_monitors
 
 logger = logging.getLogger("aegis.desktop_app")
@@ -129,8 +129,24 @@ def _darken_titlebar(window):
         logger.debug("Could not force a dark title bar", exc_info=True)
 
 
+def _wire_monitor_log() -> None:
+    """The dashboard's "Log" button reads MONITOR_LOG_PATH (dashboard/server.py's
+    monitor_log_tail()). That worked in the old two-process model because
+    starting main.py as a subprocess piped its stdout straight into that file
+    (see server.py's start_monitor()) -- but in this unified process, nothing
+    wrote to it at all: logging.basicConfig below only attaches a console
+    StreamHandler, invisible once packaged (no terminal). Confirmed bug: the
+    Log modal always showed "(log is empty)" for the desktop app specifically.
+    Adding a FileHandler at the same path both processes agree on fixes it."""
+    MONITOR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(MONITOR_LOG_PATH, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.getLogger().addHandler(handler)
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    _wire_monitor_log()
     config = load_config()
 
     pipeline = MonitorPipeline(config)

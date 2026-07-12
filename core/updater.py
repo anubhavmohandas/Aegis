@@ -76,9 +76,16 @@ def _pick_asset(assets: list[dict]) -> dict | None:
 
 def check_for_update(timeout: int = 10) -> dict | None:
     """Returns {version, notes, download_url, asset_name} if a newer release
-    is published for this platform, else None. Never raises for "no
-    update"/network conditions -- this runs off a UI button click, and a
-    transient network blip must read as "no update found," not a crash."""
+    is published for this platform, or None if there genuinely isn't one.
+
+    Raises UpdateError if the check itself couldn't complete (network down,
+    TLS/cert failure, GitHub unreachable, malformed response) -- this used to
+    be swallowed into the same `None` as "no update," which meant a broken
+    check and a healthy up-to-date install were indistinguishable to the
+    user (the dashboard always said "you're on the latest version," even
+    when it had never successfully asked). The caller (dashboard/server.py's
+    check_update()) catches this and reports it as a failed check, not a
+    verified "you're current.\""""
     req = urllib.request.Request(
         RELEASES_API, headers={"Accept": "application/vnd.github+json", "User-Agent": "Aegis-updater"}
     )
@@ -87,7 +94,7 @@ def check_for_update(timeout: int = 10) -> dict | None:
             data = json.loads(resp.read())
     except (URLError, OSError, json.JSONDecodeError) as e:
         logger.warning("Update check failed: %s", e)
-        return None
+        raise UpdateError(str(e)) from e
 
     tag = data.get("tag_name", "")
     if not tag or not is_newer(tag):

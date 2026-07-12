@@ -66,7 +66,15 @@ try:
                 name = app.localizedName()
                 bundle_id = app.bundleIdentifier()
                 pid = app.processIdentifier()
-                details = {"app_name": str(name), "bundle_id": str(bundle_id), "pid": int(pid)}
+                # v2 fix: this used to key the app's display name as "app_name",
+                # but core/rule_engine.py's trusted_process_names check (and
+                # core/events.py's own ProcessDetails TypedDict) both read
+                # "name" -- the psutil-poll path below already uses "name".
+                # That mismatch meant trusted_process_names could never match
+                # an event from this observer, the real-time/highest-fidelity
+                # path for GUI app launches: adding a noisy app to your trust
+                # list silently kept sending it to the AI explainer anyway.
+                details = {"name": str(name), "bundle_id": str(bundle_id), "pid": int(pid)}
 
                 # v2 fix: this event previously carried no `exe`/`executable_path`
                 # key, so RuleEngine's hash-trust branch (core/rule_engine.py)

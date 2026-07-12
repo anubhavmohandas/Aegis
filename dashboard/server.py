@@ -10,8 +10,9 @@ this is a personal dashboard, not a network service.
 Zero dependencies beyond the stdlib, so it works inside the PyInstaller
 bundle and on a bare python install alike.
 
-Access requires signing in (fixed admin/admin for now -- see the auth block
-below); sessions are HttpOnly cookies that expire after 12h or on restart.
+Access requires signing in -- admin/admin on first run, changeable from the
+Settings page (see change_password() below); sessions are HttpOnly cookies
+that expire after 12h or on restart.
 
 Run with:
     python dashboard/server.py [--db aegis_events.db] [--port 8787]
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import hmac
 import io
 import json
@@ -44,12 +46,28 @@ STATIC_DIR = Path(__file__).parent / "static"
 REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))  # lets the report endpoint lazily `import core.*` -- see _handle_report_pdf
+from core.config import persistent_dir, _is_frozen  # noqa: E402 -- needs REPO_ROOT on sys.path first
+from core.secrets_store import get_secret, set_secret  # noqa: E402
+
 ASSETS_DIR = REPO_ROOT / "assets"                       # brand logo lives with the app assets
-CONFIG_PATH = REPO_ROOT / "config" / "config.yaml"      # same file core/config.py loads
-ENV_PATH = REPO_ROOT / ".env"                           # API keys live here, never in yaml
+
+# DATA_DIR is the per-user data dir (see core/config.persistent_dir) for a
+# packaged build, or the repo root for a from-source checkout. Everything
+# below MUST live there rather than under REPO_ROOT for a frozen build:
+# self-update (core/updater.py) does `rm -rf` on the whole old .app bundle
+# and copies in a fresh one, so anything written under the bundle's own path
+# -- which is what a hardcoded REPO_ROOT-relative path resolves to once
+# frozen -- was silently deleted on every update. This was a real, confirmed
+# bug: users had to re-enter their AI provider API key after every update
+# because it was being written to `.env` next to the (about-to-be-replaced)
+# app code instead of here.
+DATA_DIR = persistent_dir()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_PATH = DATA_DIR / "config.yaml" if _is_frozen() else DATA_DIR / "config" / "config.yaml"
+ENV_PATH = DATA_DIR / ".env"             # legacy plaintext key location -- read-only, for migration
 MAIN_PY = REPO_ROOT / "main.py"
-MONITOR_STATE_FILE = REPO_ROOT / ".aegis_monitor.json"  # {"pid": int, "started_at": float}
-MONITOR_LOG_PATH = REPO_ROOT / "dashboard" / "monitor.log"
+MONITOR_STATE_FILE = DATA_DIR / ".aegis_monitor.json"  # {"pid": int, "started_at": float}
+MONITOR_LOG_PATH = DATA_DIR / "monitor.log" if _is_frozen() else DATA_DIR / "dashboard" / "monitor.log"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -64,15 +82,74 @@ VALID_SEVERITIES = {"low", "medium", "high", "critical"}
 VALID_SOURCES = {"process", "usb", "startup", "folder"}
 
 # --- auth -------------------------------------------------------------------
-# Deliberately simple for now: a single fixed operator account, in-memory
-# sessions (restart logs everyone out), HttpOnly SameSite cookie. When the
-# settings UI lands, credentials move into config with a hashed passphrase --
-# until then this is a placeholder gate for a localhost-only console.
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin"
+# A single operator account (this is a localhost-only, one-user console, not
+# a multi-tenant service), in-memory sessions (restart logs everyone out),
+# HttpOnly SameSite cookie. Credentials are salted+hashed (PBKDF2-HMAC-SHA256)
+# and persisted in DATA_DIR/credentials.json -- changeable from the Settings
+# page (see change_password() below) instead of the old hardcoded admin/admin.
+DEFAULT_USERNAME = "admin"
+DEFAULT_PASSWORD = "admin"      # only ever used to seed credentials.json on first run
+CREDENTIALS_PATH = DATA_DIR / "credentials.json"
+PBKDF2_ITERATIONS = 200_000
 SESSION_COOKIE = "aegis_session"
 SESSION_TTL = 12 * 3600
 _sessions: dict[str, float] = {}  # token -> expiry (unix seconds)
+
+
+def _hash_password(password: str, salt: bytes, iterations: int = PBKDF2_ITERATIONS) -> str:
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations).hex()
+
+
+def _new_credentials(username: str, password: str) -> dict:
+    salt = secrets.token_bytes(16)
+    return {
+        "username": username,
+        "salt": salt.hex(),
+        "hash": _hash_password(password, salt),
+        "iterations": PBKDF2_ITERATIONS,
+    }
+
+
+def _load_credentials() -> dict:
+    if CREDENTIALS_PATH.is_file():
+        try:
+            creds = json.loads(CREDENTIALS_PATH.read_text(encoding="utf-8"))
+            if {"username", "salt", "hash"} <= creds.keys():
+                return creds
+        except (json.JSONDecodeError, OSError):
+            pass
+    creds = _new_credentials(DEFAULT_USERNAME, DEFAULT_PASSWORD)
+    _save_credentials(creds)
+    return creds
+
+
+def _save_credentials(creds: dict) -> None:
+    CREDENTIALS_PATH.write_text(json.dumps(creds), encoding="utf-8")
+    try:
+        os.chmod(CREDENTIALS_PATH, 0o600)  # no-op-ish on Windows, real on POSIX
+    except OSError:
+        pass
+
+
+def _verify_password(username: str, password: str) -> bool:
+    creds = _load_credentials()
+    salt = bytes.fromhex(creds["salt"])
+    candidate = _hash_password(password, salt, creds.get("iterations", PBKDF2_ITERATIONS))
+    # Both comparisons always evaluate (single &, not `and`) so a wrong
+    # username can't short-circuit before the password hash is even computed
+    # -- avoids a timing side-channel that would let an attacker enumerate
+    # valid usernames faster than valid passwords.
+    return hmac.compare_digest(username, creds["username"]) & hmac.compare_digest(candidate, creds["hash"])
+
+
+def change_password(current_password: str, new_password: str) -> dict:
+    if len(new_password) < 8:
+        return {"error": "new password must be at least 8 characters"}
+    creds = _load_credentials()
+    if not _verify_password(creds["username"], current_password):
+        return {"error": "current password is incorrect"}
+    _save_credentials(_new_credentials(creds["username"], new_password))
+    return {"ok": True}
 
 # Static files that must be reachable without a session: the login page and
 # the stylesheet it uses. Everything else (index, app.js, the API) is gated.
@@ -209,8 +286,8 @@ def query_stats(db_path: str) -> dict:
 SETTINGS_HEADER = (
     "# Aegis configuration -- managed by the dashboard settings page.\n"
     "# (Your original hand-written file was preserved once as config.yaml.orig.)\n"
-    "# API keys are NOT stored here: ai.api_key_env names the environment\n"
-    "# variable (usually set via .env) that holds the key.\n"
+    "# API keys are NOT stored here: ai.api_key_env names the provider's env var,\n"
+    "# and the key itself lives encrypted at rest (see core/secrets_store.py).\n"
 )
 
 VALID_PROVIDERS = {"openai-compatible", "anthropic"}
@@ -224,7 +301,7 @@ def read_settings() -> dict:
             raw = yaml.safe_load(f) or {}
     ai = raw.get("ai") or {}
     api_key_env = ai.get("api_key_env", "NVIDIA_API_KEY")
-    key = _read_env_value(api_key_env)
+    key = _resolve_api_key(api_key_env)
     return {
         "ai": {
             "provider": ai.get("provider", "openai-compatible"),
@@ -249,6 +326,9 @@ def read_settings() -> dict:
 
 
 def _read_env_value(name: str) -> str | None:
+    """Legacy plaintext lookup only -- kept so a key set before the encrypted
+    store existed still gets picked up once (see _resolve_api_key), never
+    written to again."""
     if not ENV_PATH.is_file():
         return None
     for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
@@ -261,20 +341,18 @@ def _read_env_value(name: str) -> str | None:
     return None
 
 
-def _write_env_value(name: str, value: str) -> None:
-    """Replace (or append) one KEY=VALUE line, leaving every other line --
-    including comments and other keys -- byte-for-byte untouched."""
-    lines = ENV_PATH.read_text(encoding="utf-8").splitlines() if ENV_PATH.is_file() else []
-    replaced = False
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped.startswith("#") and stripped.partition("=")[0].strip() == name:
-            lines[i] = f"{name}={value}"
-            replaced = True
-            break
-    if not replaced:
-        lines.append(f"{name}={value}")
-    ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+def _resolve_api_key(name: str) -> str | None:
+    """The encrypted store (core/secrets_store.py) is the source of truth
+    going forward. A legacy plaintext `.env` value -- from before that store
+    existed -- is read once and migrated in, so nobody has to re-type a key
+    that already worked."""
+    value = get_secret(name)
+    if value:
+        return value
+    legacy = _read_env_value(name)
+    if legacy:
+        set_secret(name, legacy)
+    return legacy
 
 
 def _clean_str_list(value) -> list[str]:
@@ -336,7 +414,7 @@ def write_settings(body: dict) -> dict:
 
     api_key = str(ai.get("api_key", ""))
     if api_key:  # blank means "keep whatever is already there"
-        _write_env_value(api_key_env, api_key)
+        set_secret(api_key_env, api_key)
     return {}
 
 
@@ -529,21 +607,26 @@ def export_csv(events: list[dict]) -> str:
 # and its VERIFIED (macOS) vs NOT VERIFIED (Windows) status.
 
 def check_update() -> dict:
-    from core.config import _is_frozen
-    from core.updater import check_for_update
+    from core.updater import check_for_update, UpdateError
     from core.version import __version__
 
     if not (DashboardHandler.in_process_monitor and _is_frozen()):
         return {"update_available": False, "current_version": __version__,
                 "reason": "not a packaged desktop app install"}
-    info = check_for_update()
+    try:
+        info = check_for_update()
+    except UpdateError as e:
+        # Distinct from "no update" -- a failed check must never read as a
+        # verified "you're on the latest version" (see check_for_update's
+        # docstring for the bug this used to cause).
+        return {"update_available": False, "current_version": __version__,
+                "check_failed": True, "error": str(e)}
     if info is None:
         return {"update_available": False, "current_version": __version__}
     return {"update_available": True, "current_version": __version__, **info}
 
 
 def install_update(download_url: str, asset_name: str) -> dict:
-    from core.config import _is_frozen
     from core.updater import download_update, install_update as do_install, UpdateError
 
     if not (DashboardHandler.in_process_monitor and _is_frozen()):
@@ -639,6 +722,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json(result, status=400)
                 else:
                     self._send_json({"ok": True, "settings": read_settings()})
+            elif parsed.path == "/api/settings/password":
+                if not self._authed():
+                    self._send_json({"error": "authentication required"}, status=401)
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                except (json.JSONDecodeError, ValueError):
+                    self._send_json({"error": "invalid JSON body"}, status=400)
+                    return
+                result = change_password(str(body.get("current_password", "")),
+                                          str(body.get("new_password", "")))
+                self._send_json(result, status=400 if result.get("error") else 200)
             elif parsed.path == "/api/monitor/start":
                 if not self._authed():
                     self._send_json({"error": "authentication required"}, status=401)
@@ -682,9 +778,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
         except (json.JSONDecodeError, ValueError):
             body = {}
-        # compare_digest on both fields; single & so both always evaluate
-        ok = hmac.compare_digest(str(body.get("username", "")), ADMIN_USERNAME) \
-             & hmac.compare_digest(str(body.get("password", "")), ADMIN_PASSWORD)
+        ok = _verify_password(str(body.get("username", "")), str(body.get("password", "")))
         if not ok:
             time.sleep(0.4)  # blunt damper on credential guessing
             self._send_json({"ok": False, "error": "invalid credentials"}, status=401)
