@@ -78,15 +78,24 @@ class WindowsProcessMonitor:
                 GUID("{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"),
             )
 
-            # TEMPORARY DIAGNOSTIC: pywintrace 0.2.0's callback payload shape is
-            # undocumented; log the raw value so the parser can be rewritten
-            # against real data. Restore the real callback from git history
-            # (audit-fixes-2026-07-11) once the shape is known.
+            # TEMPORARY DIAGNOSTIC: pywintrace 0.2.0 invokes the callback as
+            # event_callback((event_id, out)) -- a 2-tuple, not a dict (see
+            # site-packages/etw/etw.py:839). The payload keys of `out` are
+            # undocumented, so log them raw before rewriting the parser.
+            # Restore the real callback from git history (audit-fixes-2026-07-11)
+            # once the payload shape is confirmed.
             def _callback(event_tuple):
-                logger.info("=" * 80)
-                logger.info("ETW callback type: %s", type(event_tuple))
-                logger.info("ETW callback repr: %r", event_tuple)
-                logger.info("=" * 80)
+                try:
+                    event_id, out = event_tuple
+
+                    logger.info("=" * 80)
+                    logger.info("Event ID: %s", event_id)
+                    logger.info("Payload type: %s", type(out))
+                    logger.info("Payload: %r", out)
+                    logger.info("=" * 80)
+
+                except Exception:
+                    logger.exception("Diagnostic callback failed")
 
             etw_trace = ETW(providers=[provider], event_callback=_callback)
             etw_trace.start()
