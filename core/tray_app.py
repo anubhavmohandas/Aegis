@@ -33,17 +33,17 @@ def _load_icon_image() -> Image.Image:
 
 
 class TrayApp:
-    def __init__(self, on_quit):
+    def __init__(self, on_quit, on_open_dashboard=None):
         self.on_quit = on_quit
-        self.icon = pystray.Icon(
-            "aegis",
-            _load_icon_image(),
-            "Aegis",
-            menu=pystray.Menu(
-                pystray.MenuItem("Aegis (running)", None, enabled=False),
-                pystray.MenuItem("Quit", self._quit),
-            ),
-        )
+        self.on_open_dashboard = on_open_dashboard
+        items = [pystray.MenuItem("Aegis (running)", None, enabled=False)]
+        if on_open_dashboard:
+            items.append(pystray.MenuItem("Open Dashboard", self._open_dashboard, default=True))
+        items.append(pystray.MenuItem("Quit", self._quit))
+        self.icon = pystray.Icon("aegis", _load_icon_image(), "Aegis", menu=pystray.Menu(*items))
+
+    def _open_dashboard(self, icon, item):
+        self.on_open_dashboard()
 
     def _quit(self, icon, item):
         self.on_quit()

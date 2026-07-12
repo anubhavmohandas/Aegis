@@ -406,6 +406,7 @@ function renderMonitorPill() {
   const toggle = $("monitor-toggle");
 
   el.classList.remove("stale", "idle");
+  const inProcess = state.monitor.managed === "in_process";
   if (state.consoleReachable === false) {
     el.classList.add("stale");
     label.textContent = "CONSOLE OFFLINE";
@@ -414,7 +415,7 @@ function renderMonitorPill() {
     label.textContent = state.monitor.running ? "STOPPING…" : "STARTING…";
   } else if (state.monitor.running) {
     label.textContent = "MONITORING ACTIVE";
-    el.title = `PID ${state.monitor.pid} · up ${formatUptime(state.monitor.uptime_seconds)}`;
+    el.title = inProcess ? "" : `PID ${state.monitor.pid} · up ${formatUptime(state.monitor.uptime_seconds)}`;
   } else {
     el.classList.add("idle");
     label.textContent = "MONITORING STOPPED";
@@ -422,6 +423,7 @@ function renderMonitorPill() {
   }
 
   if (!toggle) return;
+  toggle.hidden = false;
   if (state.consoleReachable === false) { toggle.disabled = true; return; }
   toggle.disabled = state.monitorBusy;
   toggle.textContent = state.monitorBusy
@@ -766,9 +768,72 @@ async function loadSettings() {
     $("set-trusted-names").value = s.trusted_process_names.join("\n");
     $("set-trusted-hashes").value = s.trusted_process_hashes.join("\n");
     $("set-trusted-usb").value = s.trusted_usb_ids.join("\n");
+
+    checkForUpdate();
   } catch (err) {
     if (String(err).includes("unauthenticated")) return;
     toast("Could not load settings", true);
+  }
+}
+
+/* ---------- self-update ---------- */
+
+let latestUpdateInfo = null;  // {download_url, asset_name, version} from the last successful check
+
+async function checkForUpdate() {
+  const card = $("update-card");
+  const btn = $("update-check-btn");
+  try {
+    const data = await api("/api/update/check");
+    if (data.reason) { card.hidden = true; return; }  // not a packaged desktop install -- nothing to show
+    card.hidden = false;
+
+    if (data.update_available) {
+      latestUpdateInfo = data;
+      $("update-desc").textContent = `Version ${data.version} is available (you're on ${data.current_version}).`;
+      $("update-notes-field").hidden = !data.notes;
+      $("update-notes").innerHTML = data.notes ? renderMarkdownLite(data.notes) : "";
+      $("update-install-btn").hidden = false;
+    } else {
+      latestUpdateInfo = null;
+      $("update-desc").textContent = `You're on the latest version (${data.current_version}).`;
+      $("update-notes-field").hidden = true;
+      $("update-install-btn").hidden = true;
+    }
+  } catch {
+    card.hidden = false;
+    $("update-desc").textContent = "Could not check for updates — no network, or GitHub is unreachable.";
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function installUpdate() {
+  if (!latestUpdateInfo) return;
+  const btn = $("update-install-btn");
+  btn.disabled = true;
+  $("update-status").textContent = "Downloading update…";
+  try {
+    const res = await fetch("/api/update/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        download_url: latestUpdateInfo.download_url,
+        asset_name: latestUpdateInfo.asset_name,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      $("update-status").textContent = data.error || "Update failed.";
+      btn.disabled = false;
+      return;
+    }
+    $("update-status").textContent = "Installing — Aegis will restart in a moment…";
+  } catch {
+    // The app process exits itself right after responding (see
+    // desktop_app.py's _quit_for_update) -- a dropped connection here is
+    // the EXPECTED outcome of a successful install, not a failure.
+    $("update-status").textContent = "Installing — Aegis will restart in a moment…";
   }
 }
 
@@ -842,6 +907,13 @@ function bindSettings() {
   });
 
   $("settings-save").addEventListener("click", saveSettings);
+
+  $("update-check-btn").addEventListener("click", (e) => {
+    e.target.disabled = true;
+    $("update-status").textContent = "";
+    checkForUpdate();
+  });
+  $("update-install-btn").addEventListener("click", installUpdate);
 }
 
 /* ---------- wiring ---------- */

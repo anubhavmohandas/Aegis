@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller build recipe for the Aegis background monitor (main.py).
+# PyInstaller build recipe for the Aegis desktop app (desktop_app.py):
+# monitor pipeline + dashboard server + a native window, one process.
 #
 # Build from the REPO ROOT (paths below resolve via SPECPATH, but keeping the
 # invocation uniform keeps dist/ and build/ where .gitignore expects them):
@@ -15,9 +16,13 @@
 # For an app that starts at login and stays resident, onedir's only cost
 # (a folder instead of a single file) is invisible behind an installer.
 #
-# The timeline UI (ui/timeline_app.py, PySide6) is deliberately NOT bundled:
-# it's a separate developer-facing tool until the v2 dashboard exists, and
-# PySide6 would triple the bundle size for something main.py never imports.
+# The old tray-only entry point (main.py) still exists and still works for
+# anyone who explicitly wants headless/background operation -- it's just not
+# what gets packaged as "Aegis.app" anymore, since a window-less menu-bar
+# icon with no way to see or configure anything was the wrong default for a
+# packaged, non-technical-facing build. The old read-only PySide6 timeline
+# (ui/timeline_app.py) is still not bundled -- fully superseded by the
+# dashboard now, PySide6 would triple the bundle size for nothing.
 
 import sys
 from pathlib import Path
@@ -31,11 +36,14 @@ IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 
 # Bundled at the same repo-relative destinations the code resolves against
-# (core/config.py and core/tray_app.py both do Path(__file__).parent.parent /
-# "config" | "assets", which lands inside the bundle's _internal dir).
+# (core/config.py does Path(__file__).parent.parent / "config", and
+# dashboard/server.py's STATIC_DIR/ASSETS_DIR do the equivalent for its own
+# tree -- all of which land inside the bundle's _internal dir at runtime).
 datas = [
     (str(ROOT / "config" / "config.yaml"), "config"),
     (str(ROOT / "assets" / "tray_icon.png"), "assets"),
+    (str(ROOT / "assets" / "logo.png"), "assets"),        # dashboard UI + PDF report cover both use this
+    (str(ROOT / "dashboard" / "static"), "dashboard/static"),
 ]
 
 # main.py imports its collector package inside build_platform_monitors(), and
@@ -50,7 +58,11 @@ hiddenimports = ["anthropic", "openai"]
 excludes = ["PySide6", "tkinter", "pytest"]
 
 if IS_MAC:
-    hiddenimports += ["AppKit", "Foundation", "objc"]
+    # WebKit/PyObjCTools are pywebview's Cocoa backend (webview/platforms/cocoa.py)
+    # -- listed explicitly for the same reason AppKit/Foundation/objc already
+    # were: PyInstaller's static scan is unreliable specifically for PyObjC's
+    # Objective-C bridge modules.
+    hiddenimports += ["AppKit", "Foundation", "objc", "WebKit", "PyObjCTools"]
     excludes += ["windows", "linux", "plyer", "pyudev", "wmi", "win32com", "win32api", "etw"]
 elif IS_WIN:
     hiddenimports += ["plyer.platforms.win.notification"]
@@ -61,7 +73,7 @@ else:
                  "AppKit", "Foundation", "objc"]
 
 a = Analysis(
-    [str(ROOT / "main.py")],
+    [str(ROOT / "desktop_app.py")],
     pathex=[str(ROOT)],
     datas=datas,
     hiddenimports=hiddenimports,
@@ -94,15 +106,13 @@ if IS_MAC:
     app = BUNDLE(
         coll,
         name="Aegis.app",
-        # No .icns yet -- Finder shows the generic app icon. The tray icon
-        # (assets/tray_icon.png) is unaffected; it's loaded by pystray at
-        # runtime, not from the bundle metadata.
-        icon=None,
+        icon=str(ROOT / "assets" / "aegis.icns"),
         bundle_identifier="com.anubhav.aegis",
         info_plist={
-            # Menu-bar-only app: no Dock icon, no app switcher entry. This is
-            # the packaged equivalent of "lives in the system tray."
-            "LSUIElement": True,
+            # Normal foreground app now: Dock icon, app switcher entry, a real
+            # window (desktop_app.py). LSUIElement/menu-bar-only made sense
+            # for the old tray-only main.py entry point, not for something
+            # meant to be opened, looked at, and configured.
             "CFBundleShortVersionString": __version__,
             "NSHumanReadableCopyright": "Created by Anubhav",
         },

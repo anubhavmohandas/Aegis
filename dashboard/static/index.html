@@ -251,6 +251,22 @@
     </div>
   </div>
 
+  <div class="settings-card" id="update-card" hidden>
+    <h2 class="settings-title">Updates</h2>
+    <p class="settings-desc" id="update-desc">Checking…</p>
+
+    <div class="field" id="update-notes-field" hidden>
+      <label>What's new</label>
+      <div class="explanation" id="update-notes"></div>
+    </div>
+
+    <div class="field" style="display:flex; gap:10px; align-items:center;">
+      <button class="btn" id="update-check-btn">Check for Updates</button>
+      <button class="btn btn-primary" id="update-install-btn" hidden>Download &amp; Install</button>
+      <span class="settings-note" id="update-status"></span>
+    </div>
+  </div>
+
   <div class="settings-actions">
     <span class="settings-note" id="settings-note">Saved to config.yaml / .env — restart the Aegis
       monitors to apply.</span>

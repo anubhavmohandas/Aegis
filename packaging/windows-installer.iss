@@ -42,6 +42,13 @@ SolidCompression=yes
 ; always-elevated autostart entry would be the wrong default for an alpha.
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
+; Lets a /VERYSILENT install (core/updater.py's self-update path) close a
+; currently-running Aegis.exe and relaunch it after -- Restart Manager
+; detects the running process via its lock on Aegis.exe itself, no custom
+; mutex bookkeeping needed. Without this, updating over a running install
+; would just fail with a file-in-use error instead of silently succeeding.
+CloseApplications=yes
+RestartApplications=yes
 
 [Files]
 ; Everything PyInstaller put in the onedir bundle, preserving layout.

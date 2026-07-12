@@ -71,3 +71,33 @@ jobs:
         with:
           name: aegis-macos-dmg
           path: dist/*.dmg
+
+  # Only runs for an actual version tag (workflow_dispatch has no tag to
+  # publish a release under). This is what core/updater.py's "Check for
+  # Updates" button reads via the GitHub REST API
+  # (repos/{owner}/{repo}/releases/latest) -- workflow *artifacts* (above)
+  # aren't fetchable without a signed-in GitHub session, a real Release
+  # with attached assets is the only thing an unauthenticated app can pull.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # softprops/action-gh-release needs this to create the release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: aegis-macos-dmg
+          path: artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          name: aegis-windows-installer
+          path: artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.dmg
+            artifacts/*.exe
+          generate_release_notes: true

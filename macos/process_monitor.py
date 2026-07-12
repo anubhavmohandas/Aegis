@@ -42,6 +42,61 @@ from core.events import EventCategory, MonitorEvent
 
 logger = logging.getLogger("aegis.macos.process_monitor")
 
+# Module-level, not nested inside a method: an NSObject subclass registers a
+# real class in the *global* Objective-C runtime, not something scoped to a
+# Python function call. Aegis's desktop app can stop and restart the monitor
+# pipeline within one process (Settings -> Stop/Start Monitoring), and
+# defining this class fresh on every start() used to try to re-register a
+# class named "_LaunchObserver" a second time -- ObjC rejects that outright
+# ("_LaunchObserver is overriding existing Objective-C class"), which broke
+# GUI-launch detection (silently degrading to the slower psutil-only poll)
+# on every restart after the first. Defined once here, instantiated fresh
+# per start() via .alloc().init() -- many *instances* of one class is fine,
+# it's redefining the *class* that ObjC won't allow.
+try:
+    from AppKit import NSWorkspace, NSWorkspaceDidLaunchApplicationNotification
+    from Foundation import NSObject
+
+    class _LaunchObserver(NSObject):
+        out_queue = None  # set per-instance right after alloc().init(), see below
+
+        def appLaunched_(self, notification):
+            try:
+                app = notification.userInfo()["NSWorkspaceApplicationKey"]
+                name = app.localizedName()
+                bundle_id = app.bundleIdentifier()
+                pid = app.processIdentifier()
+                details = {"app_name": str(name), "bundle_id": str(bundle_id), "pid": int(pid)}
+
+                # v2 fix: this event previously carried no `exe`/`executable_path`
+                # key, so RuleEngine's hash-trust branch (core/rule_engine.py)
+                # could never fire for GUI app launches -- the most common,
+                # highest-fidelity process event on macOS. NSRunningApplication
+                # already hands us the executable URL directly via the
+                # notification object, no second PID lookup required, so there's
+                # no PID-reuse race to worry about here (unlike a psutil.Process(pid)
+                # lookup done after the fact).
+                try:
+                    exe_url = app.executableURL()
+                    if exe_url is not None:
+                        exe_path = exe_url.path()
+                        if exe_path:
+                            details["exe"] = str(exe_path)
+                except Exception as e:
+                    logger.debug("Could not resolve executableURL for PID %s: %s", pid, e)
+
+                self.out_queue.put(MonitorEvent(
+                    category=EventCategory.PROCESS_STARTED,
+                    summary=f"New application launched: {name} (PID {pid})",
+                    details=details,
+                    source="process",
+                    confidence="certain",
+                ))
+            except Exception as e:
+                logger.error("Error handling NSWorkspace launch notification: %s", e)
+except ImportError:
+    _LaunchObserver = None  # pyobjc not installed -- _run_nsworkspace_observer() logs and no-ops
+
 
 class MacProcessMonitor:
     def __init__(self, out_queue: Queue, poll_interval_seconds: int = 3):
@@ -67,56 +122,17 @@ class MacProcessMonitor:
     # ---- Coverage 1: GUI app launches via NSWorkspace (real-time) --------
 
     def _run_nsworkspace_observer(self):
-        try:
-            from AppKit import NSWorkspace, NSWorkspaceDidLaunchApplicationNotification
-            from Foundation import NSObject
-            from PyObjCTools import AppHelper
-        except ImportError:
+        if _LaunchObserver is None:
             logger.info("pyobjc not installed -- skipping NSWorkspace GUI-launch detection "
                         "(psutil polling will still cover this, at lower fidelity). "
                         "pip install pyobjc-framework-Cocoa")
             return
 
-        out_queue = self.out_queue
-
-        class _LaunchObserver(NSObject):
-            def appLaunched_(self, notification):
-                try:
-                    app = notification.userInfo()["NSWorkspaceApplicationKey"]
-                    name = app.localizedName()
-                    bundle_id = app.bundleIdentifier()
-                    pid = app.processIdentifier()
-                    details = {"app_name": str(name), "bundle_id": str(bundle_id), "pid": int(pid)}
-
-                    # v2 fix: this event previously carried no `exe`/`executable_path`
-                    # key, so RuleEngine's hash-trust branch (core/rule_engine.py)
-                    # could never fire for GUI app launches -- the most common,
-                    # highest-fidelity process event on macOS. NSRunningApplication
-                    # already hands us the executable URL directly via the
-                    # notification object, no second PID lookup required, so there's
-                    # no PID-reuse race to worry about here (unlike a psutil.Process(pid)
-                    # lookup done after the fact).
-                    try:
-                        exe_url = app.executableURL()
-                        if exe_url is not None:
-                            exe_path = exe_url.path()
-                            if exe_path:
-                                details["exe"] = str(exe_path)
-                    except Exception as e:
-                        logger.debug("Could not resolve executableURL for PID %s: %s", pid, e)
-
-                    out_queue.put(MonitorEvent(
-                        category=EventCategory.PROCESS_STARTED,
-                        summary=f"New application launched: {name} (PID {pid})",
-                        details=details,
-                        source="process",
-                        confidence="certain",
-                    ))
-                except Exception as e:
-                    logger.error("Error handling NSWorkspace launch notification: %s", e)
+        from PyObjCTools import AppHelper
 
         try:
             observer = _LaunchObserver.alloc().init()
+            observer.out_queue = self.out_queue
             nc = NSWorkspace.sharedWorkspace().notificationCenter()
             nc.addObserver_selector_name_object_(
                 observer, "appLaunched:", NSWorkspaceDidLaunchApplicationNotification, None

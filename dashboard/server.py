@@ -26,6 +26,7 @@ import csv
 import hmac
 import io
 import json
+import os
 import platform
 import secrets
 import sqlite3
@@ -396,6 +397,21 @@ def _find_external_monitor_pid() -> int | None:
 
 
 def monitor_status() -> dict:
+    if DashboardHandler.in_process_monitor:
+        # The monitor pipeline lives in this same process, but -- unlike the
+        # app itself -- it's genuinely start/stop-able via
+        # monitor_{start,stop}_callback (see desktop_app.py's
+        # MonitorPipeline), so its running state has to be asked for, not
+        # assumed true.
+        info = DashboardHandler.monitor_status_callback()
+        running, started_at = info["running"], info.get("started_at")
+        return {
+            "running": running,
+            "pid": os.getpid() if running else None,
+            "started_at": started_at,
+            "uptime_seconds": max(0.0, time.time() - started_at) if (running and started_at) else None,
+            "managed": "in_process",
+        }
     state = _read_monitor_state()
     if state and _process_alive(state.get("pid", -1)):
         pid = state["pid"]
@@ -411,16 +427,27 @@ def monitor_status() -> dict:
                 pid = None  # gone between the scan and now -- treat as not running
 
     if pid is None:
-        return {"running": False, "pid": None, "started_at": None, "uptime_seconds": None}
+        return {"running": False, "pid": None, "started_at": None, "uptime_seconds": None, "managed": "external"}
     return {
         "running": True,
         "pid": pid,
         "started_at": state["started_at"],
         "uptime_seconds": max(0.0, time.time() - state["started_at"]),
+        "managed": "external",
     }
 
 
 def start_monitor() -> dict:
+    if DashboardHandler.in_process_monitor:
+        # Actually starts/rebuilds the collector+dispatcher pipeline in THIS
+        # process (see desktop_app.py's MonitorPipeline.start) -- NOT the
+        # subprocess-spawning path below. That path launching here would, in
+        # a frozen build, run `sys.executable str(MAIN_PY)` where
+        # sys.executable IS the Aegis binary itself -- a second whole copy of
+        # the app, second window included, which is exactly what used to
+        # happen and looked like "the app restarts itself."
+        DashboardHandler.monitor_start_callback()
+        return monitor_status()
     status = monitor_status()
     if status["running"]:
         return status
@@ -446,6 +473,12 @@ def start_monitor() -> dict:
 
 
 def stop_monitor() -> dict:
+    if DashboardHandler.in_process_monitor:
+        # Stops the collector+dispatcher threads (desktop_app.py's
+        # MonitorPipeline.stop) but leaves the app/window/dashboard server
+        # running -- pausing monitoring is not the same as quitting the app.
+        DashboardHandler.monitor_stop_callback()
+        return monitor_status()
     state = _read_monitor_state()
     pid = state["pid"] if state and _process_alive(state.get("pid", -1)) else _find_external_monitor_pid()
     if pid is not None:
@@ -460,7 +493,7 @@ def stop_monitor() -> dict:
         except psutil.Error:
             pass
     MONITOR_STATE_FILE.unlink(missing_ok=True)
-    return {"running": False, "pid": None, "started_at": None, "uptime_seconds": None}
+    return {"running": False, "pid": None, "started_at": None, "uptime_seconds": None, "managed": "external"}
 
 
 def monitor_log_tail(max_lines: int = 200) -> str:
@@ -478,8 +511,59 @@ def export_csv(events: list[dict]) -> str:
     return buf.getvalue()
 
 
+# --- self-update -------------------------------------------------------------
+# Only meaningful for the desktop app (in_process_monitor=True): a standalone
+# `python dashboard/server.py` checkout should `git pull`, there's no bundle
+# to replace. See core/updater.py for the actual check/download/install logic
+# and its VERIFIED (macOS) vs NOT VERIFIED (Windows) status.
+
+def check_update() -> dict:
+    from core.config import _is_frozen
+    from core.updater import check_for_update
+    from core.version import __version__
+
+    if not (DashboardHandler.in_process_monitor and _is_frozen()):
+        return {"update_available": False, "current_version": __version__,
+                "reason": "not a packaged desktop app install"}
+    info = check_for_update()
+    if info is None:
+        return {"update_available": False, "current_version": __version__}
+    return {"update_available": True, "current_version": __version__, **info}
+
+
+def install_update(download_url: str, asset_name: str) -> dict:
+    from core.config import _is_frozen
+    from core.updater import download_update, install_update as do_install, UpdateError
+
+    if not (DashboardHandler.in_process_monitor and _is_frozen()):
+        return {"error": "self-update is only available in the packaged desktop app"}
+    if DashboardHandler.quit_callback is None:
+        return {"error": "no quit hook wired up -- cannot safely restart"}
+    try:
+        installer_path = download_update(download_url, asset_name)
+        do_install(installer_path, DashboardHandler.quit_callback)
+    except (UpdateError, OSError) as e:
+        return {"error": str(e)}
+    return {"ok": True}  # process is exiting behind this response
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     db_path: str = "aegis_events.db"  # overridden in main()
+    # Set True by desktop_app.py: the monitor pipeline there runs in THIS
+    # same process, not as a separate main.py subprocess the old start/stop
+    # buttons were built to spawn/kill -- see monitor_status()/start_monitor()
+    # /stop_monitor() below for why that distinction matters.
+    in_process_monitor: bool = False
+    # desktop_app.py's MonitorPipeline start/stop/status, set alongside
+    # in_process_monitor. () -> {"running": bool, "started_at": float|None},
+    # () -> None, () -> None respectively.
+    monitor_status_callback = None
+    monitor_start_callback = None
+    monitor_stop_callback = None
+    # desktop_app.py's on_quit -- lets /api/update/install shut the monitor
+    # pipeline down cleanly before the installer swaps this process's own
+    # files out from under it. None outside the desktop app.
+    quit_callback = None
 
     def log_message(self, fmt, *fmt_args):
         pass  # keep the terminal quiet; errors still surface as HTTP 500s
@@ -554,6 +638,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({"error": "authentication required"}, status=401)
                 else:
                     self._send_json(stop_monitor())
+            elif parsed.path == "/api/update/install":
+                if not self._authed():
+                    self._send_json({"error": "authentication required"}, status=401)
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                except (json.JSONDecodeError, ValueError):
+                    self._send_json({"error": "invalid JSON body"}, status=400)
+                    return
+                url, name = body.get("download_url"), body.get("asset_name")
+                if not url or not name:
+                    self._send_json({"error": "download_url and asset_name are required"}, status=400)
+                    return
+                result = install_update(url, name)
+                self._send_json(result, status=400 if result.get("error") else 200)
             elif parsed.path == "/api/logout":
                 token = self._session_token()
                 if token:
@@ -605,6 +705,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json(read_settings())
                 elif parsed.path == "/api/monitor/status":
                     self._send_json(monitor_status())
+                elif parsed.path == "/api/update/check":
+                    self._send_json(check_update())
                 elif parsed.path == "/api/monitor/log":
                     try:
                         n = min(max(int(params.get("lines", ["200"])[0]), 1), 2000)
@@ -689,6 +791,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send(200, target.read_bytes(), MIME.get(target.suffix, "application/octet-stream"))
 
 
+def build_server(db_path: str, host: str = "127.0.0.1", port: int = 8787,
+                  in_process_monitor: bool = False, quit_callback=None,
+                  monitor_status_callback=None, monitor_start_callback=None,
+                  monitor_stop_callback=None) -> ThreadingHTTPServer:
+    """Factory used both by this file's CLI entry point and by desktop_app.py,
+    which runs the dashboard in-process (a background thread) instead of as a
+    separate `python dashboard/server.py` subprocess -- see desktop_app.py's
+    module docstring for why. Same DashboardHandler either way, so the two
+    ways of running Aegis can never drift apart in behavior.
+
+    in_process_monitor=True tells the /api/monitor/* endpoints the monitor
+    pipeline is running in THIS process, not a separate main.py subprocess
+    they can start/stop -- see monitor_status()/start_monitor()/stop_monitor().
+    The three monitor_*_callback args are required when in_process_monitor is
+    True (desktop_app.py's MonitorPipeline start/stop/status).
+    quit_callback, if given, is what /api/update/install calls to shut the
+    monitor pipeline down before an installer replaces this process's files."""
+    DashboardHandler.db_path = db_path
+    DashboardHandler.in_process_monitor = in_process_monitor
+    DashboardHandler.quit_callback = quit_callback
+    DashboardHandler.monitor_status_callback = monitor_status_callback
+    DashboardHandler.monitor_start_callback = monitor_start_callback
+    DashboardHandler.monitor_stop_callback = monitor_stop_callback
+    return ThreadingHTTPServer((host, port), DashboardHandler)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Aegis dashboard server")
     parser.add_argument("--db", default="aegis_events.db", help="Path to the SQLite event store")
@@ -703,8 +831,7 @@ def main():
               f"or pass --db path/to/aegis_events.db", file=sys.stderr)
         sys.exit(1)
 
-    DashboardHandler.db_path = args.db
-    server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
+    server = build_server(args.db, args.host, args.port)
     url = f"http://{args.host}:{args.port}"
     print(f"Aegis dashboard: {url}  (db: {args.db}, read-only)")
     if not args.no_browser:
