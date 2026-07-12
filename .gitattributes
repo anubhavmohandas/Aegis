@@ -1,0 +1,6 @@
+# Batch files must reach Windows checkouts with CRLF endings, regardless of
+# the committer's platform or core.autocrlf setting.
+*.bat text eol=crlf
+
+# Shell scripts must stay LF even on Windows checkouts.
+*.sh text eol=lf

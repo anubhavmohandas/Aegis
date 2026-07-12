@@ -73,9 +73,17 @@ class WindowsProcessMonitor:
         try:
             # Microsoft-Windows-Kernel-Process provider GUID (documented,
             # stable identifier) -- emits ProcessStart/ProcessStop events.
+            #
+            # any_keywords is REQUIRED here: pywintrace 0.2.0 defaults it to a
+            # 0 bitmask (etw.py get_keywords_bitmask returns 0 for None), and
+            # EnableTraceEx2 with MatchAnyKeyword=0 matches no keyword-tagged
+            # events -- every Kernel-Process event carries a keyword, so the
+            # session starts cleanly but the callback never fires.
+            # WINEVENT_KEYWORD_PROCESS (0x10) covers ProcessStart/ProcessStop.
             provider = ProviderInfo(
                 "Microsoft-Windows-Kernel-Process",
                 GUID("{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"),
+                any_keywords=0x10,  # WINEVENT_KEYWORD_PROCESS
             )
 
             # TEMPORARY DIAGNOSTIC: pywintrace 0.2.0 invokes the callback as
