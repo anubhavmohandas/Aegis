@@ -88,6 +88,19 @@ A DMG (`create-dmg`) is a beta task.
 - **Windows installer: never compiled.** Treat the first Inno Setup build as
   part of Windows validation.
 
+## One-click release: `packaging/release.command`
+
+Double-click it (or run it from a terminal) to bump the version, commit,
+tag, push, and then watch GitHub Actions build and publish the release --
+the same manual sequence above, automated end to end, including confirming
+the published release actually has installable assets attached (an empty or
+unparseable-tag release, both of which have happened before, would otherwise
+silently look fine). Writes a timestamped log to `packaging/release-logs/`
+and fires a macOS notification with the outcome, so a run kicked off
+unattended still tells you what happened. See the script's own header
+comment for the exact sequence and requirements (a git remote that can push
+without an interactive prompt).
+
 ## Known limitations (alpha)
 
 - **Unsigned builds.** macOS: PyInstaller ad-hoc signs the bundle; on
