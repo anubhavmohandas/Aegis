@@ -120,6 +120,17 @@ def _build_event_query(params: dict) -> tuple[str, list]:
         like = f"%{q}%"
         args.extend([like, like, like])
 
+    # Events the user themselves opted out of seeing via a Trust List entry
+    # (core/rule_engine.py sets risk_hint to one of these three exact
+    # strings) are still fully persisted -- this only affects what THIS
+    # query returns, never what's in the DB. Distinct from rate_limited/
+    # duplicate_suppressed, which stay visible by default: those reflect
+    # unusual burst activity worth seeing, not routine noise the user already
+    # vetted (e.g. mdworker_shared launching every second during Spotlight
+    # indexing, which otherwise buries everything else in the timeline).
+    if params.get("hide_trusted", [""])[0] == "1":
+        where.append("risk_hint NOT IN ('user_trusted_process', 'user_trusted_process_hash', 'user_trusted_usb')")
+
     for key, op in (("since", ">="), ("until", "<=")):
         raw = params.get(key, [""])[0]
         if raw:

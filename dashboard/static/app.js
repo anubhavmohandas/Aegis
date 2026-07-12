@@ -7,6 +7,22 @@
 const POLL_MS = 4000;
 const PAGE_SIZE = 200;
 
+// A "New process: X (PID Y)" / "New application launched: X (PID Y)" row
+// only needs the full phrasing while it's actually news -- ten seconds in,
+// every collector on every OS uses one of these two exact phrasings
+// (windows/linux/macos process_monitor.py), so once a row ages past that,
+// collapse it down to just the process name. Cuts the repeated "New
+// process:" noise on a long list without losing any information the row's
+// own "Process" source tag + timestamp don't already carry.
+const FRESH_SUMMARY_MS = 10000;
+const PROCESS_SUMMARY_RE = /^New (?:process|application launched): (.+) \(PID \d+\)$/;
+
+function displaySummary(ev, now = Date.now()) {
+  if (now - ev.timestamp * 1000 <= FRESH_SUMMARY_MS) return ev.summary;
+  const m = PROCESS_SUMMARY_RE.exec(ev.summary);
+  return m ? m[1] : ev.summary;
+}
+
 const SEVERITY_ORDER = ["critical", "high", "medium", "low"];
 const SOURCE_LABELS = { process: "Process", usb: "USB", startup: "Startup", folder: "Folder" };
 const CONFIDENCE_TITLES = {
@@ -50,12 +66,20 @@ const PROVIDERS = [
     base_url: "", api_key_env: "AI_API_KEY", models: [] },
 ];
 
+const HIDE_TRUSTED_KEY = "aegis-hide-trusted";
+
 const state = {
   events: [],            // newest first, as returned by the API
   byId: new Map(),
   maxId: 0,
   minId: null,
-  filters: { q: "", severity: new Set(), source: new Set(), category: "", rangeSeconds: 0 },
+  filters: {
+    q: "", severity: new Set(), source: new Set(), category: "", rangeSeconds: 0,
+    // Persistent view preference, not a "clear filters" candidate -- default
+    // ON, since routine trust-listed noise (mdworker_shared, WebKit helper
+    // processes, ...) otherwise buries everything else in the timeline.
+    hideTrusted: localStorage.getItem(HIDE_TRUSTED_KEY) !== "0",
+  },
   selectedId: null,
   pollTimer: null,
   unseenCount: 0,        // live arrivals while the user is scrolled down
@@ -132,6 +156,7 @@ function filterQuery(extra = {}) {
   if (f.source.size) p.set("source", [...f.source].join(","));
   if (f.category) p.set("category", f.category);
   if (f.rangeSeconds) p.set("since", String(Date.now() / 1000 - f.rangeSeconds));
+  if (f.hideTrusted) p.set("hide_trusted", "1");
   for (const [k, v] of Object.entries(extra)) p.set(k, String(v));
   return p.toString();
 }
@@ -241,7 +266,7 @@ function eventRowHtml(ev, fresh) {
       <span class="event-time">${fmtTime(ev.timestamp)}</span>
       <span class="badge badge-${ev.severity}">${ev.severity}</span>
       <span class="event-main">
-        <span class="event-summary">${escapeHtml(ev.summary)}</span>
+        <span class="event-summary">${escapeHtml(displaySummary(ev))}</span>
         <span class="event-sub">
           <span class="src">${SOURCE_LABELS[ev.source] || escapeHtml(ev.source)}</span>
           <span>${escapeHtml(prettyCategory(ev.category))}</span>
@@ -297,6 +322,22 @@ function renderTimeline(freshIds = new Set()) {
 
 function updateFooter() {
   $("footer-shown").textContent = `${state.events.length} events shown`;
+}
+
+// Rows age past FRESH_SUMMARY_MS on the clock, not on the next poll -- a
+// full renderTimeline() on a timer would rebuild the whole list (losing
+// scroll position, closing the drawer's selected-row highlight, restarting
+// the .fresh flash animation) just to change some text. Patching only the
+// rows whose displayed text is actually stale is cheap and invisible.
+function refreshAgingSummaries() {
+  const now = Date.now();
+  for (const row of document.querySelectorAll("#timeline .event-row[data-id]")) {
+    const ev = state.byId.get(Number(row.dataset.id));
+    if (!ev) continue;
+    const summaryEl = row.querySelector(".event-summary");
+    const wanted = displaySummary(ev, now);
+    if (summaryEl && summaryEl.textContent !== wanted) summaryEl.textContent = wanted;
+  }
 }
 
 /* ---------- data flow ---------- */
@@ -684,8 +725,21 @@ function bindFilters() {
     reload();
   });
 
+  $("hide-trusted-toggle").addEventListener("click", (e) => {
+    state.filters.hideTrusted = !state.filters.hideTrusted;
+    localStorage.setItem(HIDE_TRUSTED_KEY, state.filters.hideTrusted ? "1" : "0");
+    e.target.classList.toggle("active", state.filters.hideTrusted);
+    reload();
+  });
+
   $("clear-filters").addEventListener("click", () => {
-    state.filters = { q: "", severity: new Set(), source: new Set(), category: "", rangeSeconds: 0 };
+    // hideTrusted is a persistent view preference, not a transient filter --
+    // "Clear" resets search/severity/source/category/range, same as theme
+    // isn't reset here either.
+    state.filters = {
+      q: "", severity: new Set(), source: new Set(), category: "", rangeSeconds: 0,
+      hideTrusted: state.filters.hideTrusted,
+    };
     $("search").value = "";
     $("category-select").value = "";
     $("range-select").value = "";
@@ -921,6 +975,7 @@ function bindSettings() {
 function bind() {
   bindSettings();
   bindFilters();
+  $("hide-trusted-toggle").classList.toggle("active", state.filters.hideTrusted);
 
   $("timeline").addEventListener("click", (e) => {
     const row = e.target.closest(".event-row");
@@ -982,6 +1037,7 @@ async function init() {
   await refreshMonitorStatus();
   await reload();
   state.pollTimer = setInterval(poll, POLL_MS);
+  setInterval(refreshAgingSummaries, 2000);
 
   // hold the boot screen long enough for its animation to land, then fade
   const MIN_BOOT_MS = 1500;
