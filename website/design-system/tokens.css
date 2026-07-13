@@ -1,0 +1,25 @@
+:root {
+  /* Reverted 2026-07-13 — back to the original logo-derived palette per
+     explicit request ("pehle wala color hi better"). See MASTER.md for the
+     full back-and-forth: original -> search.py repaint -> reverted here. */
+  --bg: #04070e;
+  --bg-2: #070c17;
+  --panel: #0a1120;
+  --line: rgba(140, 170, 210, .14);
+  --line-soft: rgba(140, 170, 210, .08);
+  --chrome: #dbe4f0;
+  --body: #93a3ba;
+  --dim: #5c6b84;
+  --blue: #39a1ff;
+  --blue-deep: #1467c4;
+  --violet: #6a5adf;
+  --low: #5e7fa0;
+  --sev-low: #5e7fa0;
+  --sev-med: #e8b23a;
+  --sev-high: #f27a2e;
+  --sev-crit: #ef3b4e;
+  --font-display: "Chakra Petch", sans-serif;
+  --font-body: "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+  --font-pixel: "Silkscreen", "IBM Plex Mono", monospace;
+}
