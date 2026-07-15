@@ -179,13 +179,14 @@ fix against. What that surfaced, in order:
 Every fix above was made only after seeing real command output or a real
 traceback — none of it was patched blind. macOS is now the second platform
 (after Linux) with actual evidence behind it, not just documented API
-patterns. Windows remains completely unverified.
+patterns. Windows now has source-run validation on real hardware (with the
+WMI fallback), while Windows packaged-build/installer/self-update validation
+is still pending.
 
-## Validating v1 — current status
+## Validation status — v2.0.2-alpha
 
 Be precise about what "done" means: everything below was run via
-`python3 main.py` from source. **None of it has been through a packaged
-build yet** — that's still untouched, on either OS.
+`python3 main.py` from source unless explicitly called out otherwise.
 
 ```
 macOS, from source (python3 main.py):
@@ -197,7 +198,8 @@ macOS, from source (python3 main.py):
   [x] Rule engine / severity / rate limiting -- all confirmed against real event bursts
   [ ] Tray icon visually confirmed in the menu bar -- never explicitly checked
   [ ] AI explanations against a real API key -- only tested key-less so far
-  [ ] Timeline UI (ui/timeline_app.py) -- never run
+  [x] Timeline UI (ui/timeline_app.py) offscreen smoke run (window creation + event load path)
+      succeeds in a headless Qt run; still not visually confirmed on a desktop.
   [x] Packaged .app -- built with PyInstaller (packaging/aegis.spec) and
       smoke-run on real Apple Silicon hardware: version banner, NSWorkspace
       observer, USB baseline, rule-engine gating of real daemons, a real
@@ -206,7 +208,9 @@ macOS, from source (python3 main.py):
       ~/Library/Application Support/Aegis. Tray icon visibility still not
       explicitly confirmed (same caveat as the source run).
 
-Windows: nothing tested yet, still zero real-hardware evidence.
+Windows, from source (python main.py, real hardware):
+  [x] Process/USB/startup monitoring validated via WMI polling fallback
+  [ ] Packaged bundle + installer + self-update still unverified on real hardware
 ```
 
 The `pystray`/NSWorkspace thread-interaction concern (`pystray.Icon.run()`
@@ -289,16 +293,14 @@ them to a per-user data dir when running frozen.
    opinion, not a detector. Every event is persisted regardless of what the
    AI says or whether it was called at all.
 
-5. **Windows remains untested; macOS no longer is.** This was built without
-   access to a Windows or Mac machine (Linux sandbox only), but macOS has
-   since been run and debugged live on real hardware — see "Live
-   verification" above for exactly what was found and fixed. `windows/`
-   still only compiles and follows documented API patterns; none of it has
-   run against the real APIs it targets. The PySide6 timeline UI passes
-   Python syntax/import checks and its data-loading logic was verified
-   against a real SQLite file, but the actual window has not been visually
-   confirmed on either platform yet (I have no display access; the Mac
-   testing session so far has focused on the monitors, not the UI).
+5. **Windows source validation exists; Windows packaged validation still doesn't.**
+   macOS has been run and debugged live on real hardware (see "Live
+   verification"), and Windows source runs have now also been validated on
+   real hardware via the WMI fallback path. What is still missing is the
+   Windows packaged-build/installer/self-update validation path on real
+   hardware. The PySide6 timeline UI now passes import/syntax checks plus an
+   offscreen smoke run (window + event loading path), but still has no
+   explicit visual desktop confirmation on either platform.
 
 ## On the "Aegis" name
 

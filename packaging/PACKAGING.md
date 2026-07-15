@@ -18,6 +18,16 @@ On a fresh machine that means: clone, `python -m venv venv`, activate,
 `python main.py`, and work through `TEST_REPORT_TEMPLATE.md`. Only then
 continue below.
 
+For a fast non-interactive sanity pass, run:
+
+```
+python packaging/validate_runtime.py
+```
+
+This validates core imports, dashboard server startup/reachability, and an
+offscreen Timeline UI smoke run. In CI, Windows runs the same script with
+`--skip-timeline` to avoid flaky GUI backend assumptions on hosted runners.
+
 ## Building the bundle (all platforms)
 
 One spec file, platform-conditional: [`packaging/aegis.spec`](aegis.spec).

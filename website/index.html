@@ -694,8 +694,8 @@ html.js .reveal.in{opacity:1;transform:none}
       <div class="st done reveal"><span class="mark">✓</span><div><h4>Changeable login password</h4><p>Settings → Account — no longer a fixed admin/admin.</p></div></div>
       <div class="st done reveal"><span class="mark">✓</span><div><h4>macOS validated on real hardware</h4><p>Process, folder, USB, notifications, packaging — several real bugs found and fixed along the way.</p></div></div>
       <div class="st done reveal"><span class="mark">✓</span><div><h4>Multi-provider AI &amp; noise reduction</h4><p>OpenAI-compatible endpoints + Anthropic; opt-in trusted lists, dedupe, rate limiting, configurable popup floor.</p></div></div>
-      <div class="st todo reveal"><span class="mark">◻</span><div><h4>Windows validation</h4><p>Running from source on real hardware now. Real-time process monitoring depends on a third-party ETW library whose delivery path is currently blocked — its WMI-polling fallback is being fixed before this ships as validated.</p></div></div>
-      <div class="st todo reveal"><span class="mark">◻</span><div><h4>Windows packaged build &amp; Linux validation</h4><p>Windows installer/self-update implemented but unverified on hardware; Linux implemented, not yet run on real hardware.</p></div></div>
+      <div class="st done reveal"><span class="mark">✓</span><div><h4>Windows validation (source run)</h4><p>Validated on real Windows hardware via the WMI polling fallback path. ETW real-time delivery remains constrained by a third-party library path, but core monitoring is verified from source.</p></div></div>
+      <div class="st todo reveal"><span class="mark">◻</span><div><h4>Windows packaged build / installer + Linux validation</h4><p>Windows installer/self-update path is implemented but still unverified on real Windows hardware; Linux support is implemented but not yet validated on real Linux hardware.</p></div></div>
     </div>
     <p class="version-note reveal">
       Full verification log, architecture, and every known gap live in ARCHITECTURE.md —
