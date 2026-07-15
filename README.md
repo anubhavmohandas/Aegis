@@ -44,7 +44,7 @@ will prompt for Automation permission the first time it checks login items.
 Notification noise too high? Raise the popup floor with `notify_min_severity:
 high` from Settings — everything still lands in the timeline either way.
 
-## Status — v2.0.0-alpha
+## Status — v2.0.2-alpha
 
 Versioning tracks validation, not features: **alpha** = features done, macOS
 validated; **beta** = Windows also validated on real hardware; **2.0.0** =
