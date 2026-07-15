@@ -31,7 +31,9 @@ dist/
 .env.*
 *.pem
 *.key
+.secrets.key
 secrets.enc
+secrets.enc.tmp
 credentials.json
 
 # --- Aegis runtime artifacts (regenerated on every run, not source) ---
@@ -47,6 +49,18 @@ config/config.yaml.orig
 .pytest_cache/
 .coverage
 htmlcov/
+.hypothesis/
+
+# --- Local tooling caches ---
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.cache/
+
+# --- Local exports / reports ---
+aegis-report-*.pdf
+audit-report-*.pdf
 
 # --- IDE ---
 .vscode/
