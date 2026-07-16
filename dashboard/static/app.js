@@ -550,6 +550,27 @@ function reportRangeBounds() {
   return { since, until, label: `${startVal} - ${endVal}` };
 }
 
+/* Shared by the report modal and the drawer's "this window" button. Throws
+   on failure so each caller can surface the error in its own UI. */
+async function downloadReportPdf(since, until, label) {
+  const qs = new URLSearchParams({ since, until, label });
+  const res = await fetch(`/api/report/pdf?${qs.toString()}`);
+  if (res.status === 401) { location.replace("/login"); throw new Error("unauthenticated"); }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `report failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `aegis-report-${new Date().toISOString().slice(0, 10)}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function generateReport() {
   const bounds = reportRangeBounds();
   if (!bounds) {
@@ -561,22 +582,7 @@ async function generateReport() {
   btn.textContent = "Generating…";
   $("report-note").textContent = "Asking the AI to summarize this period — this can take a few seconds.";
   try {
-    const qs = new URLSearchParams({ since: bounds.since, until: bounds.until, label: bounds.label });
-    const res = await fetch(`/api/report/pdf?${qs.toString()}`);
-    if (res.status === 401) { location.replace("/login"); return; }
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || `report failed (${res.status})`);
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `aegis-report-${new Date().toISOString().slice(0, 10)}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    await downloadReportPdf(bounds.since, bounds.until, bounds.label);
     closeReportModal();
     toast("Report downloaded");
   } catch (err) {
@@ -650,11 +656,11 @@ function openDrawer(id) {
     <div class="drawer-summary">${escapeHtml(ev.summary)}</div>
     <div class="drawer-time">${fmtFullTime(ev.timestamp)}</div>
 
-    <div class="drawer-section-label">AI Explanation</div>
-    ${ev.ai_skipped
-      ? '<div class="ai-skipped-note">AI explanation was skipped for this event (trusted/ignored by config, or the explainer was unavailable).</div>'
-      : ev.explanation
-        ? `<div class="explanation">${renderMarkdownLite(ev.explanation)}</div>`
+    <div class="drawer-section-label">${ev.ai_skipped ? "Explanation" : "AI Explanation"}</div>
+    ${ev.explanation
+      ? `<div class="explanation">${renderMarkdownLite(ev.explanation)}</div>`
+      : ev.ai_skipped
+        ? '<div class="ai-skipped-note">AI explanation was skipped for this event (trusted/ignored by config, or the explainer was unavailable).</div>'
         : '<div class="ai-skipped-note">No explanation stored.</div>'}
 
     ${ev.risk_hint ? `
@@ -667,10 +673,81 @@ function openDrawer(id) {
     <details class="raw-json">
       <summary>raw event JSON</summary>
       <pre>${escapeHtml(JSON.stringify({ ...ev, details_json: details }, null, 2))}</pre>
-    </details>`;
+    </details>
+
+    <div class="drawer-section-label">Related Events · ±5 min</div>
+    <div class="related-list" id="related-list">
+      <div class="ai-skipped-note">Loading…</div>
+    </div>
+
+    <div class="drawer-actions">
+      <button class="btn" id="drawer-report-btn"
+              title="AI-summarized PDF report of everything in the ±5 minute window around this event">
+        PDF Report · this window</button>
+    </div>`;
 
   $("drawer").hidden = false;
   $("drawer-overlay").hidden = false;
+  loadRelated(id);
+}
+
+/* Time-proximity context for the investigation flow: what else happened
+   around this event. Rows are clickable and re-open the drawer on that
+   event, so a story (USB inserted -> shell -> archiver -> upload) can be
+   walked without leaving the drawer. */
+async function loadRelated(id) {
+  try {
+    const data = await api(`/api/events/related?id=${id}`);
+    if (state.selectedId !== id) return;   // user already moved to another event
+    const box = $("related-list");
+    if (!box) return;
+    if (!data.events.length) {
+      box.innerHTML = '<div class="ai-skipped-note">Nothing else happened within 5 minutes of this event.</div>';
+      return;
+    }
+    // Register in byId so clicking a related row can open it, but never via
+    // ingest(): related rows may skip past ids the current filters exclude,
+    // and bumping state.maxId there would make the live poll miss events.
+    for (const ev of data.events) if (!state.byId.has(ev.id)) state.byId.set(ev.id, ev);
+    box.innerHTML = data.events.map((ev) => `
+      <button class="related-row" data-id="${ev.id}"
+              style="--sev-color: var(--sev-${ev.severity})">
+        <span class="related-delta">${fmtDelta(ev.timestamp - data.anchor_timestamp)}</span>
+        <span class="badge badge-${ev.severity}">${ev.severity}</span>
+        <span class="related-summary">${escapeHtml(ev.summary)}</span>
+      </button>`).join("");
+  } catch {
+    const box = $("related-list");
+    if (box && state.selectedId === id) {
+      box.innerHTML = '<div class="ai-skipped-note">Could not load related events.</div>';
+    }
+  }
+}
+
+function fmtDelta(seconds) {
+  const s = Math.round(Math.abs(seconds));
+  const dir = seconds < 0 ? "before" : "after";
+  if (s === 0) return "same time";
+  if (s < 60) return `${s}s ${dir}`;
+  return `${Math.floor(s / 60)}m ${s % 60}s ${dir}`;
+}
+
+async function reportEventWindow() {
+  const ev = state.byId.get(state.selectedId);
+  const btn = $("drawer-report-btn");
+  if (!ev || !btn) return;
+  btn.disabled = true;
+  btn.textContent = "Generating…";
+  try {
+    await downloadReportPdf(ev.timestamp - 300, ev.timestamp + 300,
+                            `±5 min around: ${ev.summary}`.slice(0, 120));
+    toast("Report downloaded");
+  } catch (err) {
+    toast(String(err.message || err), true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "PDF Report · this window";
+  }
 }
 
 function closeDrawer() {
@@ -1025,6 +1102,13 @@ function bind() {
 
   $("drawer-close").addEventListener("click", closeDrawer);
   $("drawer-overlay").addEventListener("click", closeDrawer);
+  // Delegated: the drawer body is re-rendered per event, so its related-row
+  // and report-button handlers live here on the stable parent instead.
+  $("drawer-body").addEventListener("click", (e) => {
+    const row = e.target.closest(".related-row");
+    if (row) { openDrawer(Number(row.dataset.id)); return; }
+    if (e.target.closest("#drawer-report-btn")) reportEventWindow();
+  });
   $("load-older").addEventListener("click", loadOlder);
 
   $("new-events-pill").addEventListener("click", () => {

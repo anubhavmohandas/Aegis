@@ -62,9 +62,11 @@ def _bump(level: str, steps: int = 1) -> str:
 class SeverityEngine:
     def evaluate(self, event: MonitorEvent, rule_verdict: RuleVerdict | None = None) -> str:
         if rule_verdict is not None and rule_verdict.skip_ai:
-            # User explicitly told Aegis about this item -- downgrade, but
-            # never silently drop it from the timeline (dispatcher still
-            # persists + notifies, just with lower urgency).
+            # Either the user explicitly told Aegis about this item, or it's a
+            # SIP-protected /System/ binary (see rule_engine.py's
+            # os_platform_binary rule) -- downgrade, but never silently drop
+            # it from the timeline (dispatcher still persists it, just with
+            # lower urgency and no AI call).
             return "low"
 
         level = _CATEGORY_BASELINE.get(event.category, "medium")

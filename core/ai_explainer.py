@@ -38,6 +38,23 @@ You will also be told a locally-computed severity level (low/medium/high/critica
 from a deterministic heuristic, not from you -- treat it as one input, not a fact to defer to. \
 You may agree, disagree, or add nuance to it in your explanation."""
 
+# When the enrichment stage (core/enrichment.py) attached evidence, the
+# "you have no threat intelligence" line above becomes a lie -- swap exactly
+# that sentence for instructions on how to use the evidence without
+# over-trusting it in either direction.
+_NO_INTEL_SENTENCE = ("You are not an antivirus and have no access to threat intelligence "
+                       "feeds -- do not imply otherwise.")
+_INTEL_SENTENCE = (
+    "This event includes a threat_intel block: structured facts from a VirusTotal hash lookup "
+    "and/or local MITRE ATT&CK annotations, fetched by the tool -- NOT your inference. Cite those "
+    "numbers exactly; never invent detections, family names, or technique ids beyond what the "
+    "block contains. Zero detections or an unknown hash is NOT evidence the file is safe (new "
+    "malware is often undetected at first) -- say so explicitly when relevant. You are still not "
+    "an antivirus; the evidence informs your read, it does not replace the user's judgment."
+)
+assert _NO_INTEL_SENTENCE in SYSTEM_PROMPT, "SYSTEM_PROMPT drifted -- update _NO_INTEL_SENTENCE to match"
+SYSTEM_PROMPT_WITH_INTEL = SYSTEM_PROMPT.replace(_NO_INTEL_SENTENCE, _INTEL_SENTENCE)
+
 REPORT_SYSTEM_PROMPT = """You are writing the executive summary section of a personal desktop \
 security activity report, covering everything a monitoring tool observed over a given time \
 period. You will be given aggregate stats (event counts by severity/source/category) and a \
@@ -86,11 +103,12 @@ class AIExplainer:
             )
 
         prompt = event.as_prompt_block() + f"\nLocally-computed severity: {severity}"
+        system_prompt = SYSTEM_PROMPT_WITH_INTEL if "threat_intel" in event.details else SYSTEM_PROMPT
         try:
             if self.config.ai_provider == "anthropic":
-                return self._explain_anthropic(prompt, event.summary)
+                return self._explain_anthropic(prompt, event.summary, system_prompt)
             else:
-                return self._explain_openai_compatible(prompt, event.summary)
+                return self._explain_openai_compatible(prompt, event.summary, system_prompt)
         except Exception as e:
             # Never let an AI/network failure crash the monitor loop -- fall back
             # to the raw event so the user still gets *something* useful.
@@ -118,26 +136,26 @@ class AIExplainer:
             return text
         return f"[AI returned an empty response] Raw event: {fallback_summary}"
 
-    def _explain_anthropic(self, prompt: str, event_summary: str) -> str:
+    def _explain_anthropic(self, prompt: str, event_summary: str, system_prompt: str = SYSTEM_PROMPT) -> str:
         client = self._get_client()
         resp = client.messages.create(
             model=self.config.ai_model,
             max_tokens=300,
             temperature=self.config.ai_temperature,
-            system=SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[{"role": "user", "content": prompt}],
         )
         text = resp.content[0].text if resp.content else None
         return self._nonempty(text, event_summary)
 
-    def _explain_openai_compatible(self, prompt: str, event_summary: str) -> str:
+    def _explain_openai_compatible(self, prompt: str, event_summary: str, system_prompt: str = SYSTEM_PROMPT) -> str:
         client = self._get_client()
         resp = client.chat.completions.create(
             model=self.config.ai_model,
             max_tokens=300,
             temperature=self.config.ai_temperature,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
         )

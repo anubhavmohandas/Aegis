@@ -46,6 +46,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -58,6 +60,39 @@ logger = logging.getLogger("aegis.rule_engine")
 # gate, so a hash that took multiple seconds to compute would be defeating
 # its own purpose (the whole point is fast, cheap allowlisting).
 _HASH_READ_LIMIT_BYTES = 200 * 1024 * 1024  # 200MB
+
+# THE ONE BUILT-IN SUPPRESSION, AND WHY IT DOESN'T CONTRADICT THE ALLOWLIST
+# PHILOSOPHY ABOVE: binaries under /System/ on a SIP-enabled Mac cannot be
+# modified or replaced even with root access -- System Integrity Protection
+# enforces that at the kernel level. So "the executable's real path is under
+# /System/" is an integrity property of the file, not a name match an attacker
+# can spoof by calling their payload "mdworker". This is what makes it safe to
+# skip the AI call for the constant stream of Apple platform noise (mdworker,
+# XPC service helpers, /System/Applications apps) that otherwise dominates the
+# timeline and the AI bill.
+#
+# DELIBERATELY NOT COVERED: /usr/bin, /usr/sbin, /bin, /sbin. Those are also
+# SIP-protected, but they're exactly living-off-the-land territory -- osascript,
+# curl, nc, python3, the shells. The binary being genuine Apple software says
+# nothing about whether its *invocation* is benign, and narrating those
+# invocations is Aegis's whole job. Only /System/ (GUI apps, daemons, framework
+# helpers -- things a user or launchd starts, not things an attacker scripts
+# with) gets suppressed.
+_SIP_PLATFORM_PREFIX = "/System/"
+
+
+def _sip_enabled() -> bool:
+    """One-shot check at RuleEngine construction. If SIP is disabled (or the
+    check itself fails), the /System/ path stops being tamper-proof and the
+    platform-binary suppression must not run -- fail toward more AI calls,
+    never toward silent suppression."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        out = subprocess.run(["csrutil", "status"], capture_output=True, text=True, timeout=5)
+        return "enabled" in out.stdout.lower()
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 @dataclass
@@ -99,6 +134,7 @@ class RuleEngine:
         self.trusted_process_names = {p.lower() for p in (trusted_process_names or [])}
         self.trusted_usb_ids = {u.lower() for u in (trusted_usb_ids or [])}
         self.trusted_process_hashes = {h.lower() for h in (trusted_process_hashes or [])}
+        self.suppress_platform_binaries = _sip_enabled()
 
     def evaluate(self, event: MonitorEvent) -> RuleVerdict:
         if event.category == EventCategory.PROCESS_STARTED:
@@ -135,6 +171,28 @@ class RuleEngine:
                     reason="user_trusted_process",
                 )
 
+            if self.suppress_platform_binaries:
+                exe_path = str(event.details.get("exe") or event.details.get("executable_path") or "")
+                if exe_path:
+                    try:
+                        # resolve() first so /tmp/evil/../../System/... or a
+                        # symlink named like a system path can't fake the prefix.
+                        resolved = str(Path(exe_path).resolve())
+                    except OSError:
+                        resolved = ""
+                    if resolved.startswith(_SIP_PLATFORM_PREFIX):
+                        return RuleVerdict(
+                            skip_ai=True,
+                            canned_explanation=(
+                                f"{name or resolved} started from {resolved}. That location is "
+                                f"protected by macOS System Integrity Protection -- the file "
+                                f"cannot be modified or replaced, even with administrator access "
+                                f"-- so this is genuine Apple system software behaving normally. "
+                                f"Expected activity; not sent to the AI explainer."
+                            ),
+                            reason="os_platform_binary",
+                        )
+
         if event.category in (EventCategory.USB_CONNECTED, EventCategory.USB_REMOVED):
             device_id = str(event.details.get("device_id") or event.details.get("serial_num") or "").lower()
             if device_id and device_id in self.trusted_usb_ids:
@@ -146,3 +204,21 @@ class RuleEngine:
                 )
 
         return RuleVerdict(skip_ai=False)
+
+
+if __name__ == "__main__":
+    # Self-check for the platform-binary suppression branch. Forces the SIP
+    # flag both ways so it runs identically on a SIP-disabled Mac or on CI.
+    engine = RuleEngine()
+    engine.suppress_platform_binaries = True
+    mk = lambda exe: MonitorEvent(category=EventCategory.PROCESS_STARTED,
+                                  summary="t", details={"name": "x", "exe": exe}, source="process")
+    assert engine.evaluate(mk("/System/Library/CoreServices/mdworker")).reason == "os_platform_binary"
+    assert engine.evaluate(mk("/System/Library/../Library/x")).reason == "os_platform_binary"  # resolve() normalizes
+    assert not engine.evaluate(mk("/tmp/../System/Library/x")).skip_ai  # /tmp is a symlink: resolves to /private/System
+    assert not engine.evaluate(mk("/usr/bin/osascript")).skip_ai      # LOLBins always reach the AI
+    assert not engine.evaluate(mk("/tmp/System/payload")).skip_ai     # prefix must be the real root
+    assert not engine.evaluate(mk("")).skip_ai
+    engine.suppress_platform_binaries = False
+    assert not engine.evaluate(mk("/System/Library/CoreServices/mdworker")).skip_ai  # SIP off -> no suppression
+    print("rule_engine self-check: OK")

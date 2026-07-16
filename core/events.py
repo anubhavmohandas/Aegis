@@ -9,6 +9,7 @@ MonitorEvent objects -- nothing else in the app needs to change.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -84,6 +85,12 @@ class MonitorEvent:
         """Render this event as plain text for the AI explainer prompt."""
         lines = [f"Event type: {self.category.value}", f"Summary: {self.summary}"]
         for k, v in self.details.items():
+            if isinstance(v, (dict, list)):
+                # Structured values (e.g. the enrichment stage's threat_intel
+                # block) go into the prompt as JSON, not Python repr -- the
+                # explainer's system prompt tells the model to treat that
+                # block's numbers as fetched facts, so they must be unambiguous.
+                v = json.dumps(v)
             lines.append(f"{k}: {v}")
         if self.confidence != "certain":
             lines.append(

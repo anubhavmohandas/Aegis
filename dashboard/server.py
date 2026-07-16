@@ -197,16 +197,21 @@ def _build_event_query(params: dict) -> tuple[str, list]:
         like = f"%{q}%"
         args.extend([like, like, like])
 
-    # Events the user themselves opted out of seeing via a Trust List entry
-    # (core/rule_engine.py sets risk_hint to one of these three exact
-    # strings) are still fully persisted -- this only affects what THIS
-    # query returns, never what's in the DB. Distinct from rate_limited/
-    # duplicate_suppressed, which stay visible by default: those reflect
-    # unusual burst activity worth seeing, not routine noise the user already
-    # vetted (e.g. mdworker_shared launching every second during Spotlight
-    # indexing, which otherwise buries everything else in the timeline).
+    # Events the user themselves opted out of seeing via a Trust List entry,
+    # plus SIP-protected Apple platform binaries (core/rule_engine.py sets
+    # risk_hint to one of these four exact strings), are still fully
+    # persisted -- this only affects what THIS query returns, never what's in
+    # the DB. Distinct from rate_limited/duplicate_suppressed, which stay
+    # visible by default: those reflect unusual burst activity worth seeing,
+    # not routine noise already vetted by the user or by SIP (e.g.
+    # mdworker_shared launching every second during Spotlight indexing, which
+    # otherwise buries everything else in the timeline).
+    # IS NULL half is load-bearing: normal AI-explained events persist with
+    # risk_hint NULL, and `NULL NOT IN (...)` is NULL (falsy) in SQL -- without
+    # it, this filter silently hid every ordinary event, not just trusted ones.
     if params.get("hide_trusted", [""])[0] == "1":
-        where.append("risk_hint NOT IN ('user_trusted_process', 'user_trusted_process_hash', 'user_trusted_usb')")
+        where.append("(risk_hint IS NULL OR risk_hint NOT IN ('user_trusted_process', "
+                     "'user_trusted_process_hash', 'user_trusted_usb', 'os_platform_binary'))")
 
     for key, op in (("since", ">="), ("until", "<=")):
         raw = params.get(key, [""])[0]
@@ -243,6 +248,35 @@ def query_events(db_path: str, params: dict, limit_cap: int = 1000) -> list[dict
             (*args, limit),
         ).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+# Everything that happened within this many seconds either side of an event
+# is "related" for the drawer's investigation view. Pure time proximity, no
+# correlation heuristics -- the point is to show the story around an event
+# (USB inserted -> shell -> archiver -> upload) and let the human read it.
+RELATED_WINDOW_SECONDS = 300
+RELATED_LIMIT = 50
+
+
+def query_related(db_path: str, event_id: int) -> dict:
+    conn = _connect_ro(db_path)
+    try:
+        anchor = conn.execute(
+            f"SELECT {', '.join(EVENT_COLUMNS)} FROM events WHERE id = ?", (event_id,)
+        ).fetchone()
+        if anchor is None:
+            return {"error": "event not found"}
+        ts = anchor["timestamp"]
+        rows = conn.execute(
+            f"SELECT {', '.join(EVENT_COLUMNS)} FROM events "
+            "WHERE id != ? AND timestamp BETWEEN ? AND ? "
+            "ORDER BY timestamp, id LIMIT ?",  # chronological: reads as a story
+            (event_id, ts - RELATED_WINDOW_SECONDS, ts + RELATED_WINDOW_SECONDS, RELATED_LIMIT),
+        ).fetchall()
+        return {"anchor_id": event_id, "anchor_timestamp": ts,
+                "window_seconds": RELATED_WINDOW_SECONDS, "events": [dict(r) for r in rows]}
     finally:
         conn.close()
 
@@ -430,11 +464,15 @@ def write_settings(body: dict) -> dict:
         "notify_on_startup_scan": bool(body.get("notify_on_startup_scan", True)),
         "notify_min_severity": severity,
         # runtime paths aren't editable from the UI on purpose -- pass through
-        "log_path": _passthrough("log_path"),
-        "db_path": _passthrough("db_path"),
+        "log_path": str(_passthrough("log_path", "events.log")),
+        "db_path": str(_passthrough("db_path", "aegis_events.db")),
         "trusted_process_names": _clean_str_list(body.get("trusted_process_names")),
         "trusted_process_hashes": _clean_str_list(body.get("trusted_process_hashes")),
         "trusted_usb_ids": _clean_str_list(body.get("trusted_usb_ids")),
+        # not UI-managed yet either (core/enrichment.py) -- without this
+        # passthrough, a hand-set `enrich_enabled: true` was silently reverted
+        # to off by the fixed key list above on the first settings save.
+        "enrich_enabled": bool(_passthrough("enrich_enabled", False)),
     }
 
     # one-time backup of the original hand-written config before the first
@@ -861,6 +899,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({"error": "authentication required"}, status=401)
                 elif parsed.path == "/api/events":
                     self._send_json({"events": query_events(self.db_path, params)})
+                elif parsed.path == "/api/events/related":
+                    raw_id = params.get("id", [""])[0]
+                    if not raw_id.isdigit():
+                        self._send_json({"error": "id must be an event id"}, status=400)
+                    else:
+                        result = query_related(self.db_path, int(raw_id))
+                        self._send_json(result, status=404 if result.get("error") else 200)
                 elif parsed.path == "/api/stats":
                     self._send_json(query_stats(self.db_path))
                 elif parsed.path == "/api/settings":

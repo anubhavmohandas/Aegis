@@ -93,6 +93,9 @@ class AppConfig:
     trusted_process_names: list[str] = field(default_factory=list)  # opt-in AI-call skip, see core/rule_engine.py
     trusted_process_hashes: list[str] = field(default_factory=list)  # sha256, harder to spoof than name -- see core/rule_engine.py
     trusted_usb_ids: list[str] = field(default_factory=list)        # opt-in AI-call skip, see core/rule_engine.py
+    enrich_enabled: bool = False            # opt-in threat enrichment (VirusTotal hash lookups + local MITRE
+                                            # annotations) for high/critical events. Default OFF: querying a
+                                            # hash discloses it to VirusTotal -- see core/enrichment.py.
 
     @property
     def api_key(self) -> str | None:
@@ -105,6 +108,17 @@ class AppConfig:
             return env_value
         from core.secrets_store import get_secret  # local import: keeps this module dependency-light
         return get_secret(self.ai_api_key_env)
+
+    @property
+    def vt_api_key(self) -> str | None:
+        # Same env-then-encrypted-store resolution as api_key above. The env
+        # var name is fixed ("VT_API_KEY") rather than configurable: unlike
+        # the AI layer, there's exactly one VirusTotal.
+        env_value = os.environ.get("VT_API_KEY")
+        if env_value:
+            return env_value
+        from core.secrets_store import get_secret
+        return get_secret("VT_API_KEY")
 
 
 def load_config(path: Path | None = None) -> AppConfig:
@@ -144,6 +158,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         trusted_process_names=_parse_str_list(raw, "trusted_process_names"),
         trusted_process_hashes=_parse_str_list(raw, "trusted_process_hashes"),
         trusted_usb_ids=_parse_str_list(raw, "trusted_usb_ids"),
+        enrich_enabled=bool(raw.get("enrich_enabled", False)),
     )
     if not cfg.watched_folders:
         cfg = _with_default_folders(cfg)
@@ -154,6 +169,12 @@ def load_config(path: Path | None = None) -> AppConfig:
         print(
             f"[config] WARNING: environment variable '{cfg.ai_api_key_env}' is not set. "
             f"The AI explainer will fall back to raw event summaries until it is.",
+            file=sys.stderr,
+        )
+    if cfg.enrich_enabled and not cfg.vt_api_key:
+        print(
+            "[config] WARNING: enrich_enabled is true but VT_API_KEY is not set. "
+            "VirusTotal lookups are disabled until it is; local MITRE annotations still run.",
             file=sys.stderr,
         )
     return cfg

@@ -6,8 +6,14 @@ survivors to the AI explainer, notifies the user, and persists everything
 
 PIPELINE ORDER (and why it's in this order, not the naive Event -> AI):
 
-    Queue -> dedupe -> rule engine -> severity engine -> rate limit -> AI
-             -> notify -> persist
+    Queue -> dedupe -> rule engine -> severity engine -> rate limit
+          -> enrichment -> AI -> notify -> persist
+
+Enrichment (core/enrichment.py, opt-in) sits between rate limiting and the
+AI call: it only runs for events that are actually about to be explained
+(deduped/trusted/rate-limited events never trigger an off-box lookup), and
+its evidence has to exist before the prompt is built. It can only ever add
+context -- every enrichment failure mode leaves the event exactly as it was.
 
 Rate limiting sits AFTER severity classification, not before, for one
 specific reason: a burst of low-severity noise (an installer spawning
@@ -42,6 +48,7 @@ from queue import Empty, Queue
 from .ai_explainer import AIExplainer
 from .config import AppConfig
 from .database import EventStore
+from .enrichment import ThreatEnricher
 from .events import MonitorEvent
 from .notifier import notify
 from .rule_engine import RuleEngine
@@ -64,6 +71,7 @@ class Dispatcher:
         self.rules = RuleEngine(config.trusted_process_names, config.trusted_usb_ids,
                                  config.trusted_process_hashes)
         self.severity = SeverityEngine()
+        self.enricher = ThreatEnricher(config) if config.enrich_enabled else None
         self.store = event_store or EventStore(config.db_path)
         self._recent_summaries: deque[tuple[str, float]] = deque()
         self._minute_bucket: deque[float] = deque()
@@ -113,6 +121,11 @@ class Dispatcher:
 
         if self._stage_rate_limit(event, severity):
             return
+
+        if self.enricher:
+            # Non-terminal: attaches details["threat_intel"] when there's
+            # evidence, attaches nothing on any failure, never raises.
+            self.enricher.annotate(event, severity)
 
         self._stage_explain_and_notify(event, severity)
 
