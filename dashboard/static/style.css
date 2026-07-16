@@ -284,6 +284,22 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .btn:hover { color: var(--ink); border-color: var(--accent); background: var(--accent-dim); }
 .btn-ghost { border-color: transparent; color: var(--ink-3); }
 .btn-ghost:hover { border-color: var(--border-strong); background: none; color: var(--ink); }
+.btn-icon { padding: 7px 9px; display: inline-flex; align-items: center; }
+.btn-icon .theme-btn-icon { margin-right: 0; }
+
+/* overflow "More" menu -- reuses .theme-pop shell */
+.more-pop { width: 208px; padding: 8px; }
+.more-item {
+  display: block; width: 100%; text-align: left;
+  padding: 8px 10px; border-radius: 7px;
+  font-family: var(--font-body); font-size: 12.5px; letter-spacing: .01em;
+  color: var(--ink); background: transparent;
+  transition: background .12s, color .12s;
+}
+.more-item:hover { background: var(--bg-hover); color: var(--ink); }
+.more-item-danger { color: var(--sev-critical); }
+.more-item-danger:hover { background: color-mix(in srgb, var(--sev-critical) 12%, transparent); }
+.more-sep { height: 1px; background: var(--border); margin: 6px 4px; }
 
 /* theme picker */
 
@@ -1084,5 +1100,14 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .hash { font-family: var(--font-mono); font-size: 10px; color: var(--ink-3); word-break: break-all; }
 
-.daily-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
-@media (max-width: 640px) { .daily-tiles { grid-template-columns: repeat(2, 1fr); } }
+/* Daily brief needs a wider modal than the single-column PDF-export one it
+   shares .report-modal with -- the 3 stat tiles were clipping off the right
+   edge at 460px. Auto-fit lets them sit 3-across when there's room and wrap to
+   2 when there isn't, so nothing is ever cut off. */
+#daily-modal { width: min(620px, 94vw); }
+.daily-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px; margin-bottom: 16px;
+}
+.daily-tiles .stat-label { white-space: nowrap; }

@@ -65,17 +65,33 @@ def _sha256_file(path: Path) -> str | None:
 
 # --- individual collectors (each returns None / [] on any failure) ---------
 
-def _screenshot(dest: Path) -> Path | None:
-    """PIL's ImageGrab wraps the native path on every OS (screencapture on
-    macOS -- needs the one-time Screen Recording permission there)."""
+def _screenshot(dest: Path) -> tuple[Path | None, str | None]:
+    """Capture a screenshot. Returns (path, None) on success, or (None, reason)
+    on failure so the incident can record WHY it's missing instead of just
+    showing an empty artifacts list.
+
+    macOS specifics: PIL's ImageGrab shells out to `screencapture`, which the
+    OS blocks unless the running app has Screen Recording permission (System
+    Settings > Privacy & Security > Screen Recording). A bare `python` process
+    launched from a terminal is denied with 'could not create image from
+    display' and macOS does NOT show the permission prompt for it -- only a
+    signed .app bundle triggers that dialog. So from source, the user must
+    grant the permission manually; packaged, the .app can request it."""
     try:
         from PIL import ImageGrab
         img = ImageGrab.grab()
         img.save(dest, "PNG")
-        return dest
+        return dest, None
     except Exception as e:
-        logger.warning("Evidence screenshot failed (permission not granted, or headless?): %s", e)
-        return None
+        text = str(e).lower()
+        if "could not create image" in text or "screencapture" in text:
+            reason = ("macOS blocked the screenshot -- grant Screen Recording permission "
+                      "to this app (System Settings > Privacy & Security > Screen Recording), "
+                      "then restart Aegis.")
+        else:
+            reason = f"screenshot failed: {e}"
+        logger.warning("Evidence screenshot failed: %s", e)
+        return None, reason
 
 
 def _webcam(dest: Path) -> Path | None:
@@ -175,12 +191,17 @@ def capture_incident(*, reason: str, attempts: int, store, config=None,
         logger.error("Could not create incident directory %s: %s", inc_dir, e)
 
     artifacts: dict = {}
+    capture_notes: dict = {}
     want_screenshot = getattr(config, "tamper_evidence_screenshot", True)
     want_webcam = getattr(config, "tamper_evidence_webcam", False)
     if want_screenshot:
-        shot = _screenshot(inc_dir / "screenshot.png")
+        shot, err = _screenshot(inc_dir / "screenshot.png")
         if shot:
             artifacts["screenshot"] = {"path": str(shot), "sha256": _sha256_file(shot)}
+        elif err:
+            capture_notes["screenshot"] = err   # attempted but blocked -- record why
+    else:
+        capture_notes["screenshot"] = "screenshot evidence is turned off in Settings."
     if want_webcam:
         cam = _webcam(inc_dir / "webcam.jpg")
         if cam:
@@ -200,6 +221,7 @@ def capture_incident(*, reason: str, attempts: int, store, config=None,
         "recent_processes": _recent_processes(),
         "battery": _battery(),
         "platform": f"{platform.system()} {platform.release()}",
+        **({"capture_notes": capture_notes} if capture_notes else {}),
         **(extra_context or {}),
     }
 
@@ -270,7 +292,7 @@ if __name__ == "__main__":
 
     # Rebind THIS module's globals (under `python -m` this file runs as
     # __main__, so `import core.evidence` would stub a second, unused copy):
-    _screenshot = lambda dest: None
+    _screenshot = lambda dest: (None, "macOS blocked the screenshot -- grant Screen Recording permission")
     _public_ip = lambda: None
     incidents_dir = lambda: Path(tempfile.mkdtemp())  # don't litter the repo's incidents/
 
@@ -280,7 +302,10 @@ if __name__ == "__main__":
     assert inc["id"] == 1 and inc["attempts"] == 3
     rows = store.list_incidents()
     assert len(rows) == 1 and rows[0]["reason"].startswith("unauthorized")
-    assert json.loads(rows[0]["context_json"])["platform"].split()[0] in ("Darwin", "Windows", "Linux")
+    ctx = json.loads(rows[0]["context_json"])
+    assert ctx["platform"].split()[0] in ("Darwin", "Windows", "Linux")
+    # the blocked-screenshot reason is recorded, not silently dropped
+    assert "Screen Recording" in ctx["capture_notes"]["screenshot"]
     store.set_incident_reviewed(1)
     assert store.get_incident(1)["reviewed"] == 1
     events = store.recent(5)

@@ -115,6 +115,69 @@ def _server_already_running(host: str, port: int) -> bool:
         return s.connect_ex((host, port)) == 0
 
 
+# Strong references to the menu-bar status item and its Objective-C menu
+# target -- pyobjc doesn't retain these for us, and if Python garbage-collects
+# them the icon silently vanishes from the menu bar and the menu stops working.
+_menubar_refs: list = []
+
+
+def _add_macos_menubar(window, on_quit):
+    """Add a native macOS menu-bar (status bar) item so Aegis has a persistent
+    presence even when the window is closed/behind others -- this is the 'tray'
+    for the desktop app. pywebview owns the Cocoa main run loop, so a separate
+    pystray thread can't run here; NSStatusItem lives inside that same run loop
+    instead. Entirely best-effort: any failure just means no menu-bar icon, the
+    app runs exactly as before (same contract as _darken_titlebar)."""
+    if sys.platform != "darwin":
+        return
+    try:
+        import AppKit
+
+        class _AegisMenuTarget(AppKit.NSObject):
+            def openAegis_(self, _sender):
+                try:
+                    AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+                    if window.native is not None:
+                        window.native.makeKeyAndOrderFront_(None)
+                except Exception:
+                    logger.debug("menu-bar Open failed", exc_info=True)
+
+            def quitAegis_(self, _sender):
+                on_quit()
+                try:
+                    AppKit.NSApplication.sharedApplication().terminate_(None)
+                except Exception:
+                    os._exit(0)
+
+        target = _AegisMenuTarget.alloc().init()
+        status_item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(
+            AppKit.NSVariableStatusItemLength)
+
+        button = status_item.button()
+        if APP_ICON.is_file():
+            img = AppKit.NSImage.alloc().initByReferencingFile_(str(APP_ICON))
+            img.setSize_((18.0, 18.0))  # pyobjc bridges NSSize from a 2-tuple
+            img.setTemplate_(True)  # let macOS tint it for light/dark menu bars
+            button.setImage_(img)
+        else:
+            button.setTitle_("Aegis")
+
+        menu = AppKit.NSMenu.alloc().init()
+        # pyobjc maps the "openAegis:" selector to the target's openAegis_ method.
+        for title, selector in (("Open Aegis", "openAegis:"), ("Quit Aegis", "quitAegis:")):
+            mi = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, selector, "")
+            mi.setTarget_(target)
+            menu.addItem_(mi)
+        status_item.setMenu_(menu)
+
+        _menubar_refs.extend([target, status_item])
+        logger.info("macOS menu-bar item added")
+    except Exception:
+        # Visible (not debug): a missing menu-bar icon is a user-facing
+        # regression worth surfacing in the log, and the reason matters.
+        logger.warning("Could not add macOS menu-bar item", exc_info=True)
+
+
 def _darken_titlebar(window):
     # The dashboard is always dark (obsidian theme default); pywebview's
     # macOS window otherwise gets a plain white titlebar that follows system
@@ -227,6 +290,7 @@ def main():
         )
         window.events.closed += _on_closed
         window.events.shown += lambda: _darken_titlebar(window)
+        window.events.shown += lambda: _add_macos_menubar(window, _on_closed)
         webview.start(icon=str(APP_ICON) if APP_ICON.is_file() else None)
     except Exception:
         logger.exception("Failed to open the desktop window -- shutting down cleanly instead of "

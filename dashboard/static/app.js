@@ -1309,7 +1309,9 @@ async function openIncident(id) {
 
       <div class="drawer-section-label">Evidence Artifacts</div>
       ${artifactRows ? `<table class="details-table">${artifactRows}</table>`
-        : '<div class="ai-skipped-note">No artifacts captured (screenshot disabled, or permission not granted).</div>'}
+        : `<div class="ai-skipped-note">${escapeHtml(
+             (context.capture_notes && context.capture_notes.screenshot)
+             || "No artifacts captured.")}</div>`}
 
       <div class="drawer-section-label">Context At Capture</div>
       ${ctxRows ? `<table class="details-table">${ctxRows}</table>` : '<div class="ai-skipped-note">No context.</div>'}
@@ -1424,9 +1426,27 @@ async function addTrust(kind, value, btn) {
 
 /* ---------- wiring ---------- */
 
+function wireMorePopover() {
+  const pop = $("more-pop");
+  const btn = $("more-btn");
+  const close = () => { pop.hidden = true; btn.setAttribute("aria-expanded", "false"); };
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    pop.hidden = !pop.hidden;
+    btn.setAttribute("aria-expanded", String(!pop.hidden));
+  });
+  // any item click closes the menu; each item keeps its own action handler
+  pop.addEventListener("click", close);
+  document.addEventListener("click", (e) => {
+    if (!pop.hidden && !pop.contains(e.target) && !btn.contains(e.target)) close();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+}
+
 function bind() {
   bindSettings();
   bindFilters();
+  wireMorePopover();
   $("hide-trusted-toggle").classList.toggle("active", state.filters.hideTrusted);
 
   $("timeline").addEventListener("click", (e) => {
