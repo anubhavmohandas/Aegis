@@ -485,45 +485,113 @@ function formatUptime(seconds) {
   return `${h}h ${m}m`;
 }
 
-async function toggleMonitor() {
-  const startingUp = !state.monitor.running;
-  // Stopping is a protected action: ask for the password so the tamper gate
-  // (server-side) can verify it. Starting is not gated.
-  let password = "";
-  if (!startingUp) {
-    password = window.prompt("Enter the dashboard password to stop monitoring:") ?? null;
-    if (password === null) return;  // cancelled — leave monitoring running
+function toggleMonitor() {
+  // Starting is not gated; stopping is a protected action that opens an
+  // in-page password modal (a native window.prompt() is unreliable inside the
+  // desktop app's pywebview shell, so we never use it).
+  if (state.monitor.running) {
+    openStopModal();
+  } else {
+    startMonitor();
   }
+}
+
+async function startMonitor() {
   state.monitorBusy = true;
   renderMonitorPill();
   try {
-    const res = await fetch(startingUp ? "/api/monitor/start" : "/api/monitor/stop", {
+    const res = await fetch("/api/monitor/start", { method: "POST" });
+    if (res.status === 401) { location.replace("/login"); return; }
+    const data = await res.json();
+    state.monitor = data;
+    toast(data.running ? "Monitoring started"
+                       : "Monitor process exited immediately — check the log", !data.running);
+  } catch {
+    toast("Request failed — is the dashboard server still running?", true);
+  } finally {
+    state.monitorBusy = false;
+    renderMonitorPill();
+    refreshStatsOnly();
+  }
+}
+
+let stopLockoutTimer = null;   // non-null while a lockout countdown is running
+
+function openStopModal() {
+  $("stoppw-overlay").hidden = false;
+  $("stoppw-modal").hidden = false;
+  $("stoppw-note").textContent = "";
+  $("stoppw-input").value = "";
+  setTimeout(() => $("stoppw-input").focus(), 50);
+}
+
+function closeStopModal() {
+  $("stoppw-overlay").hidden = true;
+  $("stoppw-modal").hidden = true;
+}
+
+/* Server-enforced lockout after too many wrong passwords: disable the modal
+   and count down. The server rejects attempts during this window regardless,
+   so this is honest UX, not the actual gate. */
+function startStopLockout(seconds) {
+  clearInterval(stopLockoutTimer);
+  const note = $("stoppw-note");
+  const input = $("stoppw-input");
+  const confirm = $("stoppw-confirm");
+  input.disabled = true;
+  confirm.disabled = true;
+  let remaining = seconds;
+  const tick = () => {
+    if (remaining <= 0) {
+      clearInterval(stopLockoutTimer);
+      stopLockoutTimer = null;
+      input.disabled = false;
+      confirm.disabled = false;
+      note.textContent = "You can try again now.";
+      return;
+    }
+    note.textContent = `Too many incorrect attempts — locked for ${remaining}s.`;
+    remaining -= 1;
+  };
+  tick();
+  stopLockoutTimer = setInterval(tick, 1000);
+}
+
+async function confirmStop() {
+  if (stopLockoutTimer) return;   // locked out — ignore clicks/Enter
+  const password = $("stoppw-input").value;
+  const btn = $("stoppw-confirm");
+  btn.disabled = true;
+  state.monitorBusy = true;
+  renderMonitorPill();
+  try {
+    const res = await fetch("/api/monitor/stop", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: startingUp ? undefined : JSON.stringify({ password }),
+      body: JSON.stringify({ password }),
     });
     if (res.status === 401) { location.replace("/login"); return; }
     const data = await res.json();
     if (res.status === 403 && data.tamper_blocked) {
-      // Wrong password on a protected action -- monitoring keeps running.
+      // Wrong password -- monitoring keeps running; keep the modal open.
+      if (data.locked) {
+        startStopLockout(data.retry_after);
+        if (data.evidence_captured) refreshShield();
+        return;   // finally must NOT re-enable the button mid-lockout
+      }
       const captured = data.evidence_captured
-        ? ` Evidence captured (incident #${data.incident_id}).`
-        : "";
-      toast(`Incorrect password — attempt ${data.attempts}.${captured}`, true);
-      if (data.evidence_captured) refreshShield();
+        ? ` Evidence captured (incident #${data.incident_id}).` : "";
+      $("stoppw-note").textContent = `Incorrect password — attempt ${data.attempts}.${captured}`;
+      if (data.evidence_captured) { refreshShield(); toast("Tamper evidence captured", true); }
       return;
     }
     state.monitor = data;
-    if (startingUp && data.running) {
-      toast("Monitoring started");
-    } else if (startingUp && !data.running) {
-      toast("Monitor process exited immediately — check the log", true);
-    } else {
-      toast("Monitoring stopped");
-    }
+    closeStopModal();
+    toast("Monitoring stopped");
   } catch {
-    toast("Request failed — is the dashboard server still running?", true);
+    $("stoppw-note").textContent = "Request failed — is the dashboard server still running?";
   } finally {
+    if (!stopLockoutTimer) btn.disabled = false;   // stay disabled while locked out
     state.monitorBusy = false;
     renderMonitorPill();
     refreshStatsOnly();
@@ -1400,6 +1468,13 @@ function bind() {
   $("monitor-toggle").addEventListener("click", toggleMonitor);
   $("monitor-log-btn").addEventListener("click", openLogModal);
 
+  // stop-monitoring password modal
+  $("stoppw-close").addEventListener("click", closeStopModal);
+  $("stoppw-cancel").addEventListener("click", closeStopModal);
+  $("stoppw-overlay").addEventListener("click", closeStopModal);
+  $("stoppw-confirm").addEventListener("click", confirmStop);
+  $("stoppw-input").addEventListener("keydown", (e) => { if (e.key === "Enter") confirmStop(); });
+
   // daily brief
   $("daily-brief-btn").addEventListener("click", openDailyBrief);
   $("daily-modal-close").addEventListener("click", closeDailyBrief);
@@ -1435,7 +1510,7 @@ function bind() {
   $("report-generate").addEventListener("click", generateReport);
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { closeDrawer(); closeLogModal(); closeReportModal(); closeDailyBrief(); closeIncidentDrawer(); }
+    if (e.key === "Escape") { closeDrawer(); closeLogModal(); closeReportModal(); closeDailyBrief(); closeIncidentDrawer(); closeStopModal(); }
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "");
     if (e.key === "/" && !typing && !$("view-console").hidden) {
       e.preventDefault();

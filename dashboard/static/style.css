@@ -772,6 +772,13 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 .text-area { resize: vertical; line-height: 1.7; }
 .text-input:focus, .text-area:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.text-input:disabled, .text-area:disabled {
+  opacity: .5;
+  background: var(--bg-raised);
+  color: var(--ink-3);
+  cursor: not-allowed;
+  box-shadow: none;
+}
 
 .temp-val { color: var(--accent); font-family: var(--font-mono); margin-left: 6px; }
 input[type="range"] { width: 100%; accent-color: var(--accent); }

@@ -37,6 +37,9 @@ secrets.enc.tmp
 credentials.json
 
 # --- Aegis runtime artifacts (regenerated on every run, not source) ---
+# Tamper-evidence captures (screenshots + incident.json) -- from-source runs
+# write these to the repo root via persistent_dir(); never commit them.
+incidents/
 aegis_events.db
 events.log
 *.db

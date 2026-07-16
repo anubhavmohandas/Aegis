@@ -266,11 +266,13 @@ if __name__ == "__main__":
     # Self-check: full capture round-trip against a temp store, with the
     # screenshot/network collectors stubbed out (no permissions, no network).
     import tempfile
-    import core.evidence as ev
     from core.database import EventStore
 
-    ev._screenshot = lambda dest: None
-    ev._public_ip = lambda: None
+    # Rebind THIS module's globals (under `python -m` this file runs as
+    # __main__, so `import core.evidence` would stub a second, unused copy):
+    _screenshot = lambda dest: None
+    _public_ip = lambda: None
+    incidents_dir = lambda: Path(tempfile.mkdtemp())  # don't litter the repo's incidents/
 
     store = EventStore(str(Path(tempfile.mkdtemp()) / "t.db"))
     inc = capture_incident(reason="unauthorized monitoring stop attempt",

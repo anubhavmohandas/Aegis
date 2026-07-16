@@ -442,6 +442,27 @@
   </div>
 </div>
 
+<div class="drawer-overlay" id="stoppw-overlay" hidden></div>
+<div class="log-modal report-modal stoppw-modal" id="stoppw-modal" hidden aria-label="Confirm stop monitoring">
+  <div class="drawer-head">
+    <span class="drawer-title">STOP MONITORING</span>
+    <button class="drawer-close" id="stoppw-close" aria-label="Close">✕</button>
+  </div>
+  <div class="drawer-body">
+    <p class="settings-desc">Stopping monitoring is a protected action. Enter the dashboard password
+       to confirm. Wrong attempts are logged, and repeated failures capture evidence.</p>
+    <div class="field">
+      <label for="stoppw-input">Password</label>
+      <input id="stoppw-input" class="text-input" type="password" autocomplete="current-password">
+    </div>
+    <span class="settings-note" id="stoppw-note"></span>
+  </div>
+  <div class="settings-actions report-modal-actions">
+    <button class="btn" id="stoppw-cancel">Cancel</button>
+    <button class="btn btn-stop" id="stoppw-confirm">Stop Monitoring</button>
+  </div>
+</div>
+
 <div class="drawer-overlay" id="incident-overlay" hidden></div>
 <aside class="drawer" id="incident-drawer" aria-label="Incident detail" hidden>
   <div class="drawer-head">

@@ -614,8 +614,16 @@ def _find_external_monitor_pid() -> int | None:
     each cmdline argument against the process's own cwd, since a relative
     "main.py" argument (the common case) carries no path info by itself."""
     target = MAIN_PY.resolve()
+    own_pid = os.getpid()
     try:
         for proc in psutil.process_iter(["pid", "cmdline", "cwd"]):
+            # Never match THIS process. The desktop app hosts the dashboard in
+            # the same process it runs the monitor in; if this ever returned
+            # our own pid, "Stop Monitoring" would terminate() the whole app
+            # (window included) instead of just pausing monitoring -- which is
+            # exactly the "Aegis quits when I click Stop" symptom.
+            if proc.info["pid"] == own_pid:
+                continue
             cmdline = proc.info.get("cmdline") or []
             if not any(part.endswith("main.py") for part in cmdline):
                 continue
@@ -721,6 +729,13 @@ def stop_monitor() -> dict:
         return monitor_status()
     state = _read_monitor_state()
     pid = state["pid"] if state and _process_alive(state.get("pid", -1)) else _find_external_monitor_pid()
+    if pid == os.getpid():
+        # Belt-and-suspenders with _find_external_monitor_pid's own guard: a
+        # stale MONITOR_STATE_FILE could still name this very process. Refuse
+        # to terminate ourselves -- that would close the app/window, not pause
+        # monitoring. Clear the bad state and report stopped.
+        logger_srv.warning("stop_monitor resolved to our own pid (%s) -- refusing to self-terminate", pid)
+        pid = None
     if pid is not None:
         try:
             proc = psutil.Process(pid)
@@ -748,7 +763,18 @@ def stop_monitor() -> dict:
 # killing the OS process or force-quitting the window -- that path is covered
 # instead by heartbeat gap detection (core/dispatcher), which records that
 # monitoring went dark. Tamper *evidence*, not tamper *proof*.
-_tamper_failures: dict[str, int] = {}
+#
+# State is in-memory per action (a restart resets it): {"fails", "locked_until",
+# "captured"}. Two independent escalations on wrong passwords -- evidence
+# capture at cfg.tamper_attempts_before_capture, and a hard LOCKOUT after
+# LOCKOUT_THRESHOLD that blocks the action for LOCKOUT_SECONDS regardless of a
+# correct password. The lockout is enforced HERE (server-side), so it holds
+# even if someone bypasses the frontend.
+_tamper_state: dict[str, dict] = {}
+# occam: fixed 5-attempts / 60s per the product decision; promote to config
+# fields (like tamper_attempts_before_capture) only if someone needs to tune it.
+LOCKOUT_THRESHOLD = 5
+LOCKOUT_SECONDS = 60
 
 
 def _writable_store():
@@ -757,38 +783,61 @@ def _writable_store():
 
 
 def guard_protected_action(action: str, password: str) -> dict:
-    """Returns {} when the action may proceed, else an error dict (and, past
-    the threshold, captures an incident). Never raises."""
+    """Returns {} when the action may proceed, else an error dict. Wrong
+    passwords escalate: evidence capture at the configured threshold, then a
+    time-boxed lockout at LOCKOUT_THRESHOLD. Never raises."""
     from core.config import load_config
     cfg = load_config()
     if not cfg.tamper_require_password:
         return {}
+    st = _tamper_state.setdefault(action, {"fails": 0, "locked_until": 0.0, "captured": False})
+    now = time.time()
+
+    # Locked out? Reject before even looking at the password -- a correct
+    # password during the lockout window still waits it out.
+    if st["locked_until"] > now:
+        remaining = int(st["locked_until"] - now) + 1
+        return {"error": f"too many attempts -- locked for {remaining}s",
+                "locked": True, "retry_after": remaining}
+
     creds = _load_credentials()
     if _verify_password(creds["username"], password):
-        _tamper_failures.pop(action, None)
+        _tamper_state.pop(action, None)   # clean slate on success
         return {}
 
     time.sleep(0.4)  # same blunt guessing damper as the login path
-    n = _tamper_failures.get(action, 0) + 1
-    _tamper_failures[action] = n
+    st["fails"] += 1
+    n = st["fails"]
+    locked_now = n >= LOCKOUT_THRESHOLD
     store = None
     try:
         store = _writable_store()
         try:
-            store.insert(source="tamper", category="tamper_attempt",
-                         summary=f"Failed password on protected action: {action} (attempt {n})",
-                         details={"action": action, "attempt": n},
-                         confidence="certain", severity="high")
+            store.insert(
+                source="tamper", category="tamper_attempt",
+                summary=(f"Failed password on protected action: {action} (attempt {n}"
+                         + (f" -- locked out for {LOCKOUT_SECONDS}s)" if locked_now else ")")),
+                details={"action": action, "attempt": n, "locked_out": locked_now},
+                confidence="certain", severity="critical" if locked_now else "high")
         except Exception as e:
             logger_srv.error("Could not log tamper attempt: %s", e)
         result = {"error": "incorrect password", "attempts": n}
-        if n >= cfg.tamper_attempts_before_capture:
+        # Evidence capture: once, at the configured threshold.
+        if n >= cfg.tamper_attempts_before_capture and not st["captured"]:
             from core.evidence import capture_incident
             inc = capture_incident(reason=f"unauthorized attempt: {action}", attempts=n,
                                    store=store, config=cfg, extra_context={"action": action})
-            _tamper_failures.pop(action, None)   # reset the counter after capturing
+            st["captured"] = True
             result["incident_id"] = inc.get("id")
             result["evidence_captured"] = True
+        # Lockout: block the action for a fixed window, then start fresh.
+        if locked_now:
+            st["locked_until"] = time.time() + LOCKOUT_SECONDS
+            st["fails"] = 0
+            st["captured"] = False
+            result["locked"] = True
+            result["retry_after"] = LOCKOUT_SECONDS
+            result["error"] = f"too many attempts -- locked for {LOCKOUT_SECONDS}s"
         return result
     finally:
         if store is not None:
