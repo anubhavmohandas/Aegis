@@ -96,6 +96,11 @@ class AppConfig:
     enrich_enabled: bool = False            # opt-in threat enrichment (VirusTotal hash lookups + local MITRE
                                             # annotations) for high/critical events. Default OFF: querying a
                                             # hash discloses it to VirusTotal -- see core/enrichment.py.
+    # --- Tamper protection (see core/evidence.py + dashboard tamper endpoints) ---
+    tamper_require_password: bool = True    # require the dashboard password to Stop Monitoring / Quit
+    tamper_attempts_before_capture: int = 3 # failed attempts before evidence is captured
+    tamper_evidence_screenshot: bool = True # capture a screenshot as evidence
+    tamper_evidence_webcam: bool = False    # RESERVED for v2 -- see core/evidence.py._webcam (currently a no-op)
 
     @property
     def api_key(self) -> str | None:
@@ -159,6 +164,10 @@ def load_config(path: Path | None = None) -> AppConfig:
         trusted_process_hashes=_parse_str_list(raw, "trusted_process_hashes"),
         trusted_usb_ids=_parse_str_list(raw, "trusted_usb_ids"),
         enrich_enabled=bool(raw.get("enrich_enabled", False)),
+        tamper_require_password=bool(raw.get("tamper_require_password", True)),
+        tamper_attempts_before_capture=max(1, _parse_int(raw, "tamper_attempts_before_capture", 3)),
+        tamper_evidence_screenshot=bool(raw.get("tamper_evidence_screenshot", True)),
+        tamper_evidence_webcam=bool(raw.get("tamper_evidence_webcam", False)),
     )
     if not cfg.watched_folders:
         cfg = _with_default_folders(cfg)

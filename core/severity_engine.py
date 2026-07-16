@@ -43,6 +43,11 @@ _CATEGORY_BASELINE = {
     EventCategory.FILE_MODIFIED: "low",
     EventCategory.FILE_DELETED: "low",
     EventCategory.FILE_MOVED: "low",
+    EventCategory.SESSION_LOCKED: "low",       # informational boundary markers
+    EventCategory.SESSION_UNLOCKED: "low",
+    EventCategory.MONITORING_GAP: "high",      # Aegis was blind for a while -- worth surfacing
+    EventCategory.TAMPER_ATTEMPT: "high",      # a wrong password on a protected action
+    EventCategory.TAMPER_EVIDENCE: "critical", # repeated failures -> evidence captured
 }
 
 _SUSPICIOUS_PATH_FRAGMENTS = (

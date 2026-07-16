@@ -1036,3 +1036,46 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .btn { padding: 7px 10px; }
   .event-sub { flex-wrap: wrap; gap: 4px 10px; }
 }
+
+/* ---------- shield + tamper incidents + daily brief (v2) ---------- */
+
+.shield {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .04em;
+  color: var(--sev-low); cursor: pointer; border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 4px 9px; background: var(--bg-raised);
+}
+.shield svg { width: 14px; height: 14px; }
+.shield.alert { color: var(--sev-critical); border-color: var(--sev-critical); }
+.shield.alert svg { animation: shieldpulse 1.6s ease-in-out infinite; }
+@keyframes shieldpulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+
+.tab-badge {
+  display: inline-block; min-width: 16px; padding: 0 5px; margin-left: 5px;
+  font-family: var(--font-mono); font-size: 10px; line-height: 16px; text-align: center;
+  color: #fff; background: var(--sev-critical); border-radius: 9px;
+}
+
+.incidents-view { padding: 20px 4px; max-width: 1000px; margin: 0 auto; }
+.incidents-head { margin-bottom: 16px; }
+.incidents-list { display: flex; flex-direction: column; gap: 10px; }
+
+.incident-card {
+  width: 100%; text-align: left; cursor: pointer;
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-left: 3px solid var(--sev-critical); border-radius: var(--radius);
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 7px;
+}
+.incident-card:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.incident-card.unreviewed { border-left-color: var(--sev-critical); background: color-mix(in srgb, var(--sev-critical) 6%, var(--bg-raised)); }
+.incident-card-head { display: flex; align-items: center; gap: 9px; }
+.incident-reason { font-family: var(--font-display); font-size: 14px; color: var(--ink); }
+.incident-card-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 11px; color: var(--ink-3); font-family: var(--font-mono); }
+.incident-new {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .08em; color: #fff;
+  background: var(--sev-critical); border-radius: 4px; padding: 2px 6px;
+}
+.hash { font-family: var(--font-mono); font-size: 10px; color: var(--ink-3); word-break: break-all; }
+
+.daily-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+@media (max-width: 640px) { .daily-tiles { grid-template-columns: repeat(2, 1fr); } }

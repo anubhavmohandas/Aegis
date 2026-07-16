@@ -35,6 +35,7 @@ import webview
 from core.config import load_config
 from core.dispatcher import Dispatcher
 from core.folder_monitor import FolderMonitor
+from core.session_monitor import SessionMonitor
 from dashboard.server import MONITOR_LOG_PATH, build_server
 from main import build_platform_monitors
 
@@ -71,7 +72,8 @@ class MonitorPipeline:
         system = platform.system()
         platform_monitors = build_platform_monitors(system, event_queue, self.config.poll_interval_seconds)
         folder_monitor = FolderMonitor(self.config.watched_folders, event_queue)
-        self._monitors = platform_monitors + [folder_monitor]
+        session_monitor = SessionMonitor(event_queue, self.config.poll_interval_seconds)
+        self._monitors = platform_monitors + [folder_monitor, session_monitor]
         self._dispatcher = Dispatcher(event_queue, self.config)
 
         for m in self._monitors:

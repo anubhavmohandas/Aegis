@@ -28,6 +28,7 @@ import hashlib
 import hmac
 import io
 import json
+import logging
 import os
 import platform
 import secrets
@@ -50,6 +51,7 @@ from core.config import persistent_dir, _is_frozen  # noqa: E402 -- needs REPO_R
 from core.secrets_store import get_secret, set_secret  # noqa: E402
 
 ASSETS_DIR = REPO_ROOT / "assets"                       # brand logo lives with the app assets
+logger_srv = logging.getLogger("aegis.dashboard")
 
 # DATA_DIR is the per-user data dir (see core/config.persistent_dir) for a
 # packaged build, or the repo root for a from-source checkout. Everything
@@ -79,7 +81,7 @@ MIME = {
 }
 
 VALID_SEVERITIES = {"low", "medium", "high", "critical"}
-VALID_SOURCES = {"process", "usb", "startup", "folder"}
+VALID_SOURCES = {"process", "usb", "startup", "folder", "session", "tamper"}
 
 # --- auth -------------------------------------------------------------------
 # A single operator account (this is a localhost-only, one-user console, not
@@ -311,6 +313,60 @@ def query_stats(db_path: str) -> dict:
         conn.close()
 
 
+# --- daily intelligence brief ------------------------------------------------
+# "Good morning -- here's what your computer did." A once-a-day narrative over
+# the last 24h: the counts a human actually cares about (USB, installs,
+# startup changes, away sessions, tamper attempts) plus an AI overview reusing
+# the same period-summary path as the PDF report. Computed on demand, not
+# scheduled -- the frontend fetches it; there's no background job to babysit.
+
+def daily_brief(db_path: str) -> dict:
+    now = time.time()
+    since = now - 86400
+    events = query_events(db_path, {"since": [str(since)], "limit": ["100000"]}, limit_cap=100000)
+    cat = lambda c: sum(1 for e in events if e["category"] == c)
+    counts = {
+        "total": len(events),
+        "processes": sum(1 for e in events if e["source"] == "process"),
+        "usb_connected": cat("usb_connected"),
+        "startup_added": cat("startup_item_added"),
+        "high_critical": sum(1 for e in events if e["severity"] in ("high", "critical")),
+        "away_sessions": cat("session_unlocked"),
+        "tamper_attempts": cat("tamper_attempt"),
+        "monitoring_gaps": cat("monitoring_gap"),
+    }
+    top = sorted((e for e in events if e["severity"] in ("high", "critical")),
+                 key=lambda e: -e["timestamp"])[:10]
+    top_events = [{"id": e["id"], "timestamp": e["timestamp"],
+                   "summary": e["summary"], "severity": e["severity"]} for e in top]
+
+    top_lines = [f"- [{e['severity']}] {time.strftime('%H:%M', time.localtime(e['timestamp']))} {e['summary']}"
+                 for e in top] or ["- (none)"]
+    block = "\n".join([
+        "Report period: last 24 hours",
+        f"Total events: {counts['total']}",
+        f"By severity: high/critical={counts['high_critical']}",
+        f"Processes started: {counts['processes']}",
+        f"USB devices connected: {counts['usb_connected']}",
+        f"New startup items: {counts['startup_added']}",
+        f"Away sessions (screen locked then unlocked): {counts['away_sessions']}",
+        f"Failed tamper attempts: {counts['tamper_attempts']}",
+        f"Monitoring gaps: {counts['monitoring_gaps']}",
+        "",
+        "Highest-severity events:",
+        *top_lines,
+    ])
+    try:
+        from core.ai_explainer import AIExplainer
+        from core.config import load_config
+        summary = AIExplainer(load_config()).summarize_period(block)
+    except Exception as e:
+        logger_srv.error("Daily brief AI summary failed: %s", e)
+        summary = "[AI summary unavailable] See the counts and highlighted events."
+    return {"since": since, "until": now, "counts": counts,
+            "top_events": top_events, "summary": summary}
+
+
 # --- settings ----------------------------------------------------------------
 # The dashboard edits the SAME config.yaml/.env that core/config.py loads, so
 # the monitors and the UI can never disagree about where settings live. PyYAML
@@ -391,6 +447,12 @@ def read_settings() -> dict:
         "trusted_process_names": _lenient_str_list(raw.get("trusted_process_names")),
         "trusted_process_hashes": _lenient_str_list(raw.get("trusted_process_hashes")),
         "trusted_usb_ids": _lenient_str_list(raw.get("trusted_usb_ids")),
+        "enrich_enabled": bool(raw.get("enrich_enabled", False)),
+        "vt_api_key_set": bool(_resolve_api_key("VT_API_KEY")),
+        "tamper_require_password": bool(raw.get("tamper_require_password", True)),
+        "tamper_attempts_before_capture": _lenient_int(raw.get("tamper_attempts_before_capture", 3), 3),
+        "tamper_evidence_screenshot": bool(raw.get("tamper_evidence_screenshot", True)),
+        "tamper_evidence_webcam": bool(raw.get("tamper_evidence_webcam", False)),
         "config_path": str(CONFIG_PATH),
     }
 
@@ -469,10 +531,18 @@ def write_settings(body: dict) -> dict:
         "trusted_process_names": _clean_str_list(body.get("trusted_process_names")),
         "trusted_process_hashes": _clean_str_list(body.get("trusted_process_hashes")),
         "trusted_usb_ids": _clean_str_list(body.get("trusted_usb_ids")),
-        # not UI-managed yet either (core/enrichment.py) -- without this
-        # passthrough, a hand-set `enrich_enabled: true` was silently reverted
-        # to off by the fixed key list above on the first settings save.
-        "enrich_enabled": bool(_passthrough("enrich_enabled", False)),
+        # VirusTotal threat enrichment (core/enrichment.py) -- now UI-managed.
+        "enrich_enabled": bool(body.get("enrich_enabled", _passthrough("enrich_enabled", False))),
+        # Tamper protection (core/evidence.py). Webcam stays passthrough-only:
+        # it's a reserved v2 toggle with no UI control yet (see index.html).
+        "tamper_require_password": bool(body.get("tamper_require_password",
+                                                 _passthrough("tamper_require_password", True))),
+        "tamper_attempts_before_capture": max(1, _lenient_int(
+            body.get("tamper_attempts_before_capture",
+                     _passthrough("tamper_attempts_before_capture", 3)), 3)),
+        "tamper_evidence_screenshot": bool(body.get("tamper_evidence_screenshot",
+                                                    _passthrough("tamper_evidence_screenshot", True))),
+        "tamper_evidence_webcam": bool(_passthrough("tamper_evidence_webcam", False)),
     }
 
     # one-time backup of the original hand-written config before the first
@@ -489,11 +559,16 @@ def write_settings(body: dict) -> dict:
     api_key = str(ai.get("api_key", ""))
     if api_key:  # blank means "keep whatever is already there"
         set_secret(api_key_env, api_key)
+    vt_key = str(body.get("vt_api_key", ""))
+    if vt_key:  # same blank-means-keep contract; fixed env var name (one VirusTotal)
+        set_secret("VT_API_KEY", vt_key)
     return {}
 
 
-def _passthrough(key: str) -> str:
-    """Keep yaml keys the settings UI doesn't manage (log/db paths) intact."""
+def _passthrough(key: str, default):
+    """Keep yaml keys the settings UI doesn't manage (log/db paths,
+    enrich_enabled, tamper_*) intact across a dashboard-driven rewrite.
+    Returns the existing value from config.yaml if present, else `default`."""
     import yaml
     if CONFIG_PATH.is_file():
         try:
@@ -501,10 +576,9 @@ def _passthrough(key: str) -> str:
                 raw = yaml.safe_load(f) or {}
         except yaml.YAMLError:
             raw = {}
-        value = raw.get(key) if isinstance(raw, dict) else None
-        if value:
-            return str(value)
-    return {"log_path": "events.log", "db_path": "aegis_events.db"}[key]
+        if isinstance(raw, dict) and key in raw and raw[key] is not None:
+            return raw[key]
+    return default
 
 
 # --- monitor process control --------------------------------------------------
@@ -660,6 +734,134 @@ def stop_monitor() -> dict:
             pass
     MONITOR_STATE_FILE.unlink(missing_ok=True)
     return {"running": False, "pid": None, "started_at": None, "uptime_seconds": None, "managed": "external"}
+
+
+# --- tamper protection -------------------------------------------------------
+# The Stop Monitoring button is a protected action: with tamper_require_password
+# on (the default), stopping requires the dashboard password. Wrong passwords
+# are logged as timeline events, and once they reach the configured threshold,
+# evidence is captured as an Incident (see core/evidence.py). Failed-attempt
+# counts are in-memory per action -- a restart resets them, which is fine:
+# this is a deterrent + evidence trail, not an account-lockout system.
+#
+# HONEST SCOPE: this gates the in-app Stop button. It cannot stop someone from
+# killing the OS process or force-quitting the window -- that path is covered
+# instead by heartbeat gap detection (core/dispatcher), which records that
+# monitoring went dark. Tamper *evidence*, not tamper *proof*.
+_tamper_failures: dict[str, int] = {}
+
+
+def _writable_store():
+    from core.database import EventStore
+    return EventStore(DashboardHandler.db_path)
+
+
+def guard_protected_action(action: str, password: str) -> dict:
+    """Returns {} when the action may proceed, else an error dict (and, past
+    the threshold, captures an incident). Never raises."""
+    from core.config import load_config
+    cfg = load_config()
+    if not cfg.tamper_require_password:
+        return {}
+    creds = _load_credentials()
+    if _verify_password(creds["username"], password):
+        _tamper_failures.pop(action, None)
+        return {}
+
+    time.sleep(0.4)  # same blunt guessing damper as the login path
+    n = _tamper_failures.get(action, 0) + 1
+    _tamper_failures[action] = n
+    store = None
+    try:
+        store = _writable_store()
+        try:
+            store.insert(source="tamper", category="tamper_attempt",
+                         summary=f"Failed password on protected action: {action} (attempt {n})",
+                         details={"action": action, "attempt": n},
+                         confidence="certain", severity="high")
+        except Exception as e:
+            logger_srv.error("Could not log tamper attempt: %s", e)
+        result = {"error": "incorrect password", "attempts": n}
+        if n >= cfg.tamper_attempts_before_capture:
+            from core.evidence import capture_incident
+            inc = capture_incident(reason=f"unauthorized attempt: {action}", attempts=n,
+                                   store=store, config=cfg, extra_context={"action": action})
+            _tamper_failures.pop(action, None)   # reset the counter after capturing
+            result["incident_id"] = inc.get("id")
+            result["evidence_captured"] = True
+        return result
+    finally:
+        if store is not None:
+            store.close()
+
+
+def list_incidents() -> dict:
+    store = _writable_store()
+    try:
+        rows = store.list_incidents(limit=200)
+    finally:
+        store.close()
+    unreviewed = sum(1 for r in rows if not r["reviewed"])
+    return {"incidents": rows, "unreviewed": unreviewed, "total": len(rows)}
+
+
+def get_incident(incident_id: int) -> dict:
+    store = _writable_store()
+    try:
+        row = store.get_incident(incident_id)
+    finally:
+        store.close()
+    return row or {"error": "incident not found"}
+
+
+def mark_incident_reviewed(incident_id: int) -> dict:
+    store = _writable_store()
+    try:
+        if store.get_incident(incident_id) is None:
+            return {"error": "incident not found"}
+        store.set_incident_reviewed(incident_id, True)
+    finally:
+        store.close()
+    return {"ok": True}
+
+
+def add_trusted(kind: str, value: str) -> dict:
+    """Trust Learning: append an 'always trust this' entry to config.yaml so
+    future matching events skip the AI call (see core/rule_engine.py). kind is
+    'process_names' | 'process_hashes' | 'usb_ids'."""
+    field = {"process_names": "trusted_process_names",
+             "process_hashes": "trusted_process_hashes",
+             "usb_ids": "trusted_usb_ids"}.get(kind)
+    if not field:
+        return {"error": f"unknown trust kind '{kind}'"}
+    value = str(value).strip()
+    if not value:
+        return {"error": "empty trust value"}
+    current = read_settings()
+    existing = list(current.get(field, []))
+    if value not in existing:
+        existing.append(value)
+    # write_settings expects the full body shape; reuse the current settings
+    # and swap in the augmented list so nothing else changes.
+    body = {
+        "ai": {"provider": current["ai"]["provider"], "base_url": current["ai"]["base_url"],
+               "api_key_env": current["ai"]["api_key_env"], "model": current["ai"]["model"],
+               "temperature": current["ai"]["temperature"]},
+        "notify_enabled": current["notify_enabled"],
+        "notify_min_severity": current["notify_min_severity"],
+        "notify_on_startup_scan": current["notify_on_startup_scan"],
+        "watched_folders": current["watched_folders"],
+        "poll_interval_seconds": current["poll_interval_seconds"],
+        "trusted_process_names": current["trusted_process_names"],
+        "trusted_process_hashes": current["trusted_process_hashes"],
+        "trusted_usb_ids": current["trusted_usb_ids"],
+        "enrich_enabled": current["enrich_enabled"],
+    }
+    body[field] = existing
+    result = write_settings(body)
+    if result.get("error"):
+        return result
+    return {"ok": True, "field": field, "value": value}
 
 
 def monitor_log_tail(max_lines: int = 200) -> str:
@@ -838,8 +1040,46 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/monitor/stop":
                 if not self._authed():
                     self._send_json({"error": "authentication required"}, status=401)
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                except (json.JSONDecodeError, ValueError):
+                    body = {}
+                # Tamper gate: with tamper_require_password on, a correct
+                # password is required to stop. Wrong ones are logged and,
+                # past the threshold, trigger evidence capture.
+                guard = guard_protected_action("stop_monitoring", str(body.get("password", "")))
+                if guard.get("error"):
+                    self._send_json({**guard, "tamper_blocked": True}, status=403)
                 else:
                     self._send_json(stop_monitor())
+            elif parsed.path == "/api/incidents/review":
+                if not self._authed():
+                    self._send_json({"error": "authentication required"}, status=401)
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                except (json.JSONDecodeError, ValueError):
+                    body = {}
+                raw_id = body.get("id")
+                if not isinstance(raw_id, int):
+                    self._send_json({"error": "id must be an integer"}, status=400)
+                else:
+                    result = mark_incident_reviewed(raw_id)
+                    self._send_json(result, status=404 if result.get("error") else 200)
+            elif parsed.path == "/api/trust/add":
+                if not self._authed():
+                    self._send_json({"error": "authentication required"}, status=401)
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                except (json.JSONDecodeError, ValueError):
+                    body = {}
+                result = add_trusted(str(body.get("kind", "")), str(body.get("value", "")))
+                self._send_json(result, status=400 if result.get("error") else 200)
             elif parsed.path == "/api/update/install":
                 if not self._authed():
                     self._send_json({"error": "authentication required"}, status=401)
@@ -908,6 +1148,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         self._send_json(result, status=404 if result.get("error") else 200)
                 elif parsed.path == "/api/stats":
                     self._send_json(query_stats(self.db_path))
+                elif parsed.path == "/api/incidents":
+                    self._send_json(list_incidents())
+                elif parsed.path == "/api/incidents/get":
+                    raw_id = params.get("id", [""])[0]
+                    if not raw_id.isdigit():
+                        self._send_json({"error": "id must be an incident id"}, status=400)
+                    else:
+                        result = get_incident(int(raw_id))
+                        self._send_json(result, status=404 if result.get("error") else 200)
+                elif parsed.path == "/api/daily":
+                    self._send_json(daily_brief(self.db_path))
                 elif parsed.path == "/api/settings":
                     self._send_json(read_settings())
                 elif parsed.path == "/api/monitor/status":

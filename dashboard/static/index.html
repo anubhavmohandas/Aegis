@@ -36,10 +36,17 @@
 
   <nav class="view-nav" aria-label="Views">
     <button class="view-tab active" data-view="console">Console</button>
+    <button class="view-tab" data-view="incidents">Incidents
+      <span class="tab-badge" id="incidents-badge" hidden></span></button>
     <button class="view-tab" data-view="settings">Settings</button>
   </nav>
 
   <div class="topbar-status">
+    <span class="shield" id="shield" title="Tamper protection status">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5 L13.5 4 V8.2 C13.5 11.6 11 14 8 14.8 C5 14 2.5 11.6 2.5 8.2 V4 Z"
+        fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      <span id="shield-label">PROTECTED</span>
+    </span>
     <span class="live-indicator" id="live-indicator">
       <span class="live-dot"></span><span id="live-label">CHECKING…</span>
     </span>
@@ -47,6 +54,7 @@
   </div>
 
   <div class="topbar-actions">
+    <button class="btn btn-ghost" id="daily-brief-btn" title="What your computer did in the last 24 hours">Daily Brief</button>
     <button class="btn btn-ghost" id="monitor-log-btn" title="View the monitor process log">Log</button>
     <button class="btn" id="monitor-toggle" disabled>—</button>
     <div class="theme-wrap">
@@ -147,6 +155,21 @@
   </div>
 
 </div><!-- /view-console -->
+
+<section id="view-incidents" class="incidents-view" hidden aria-label="Tamper incidents">
+  <div class="incidents-head">
+    <div>
+      <h2 class="settings-title">Tamper Incidents</h2>
+      <p class="settings-desc">Evidence captured when someone repeatedly failed the password on a
+        protected action (like stopping monitoring). Aegis records what it can — a screenshot, the
+        active app, network and process context — and keeps the record here even if the files are
+        later deleted. This is tamper <em>evidence</em>, not tamper <em>proof</em>.</p>
+    </div>
+  </div>
+  <div class="incidents-list" id="incidents-list">
+    <div class="ai-skipped-note">Loading…</div>
+  </div>
+</section>
 
 <section id="view-settings" class="settings" hidden>
 
@@ -257,6 +280,58 @@
   </div>
 
   <div class="settings-card">
+    <h2 class="settings-title">Threat Intelligence</h2>
+    <p class="settings-desc">Look up high/critical executables on VirusTotal by hash and fold the
+       result into the AI explanation. Off by default — a lookup discloses the file's hash to
+       VirusTotal. Only rule-flagged high/critical events are ever sent; results are cached.</p>
+
+    <label class="switch-row" for="set-enrich-enabled">
+      <span>
+        <span class="switch-label">VirusTotal enrichment</span>
+        <span class="switch-desc">Hash-only lookups for high/critical events</span>
+      </span>
+      <input type="checkbox" id="set-enrich-enabled" class="switch">
+    </label>
+
+    <div class="field">
+      <label for="set-vt-key">VirusTotal API key <span class="key-status" id="vt-key-status"></span></label>
+      <input id="set-vt-key" class="text-input" type="password"
+             placeholder="leave blank to keep the current key" autocomplete="new-password">
+    </div>
+  </div>
+
+  <div class="settings-card">
+    <h2 class="settings-title">Tamper Protection</h2>
+    <p class="settings-desc">Require the dashboard password to stop monitoring. Failed attempts are
+       logged to the timeline, and after enough of them Aegis captures evidence as an Incident.
+       This gates the in-app Stop button; a killed process is instead caught as a monitoring gap.</p>
+
+    <label class="switch-row" for="set-tamper-require">
+      <span>
+        <span class="switch-label">Password to stop monitoring</span>
+        <span class="switch-desc">Stopping requires the dashboard password</span>
+      </span>
+      <input type="checkbox" id="set-tamper-require" class="switch">
+    </label>
+
+    <label class="switch-row" for="set-tamper-screenshot">
+      <span>
+        <span class="switch-label">Capture screenshot as evidence</span>
+        <span class="switch-desc">On repeated failed attempts (needs Screen Recording permission on macOS)</span>
+      </span>
+      <input type="checkbox" id="set-tamper-screenshot" class="switch">
+    </label>
+
+    <div class="field field-narrow">
+      <label for="set-tamper-attempts">Failed attempts before capturing evidence</label>
+      <input id="set-tamper-attempts" class="text-input" type="number" min="1" max="10" step="1">
+    </div>
+
+    <p class="settings-desc" style="margin-top:6px;opacity:.75">Webcam evidence capture is planned for
+       a future version and is intentionally disabled — screenshot evidence only for now.</p>
+  </div>
+
+  <div class="settings-card">
     <h2 class="settings-title">Account</h2>
     <p class="settings-desc">Change the password used to sign in to this dashboard.</p>
 
@@ -355,6 +430,26 @@
     <button class="btn btn-primary" id="report-generate">Generate Report</button>
   </div>
 </div>
+
+<div class="drawer-overlay" id="daily-overlay" hidden></div>
+<div class="log-modal report-modal" id="daily-modal" hidden aria-label="Daily brief">
+  <div class="drawer-head">
+    <span class="drawer-title">DAILY BRIEF · LAST 24 HOURS</span>
+    <button class="drawer-close" id="daily-modal-close" aria-label="Close">✕</button>
+  </div>
+  <div class="drawer-body" id="daily-body">
+    <div class="ai-skipped-note">Loading…</div>
+  </div>
+</div>
+
+<div class="drawer-overlay" id="incident-overlay" hidden></div>
+<aside class="drawer" id="incident-drawer" aria-label="Incident detail" hidden>
+  <div class="drawer-head">
+    <span class="drawer-title">INCIDENT DETAIL</span>
+    <button class="drawer-close" id="incident-drawer-close" aria-label="Close">✕</button>
+  </div>
+  <div class="drawer-body" id="incident-drawer-body"></div>
+</aside>
 
 <button class="new-events-pill" id="new-events-pill" hidden>
   <span class="live-dot"></span><span id="new-events-count"></span> new — jump to top

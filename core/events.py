@@ -28,6 +28,11 @@ class EventCategory(str, Enum):
     FILE_MOVED = "file_moved"        # v2: watchdog's on_moved was previously dropped entirely --
                                        # a rename (e.g. payload.txt -> payload.exe) never fired
                                        # on_created/on_modified, so it was invisible to Aegis.
+    SESSION_LOCKED = "session_locked"      # screen locked -- start of an "away session"
+    SESSION_UNLOCKED = "session_unlocked"  # screen unlocked -- carries the away-session recap
+    MONITORING_GAP = "monitoring_gap"      # Aegis itself was not running for a while (see dispatcher heartbeat)
+    TAMPER_ATTEMPT = "tamper_attempt"      # wrong password on a protected action (stop monitoring, settings)
+    TAMPER_EVIDENCE = "tamper_evidence"    # repeated failures -> evidence captured as an Incident
 
 
 # --- Canonical per-category `details` shapes ------------------------------

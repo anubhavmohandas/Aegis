@@ -24,7 +24,8 @@ function displaySummary(ev, now = Date.now()) {
 }
 
 const SEVERITY_ORDER = ["critical", "high", "medium", "low"];
-const SOURCE_LABELS = { process: "Process", usb: "USB", startup: "Startup", folder: "Folder" };
+const SOURCE_LABELS = { process: "Process", usb: "USB", startup: "Startup", folder: "Folder",
+                        session: "Session", tamper: "Tamper" };
 const CONFIDENCE_TITLES = {
   certain: "Real-time detection",
   polled: "Polled detection — may be delayed or incomplete",
@@ -417,6 +418,7 @@ async function poll() {
     setConsoleReachable(false);
   }
   refreshMonitorStatus();
+  refreshShield();
 }
 
 /* ---------- monitor status pill + start/stop control ----------
@@ -485,12 +487,32 @@ function formatUptime(seconds) {
 
 async function toggleMonitor() {
   const startingUp = !state.monitor.running;
+  // Stopping is a protected action: ask for the password so the tamper gate
+  // (server-side) can verify it. Starting is not gated.
+  let password = "";
+  if (!startingUp) {
+    password = window.prompt("Enter the dashboard password to stop monitoring:") ?? null;
+    if (password === null) return;  // cancelled — leave monitoring running
+  }
   state.monitorBusy = true;
   renderMonitorPill();
   try {
-    const res = await fetch(startingUp ? "/api/monitor/start" : "/api/monitor/stop", { method: "POST" });
+    const res = await fetch(startingUp ? "/api/monitor/start" : "/api/monitor/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: startingUp ? undefined : JSON.stringify({ password }),
+    });
     if (res.status === 401) { location.replace("/login"); return; }
     const data = await res.json();
+    if (res.status === 403 && data.tamper_blocked) {
+      // Wrong password on a protected action -- monitoring keeps running.
+      const captured = data.evidence_captured
+        ? ` Evidence captured (incident #${data.incident_id}).`
+        : "";
+      toast(`Incorrect password — attempt ${data.attempts}.${captured}`, true);
+      if (data.evidence_captured) refreshShield();
+      return;
+    }
     state.monitor = data;
     if (startingUp && data.running) {
       toast("Monitoring started");
@@ -643,6 +665,14 @@ function openDrawer(id) {
                       <td class="v">${escapeHtml(typeof v === "object" ? JSON.stringify(v) : String(v))}</td></tr>`)
     .join("");
 
+  const trust = trustTargetFor(ev, details);
+  const trustBtn = trust
+    ? `<button class="btn" id="drawer-trust-btn" data-kind="${trust.kind}"
+               data-value="${escapeHtml(trust.value)}"
+               title="Skip the AI call for ${escapeHtml(trust.label)} from now on">
+         Always Trust · ${escapeHtml(trust.label)}</button>`
+    : "";
+
   const conf = ev.confidence || "certain";
   $("drawer-body").innerHTML = `
     <div class="drawer-badges">
@@ -684,6 +714,7 @@ function openDrawer(id) {
       <button class="btn" id="drawer-report-btn"
               title="AI-summarized PDF report of everything in the ±5 minute window around this event">
         PDF Report · this window</button>
+      ${trustBtn}
     </div>`;
 
   $("drawer").hidden = false;
@@ -833,10 +864,12 @@ let settingsLoaded = false;
 
 function switchView(view) {
   $("view-console").hidden = view !== "console";
+  $("view-incidents").hidden = view !== "incidents";
   $("view-settings").hidden = view !== "settings";
   document.querySelectorAll(".view-tab").forEach((t) =>
     t.classList.toggle("active", t.dataset.view === view));
   if (view === "settings" && !settingsLoaded) loadSettings();
+  if (view === "incidents") loadIncidents();
 }
 
 function toast(message, isError = false) {
@@ -899,6 +932,12 @@ async function loadSettings() {
     $("set-trusted-names").value = s.trusted_process_names.join("\n");
     $("set-trusted-hashes").value = s.trusted_process_hashes.join("\n");
     $("set-trusted-usb").value = s.trusted_usb_ids.join("\n");
+
+    $("set-enrich-enabled").checked = s.enrich_enabled;
+    $("vt-key-status").textContent = s.vt_api_key_set ? "configured" : "not set";
+    $("set-tamper-require").checked = s.tamper_require_password;
+    $("set-tamper-screenshot").checked = s.tamper_evidence_screenshot;
+    $("set-tamper-attempts").value = s.tamper_attempts_before_capture;
 
     checkForUpdate();
   } catch (err) {
@@ -1042,12 +1081,19 @@ async function saveSettings() {
         trusted_process_names: splitLines("set-trusted-names"),
         trusted_process_hashes: splitLines("set-trusted-hashes"),
         trusted_usb_ids: splitLines("set-trusted-usb"),
+        enrich_enabled: $("set-enrich-enabled").checked,
+        vt_api_key: $("set-vt-key").value,   // blank = keep existing
+        tamper_require_password: $("set-tamper-require").checked,
+        tamper_evidence_screenshot: $("set-tamper-screenshot").checked,
+        tamper_attempts_before_capture: Number($("set-tamper-attempts").value) || 3,
       }),
     });
     if (res.status === 401) { location.replace("/login"); return; }
     const data = await res.json();
     if (!res.ok) { toast(data.error || `Save failed (${res.status})`, true); return; }
     $("set-api-key").value = "";
+    $("set-vt-key").value = "";
+    if (data.settings) $("vt-key-status").textContent = data.settings.vt_api_key_set ? "configured" : "not set";
     $("key-status").textContent = data.settings.ai.api_key_set
       ? `configured ${data.settings.ai.api_key_hint}` : "not set";
     toast("Settings saved — restart Aegis monitors to apply");
@@ -1088,6 +1134,226 @@ function bindSettings() {
   $("update-install-btn").addEventListener("click", installUpdate);
 }
 
+/* ---------- incidents + shield ---------- */
+
+function renderShield(unreviewed) {
+  const shield = $("shield");
+  const label = $("shield-label");
+  const badge = $("incidents-badge");
+  if (unreviewed > 0) {
+    shield.classList.add("alert");
+    label.textContent = `${unreviewed} INCIDENT${unreviewed === 1 ? "" : "S"}`;
+    shield.title = `${unreviewed} unreviewed tamper incident(s) — click Incidents`;
+    badge.hidden = false;
+    badge.textContent = unreviewed;
+  } else {
+    shield.classList.remove("alert");
+    label.textContent = "PROTECTED";
+    shield.title = "No unreviewed tamper incidents";
+    badge.hidden = true;
+  }
+}
+
+async function refreshShield() {
+  try {
+    const data = await api("/api/incidents");
+    renderShield(data.unreviewed);
+  } catch { /* leave the shield as-is on a transient failure */ }
+}
+
+function incidentRowHtml(inc) {
+  const when = fmtFullTime(inc.timestamp);
+  let artifacts = {};
+  try { artifacts = JSON.parse(inc.artifacts_json) || {}; } catch { /* ignore */ }
+  const tags = Object.keys(artifacts).map((k) => `<span class="meta-badge">${escapeHtml(k)}</span>`).join("");
+  return `
+    <button class="incident-card ${inc.reviewed ? "" : "unreviewed"}" data-id="${inc.id}">
+      <div class="incident-card-head">
+        <span class="badge badge-critical">tamper</span>
+        <span class="incident-reason">${escapeHtml(inc.reason)}</span>
+        ${inc.reviewed ? "" : '<span class="incident-new">NEW</span>'}
+      </div>
+      <div class="incident-card-meta">
+        <span>${escapeHtml(when)}</span>
+        <span>${inc.attempts} failed attempt${inc.attempts === 1 ? "" : "s"}</span>
+        ${inc.username ? `<span>${escapeHtml(inc.username)}@${escapeHtml(inc.hostname || "?")}</span>` : ""}
+        ${tags}
+      </div>
+    </button>`;
+}
+
+async function loadIncidents() {
+  const list = $("incidents-list");
+  list.innerHTML = '<div class="ai-skipped-note">Loading…</div>';
+  try {
+    const data = await api("/api/incidents");
+    renderShield(data.unreviewed);
+    if (!data.incidents.length) {
+      list.innerHTML = `
+        <div class="empty-state">
+          <svg viewBox="0 0 24 24"><path d="M12 2 L20 5.5 V11 C20 16.5 16.7 20.6 12 22 C7.3 20.6 4 16.5 4 11 V5.5 Z"
+            fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+          <span class="empty-title">No tamper incidents</span>
+          <span>Nobody has failed a protected action. If someone does, the evidence lands here.</span>
+        </div>`;
+      return;
+    }
+    list.innerHTML = data.incidents.map(incidentRowHtml).join("");
+  } catch {
+    list.innerHTML = '<div class="ai-skipped-note">Could not load incidents.</div>';
+  }
+}
+
+async function openIncident(id) {
+  try {
+    const inc = await api(`/api/incidents/get?id=${id}`);
+    if (inc.error) { toast(inc.error, true); return; }
+    let artifacts = {}, context = {};
+    try { artifacts = JSON.parse(inc.artifacts_json) || {}; } catch { /* ignore */ }
+    try { context = JSON.parse(inc.context_json) || {}; } catch { /* ignore */ }
+
+    const artifactRows = Object.entries(artifacts).map(([k, v]) =>
+      `<tr><td class="k">${escapeHtml(k)}</td>
+       <td class="v">${escapeHtml(v.path || "")}<br><span class="hash">sha256 ${escapeHtml(v.sha256 || "—")}</span></td></tr>`).join("");
+    const procList = (context.recent_processes || []).slice(0, 12)
+      .map((p) => `${escapeHtml(p.started || "")} ${escapeHtml(p.name || "?")} (${p.pid})`).join("<br>");
+    const ctxRows = [
+      ["Active window", context.active_window],
+      ["Public IP", context.public_ip],
+      ["Local IPs", (context.local_ips || []).join(", ")],
+      ["Platform", context.platform],
+      ["Battery", context.battery ? `${context.battery.percent}%${context.battery.plugged_in ? " (plugged in)" : ""}` : null],
+    ].filter(([, v]) => v).map(([k, v]) =>
+      `<tr><td class="k">${escapeHtml(k)}</td><td class="v">${escapeHtml(String(v))}</td></tr>`).join("");
+
+    $("incident-drawer-body").innerHTML = `
+      <div class="drawer-badges">
+        <span class="badge badge-critical">tamper</span>
+        <span class="meta-badge">${inc.attempts} failed attempts</span>
+        <span class="meta-badge">#${inc.id}</span>
+        ${inc.reviewed ? '<span class="meta-badge">reviewed</span>' : '<span class="incident-new">NEW</span>'}
+      </div>
+      <div class="drawer-summary">${escapeHtml(inc.reason)}</div>
+      <div class="drawer-time">${fmtFullTime(inc.timestamp)} · ${escapeHtml(inc.username || "?")}@${escapeHtml(inc.hostname || "?")}</div>
+
+      ${inc.ai_summary ? `<div class="drawer-section-label">AI Summary</div>
+        <div class="explanation">${renderMarkdownLite(inc.ai_summary)}</div>` : ""}
+
+      <div class="drawer-section-label">Evidence Artifacts</div>
+      ${artifactRows ? `<table class="details-table">${artifactRows}</table>`
+        : '<div class="ai-skipped-note">No artifacts captured (screenshot disabled, or permission not granted).</div>'}
+
+      <div class="drawer-section-label">Context At Capture</div>
+      ${ctxRows ? `<table class="details-table">${ctxRows}</table>` : '<div class="ai-skipped-note">No context.</div>'}
+
+      ${procList ? `<div class="drawer-section-label">Processes Running</div>
+        <div class="explanation" style="font-family:var(--font-mono);font-size:12px">${procList}</div>` : ""}
+
+      <div class="drawer-actions">
+        ${inc.reviewed ? "" : `<button class="btn btn-primary" id="incident-review-btn" data-id="${inc.id}">Mark Reviewed</button>`}
+      </div>`;
+
+    $("incident-drawer").hidden = false;
+    $("incident-overlay").hidden = false;
+  } catch {
+    toast("Could not load incident", true);
+  }
+}
+
+function closeIncidentDrawer() {
+  $("incident-drawer").hidden = true;
+  $("incident-overlay").hidden = true;
+}
+
+async function reviewIncident(id) {
+  try {
+    const res = await fetch("/api/incidents/review", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: Number(id) }),
+    });
+    if (res.status === 401) { location.replace("/login"); return; }
+    if (res.ok) { toast("Incident marked reviewed"); closeIncidentDrawer(); loadIncidents(); refreshShield(); }
+  } catch { toast("Could not update incident", true); }
+}
+
+/* ---------- daily brief ---------- */
+
+async function openDailyBrief() {
+  $("daily-overlay").hidden = false;
+  $("daily-modal").hidden = false;
+  $("daily-body").innerHTML = '<div class="ai-skipped-note">Asking the AI to summarize the last 24 hours…</div>';
+  try {
+    const d = await api("/api/daily");
+    const c = d.counts;
+    const tiles = [
+      ["Events", c.total], ["High / Critical", c.high_critical],
+      ["USB connected", c.usb_connected], ["New startup items", c.startup_added],
+      ["Away sessions", c.away_sessions], ["Tamper attempts", c.tamper_attempts],
+    ];
+    const topRows = d.top_events.length
+      ? d.top_events.map((e) => `
+          <button class="related-row" data-jump="${e.id}" style="--sev-color: var(--sev-${e.severity})">
+            <span class="related-delta">${new Date(e.timestamp * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+            <span class="badge badge-${e.severity}">${e.severity}</span>
+            <span class="related-summary">${escapeHtml(e.summary)}</span>
+          </button>`).join("")
+      : '<div class="ai-skipped-note">No high or critical events in the last 24 hours.</div>';
+    $("daily-body").innerHTML = `
+      <div class="daily-tiles">
+        ${tiles.map(([l, v]) => `<div class="stat-tile"><span class="stat-label">${l}</span>
+          <span class="stat-value ${l === "Tamper attempts" && v > 0 ? "alert" : ""}">${v}</span></div>`).join("")}
+      </div>
+      <div class="drawer-section-label">Overview</div>
+      <div class="explanation">${renderMarkdownLite(d.summary)}</div>
+      <div class="drawer-section-label">Highlights</div>
+      <div class="related-list" id="daily-highlights">${topRows}</div>`;
+  } catch {
+    $("daily-body").innerHTML = '<div class="ai-skipped-note">Could not load the daily brief.</div>';
+  }
+}
+
+function closeDailyBrief() {
+  $("daily-overlay").hidden = true;
+  $("daily-modal").hidden = true;
+}
+
+/* ---------- trust learning ---------- */
+
+/* "Always trust" from the event drawer: teaches the rule engine to skip the
+   AI call for this signer/device next time (core/rule_engine.py). Only offered
+   for events where a stable identifier exists. */
+function trustTargetFor(ev, details) {
+  if (ev.source === "process") {
+    if (details.sha256) return { kind: "process_hashes", value: details.sha256, label: "this exact binary (by hash)" };
+    const name = details.image_name || details.name;
+    if (name) return { kind: "process_names", value: name, label: `all processes named "${name}"` };
+  }
+  if (ev.source === "usb") {
+    const id = details.device_id || details.serial_num;
+    if (id) return { kind: "usb_ids", value: id, label: "this USB device" };
+  }
+  return null;
+}
+
+async function addTrust(kind, value, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Trusting…"; }
+  try {
+    const res = await fetch("/api/trust/add", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind, value }),
+    });
+    if (res.status === 401) { location.replace("/login"); return; }
+    const data = await res.json();
+    if (!res.ok) { toast(data.error || "Could not add trust", true); if (btn) { btn.disabled = false; } return; }
+    toast("Added to Trust List — future matches skip the AI call");
+    settingsLoaded = false;   // force settings reload so the new entry shows
+    if (btn) { btn.textContent = "Trusted ✓"; }
+  } catch {
+    toast("Could not add trust — server unreachable", true);
+    if (btn) { btn.disabled = false; }
+  }
+}
+
 /* ---------- wiring ---------- */
 
 function bind() {
@@ -1108,6 +1374,8 @@ function bind() {
     const row = e.target.closest(".related-row");
     if (row) { openDrawer(Number(row.dataset.id)); return; }
     if (e.target.closest("#drawer-report-btn")) reportEventWindow();
+    const trustBtn = e.target.closest("#drawer-trust-btn");
+    if (trustBtn) addTrust(trustBtn.dataset.kind, trustBtn.dataset.value, trustBtn);
   });
   $("load-older").addEventListener("click", loadOlder);
 
@@ -1131,6 +1399,28 @@ function bind() {
 
   $("monitor-toggle").addEventListener("click", toggleMonitor);
   $("monitor-log-btn").addEventListener("click", openLogModal);
+
+  // daily brief
+  $("daily-brief-btn").addEventListener("click", openDailyBrief);
+  $("daily-modal-close").addEventListener("click", closeDailyBrief);
+  $("daily-overlay").addEventListener("click", closeDailyBrief);
+  $("daily-body").addEventListener("click", (e) => {
+    const jump = e.target.closest("[data-jump]");
+    if (jump) { closeDailyBrief(); switchView("console"); openDrawer(Number(jump.dataset.jump)); }
+  });
+
+  // incidents
+  $("shield").addEventListener("click", () => switchView("incidents"));
+  $("incidents-list").addEventListener("click", (e) => {
+    const card = e.target.closest(".incident-card");
+    if (card) openIncident(Number(card.dataset.id));
+  });
+  $("incident-drawer-close").addEventListener("click", closeIncidentDrawer);
+  $("incident-overlay").addEventListener("click", closeIncidentDrawer);
+  $("incident-drawer-body").addEventListener("click", (e) => {
+    const btn = e.target.closest("#incident-review-btn");
+    if (btn) reviewIncident(btn.dataset.id);
+  });
   $("log-modal-close").addEventListener("click", closeLogModal);
   $("log-overlay").addEventListener("click", closeLogModal);
   $("log-refresh").addEventListener("click", refreshLogModal);
@@ -1145,7 +1435,7 @@ function bind() {
   $("report-generate").addEventListener("click", generateReport);
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { closeDrawer(); closeLogModal(); closeReportModal(); }
+    if (e.key === "Escape") { closeDrawer(); closeLogModal(); closeReportModal(); closeDailyBrief(); closeIncidentDrawer(); }
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "");
     if (e.key === "/" && !typing && !$("view-console").hidden) {
       e.preventDefault();
@@ -1160,6 +1450,7 @@ async function init() {
   buildThemePicker();
   try { renderStats(await api("/api/stats")); } catch { setConsoleReachable(false); }
   await refreshMonitorStatus();
+  refreshShield();
   await reload();
   state.pollTimer = setInterval(poll, POLL_MS);
   setInterval(refreshAgingSummaries, 2000);

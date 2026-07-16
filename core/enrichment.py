@@ -270,7 +270,7 @@ if __name__ == "__main__":
     trimmed = _trim_vt_response(canned, "ab" * 32)
     assert trimmed["detections"] == 48 and trimmed["engines_total"] == 72
     assert trimmed["family"] == "trojan.lumma" and trimmed["status"] == "known"
-    assert trimmed["first_seen_utc"] == "2026-07-10"
+    assert trimmed["first_seen_utc"] == "2025-07-10"  # 1752105600 = 2025-07-10T00:00:00Z
     assert _trim_vt_response({}, "ab" * 32)["detections"] == 0  # malformed reply never raises
 
     # --- MITRE mapping

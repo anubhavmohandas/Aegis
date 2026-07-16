@@ -73,6 +73,34 @@ Be honest about uncertainty and never claim to be an antivirus or threat-intel s
 summarizing locally-computed severity heuristics and prior AI explanations, not issuing a \
 verdict. Keep the whole thing under 180 words. Plain English, no jargon."""
 
+AWAY_SYSTEM_PROMPT = """You are briefing a computer's owner on what happened WHILE THEY WERE AWAY \
+(the screen was locked). You will be given how long they were away and the list of system events \
+that occurred during that window, in time order.
+
+Write a short briefing, plain text (no markdown headers, may use "- " bullets):
+
+Start with one sentence: how long they were away and the overall activity level.
+Then, if anything is worth their attention (a USB device connected, an app installed, a new \
+startup item, an executable run from Downloads/Temp, files deleted), call it out as a short \
+bulleted story in the order it happened. If nothing rises above routine background activity, say \
+so plainly and reassuringly instead of inventing concern.
+End with one line: whether any of it deserves a closer look, and if so, the single most useful \
+next step.
+
+You are summarizing locally-detected events, not issuing a security verdict, and you are not an \
+antivirus. Under 160 words. If there were no events at all, just say the machine was quiet."""
+
+INCIDENT_SYSTEM_PROMPT = """You are writing a one-paragraph incident summary for a personal \
+security tool's owner. Someone made repeated failed attempts to perform a protected action (such \
+as stopping monitoring) on the owner's computer, and the tool captured evidence in response.
+
+You will be given the incident reason, the number of failed attempts, which evidence artifacts \
+were captured, the active application at capture time, and recent process/network context.
+
+Write ONE short factual paragraph (under 90 words): what happened, what was captured, and -- only \
+if the context genuinely warrants it -- one calm next step for the owner. State only what the \
+provided facts support; do not speculate about who it was or their intent. Plain English."""
+
 
 class AIExplainer:
     def __init__(self, config: AppConfig):
@@ -161,42 +189,48 @@ class AIExplainer:
         )
         return self._nonempty(resp.choices[0].message.content, event_summary)
 
-    def summarize_period(self, stats_block: str) -> str:
-        """Executive-summary narrative for the PDF activity report (see
-        core/report_generator.py). Same client/provider as explain(), a
-        different system prompt -- this is summarizing a whole time window
-        of already-computed stats and prior explanations, not a single
-        event."""
+    def _summarize(self, system_prompt: str, user_block: str, fallback: str,
+                   max_tokens: int = 400) -> str:
+        """Shared narrative path for every whole-window summary (period
+        report, away-session recap, incident). Same client/provider
+        resolution and same never-surface-the-raw-exception rule as
+        explain(); only the system prompt and the input block differ."""
         if not self.config.api_key:
-            return (f"[No AI summary -- {self.config.ai_api_key_env} is not set] "
-                     f"See the event table below for the raw activity.")
+            return f"[No AI summary -- {self.config.ai_api_key_env} is not set] {fallback}"
         try:
+            client = self._get_client()
             if self.config.ai_provider == "anthropic":
-                client = self._get_client()
                 resp = client.messages.create(
-                    model=self.config.ai_model,
-                    max_tokens=400,
-                    temperature=self.config.ai_temperature,
-                    system=REPORT_SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": stats_block}],
+                    model=self.config.ai_model, max_tokens=max_tokens,
+                    temperature=self.config.ai_temperature, system=system_prompt,
+                    messages=[{"role": "user", "content": user_block}],
                 )
                 text = resp.content[0].text if resp.content else None
-                return self._nonempty(text, "see the event table below")
-            else:
-                client = self._get_client()
-                resp = client.chat.completions.create(
-                    model=self.config.ai_model,
-                    max_tokens=400,
-                    temperature=self.config.ai_temperature,
-                    messages=[
-                        {"role": "system", "content": REPORT_SYSTEM_PROMPT},
-                        {"role": "user", "content": stats_block},
-                    ],
-                )
-                return self._nonempty(resp.choices[0].message.content, "see the event table below")
+                return self._nonempty(text, fallback)
+            resp = client.chat.completions.create(
+                model=self.config.ai_model, max_tokens=max_tokens,
+                temperature=self.config.ai_temperature,
+                messages=[{"role": "system", "content": system_prompt},
+                          {"role": "user", "content": user_block}],
+            )
+            return self._nonempty(resp.choices[0].message.content, fallback)
         except Exception as e:
-            # Same rationale as explain(): never surface the raw exception
-            # text (may echo keys/URLs) into a document that gets exported
-            # and shared. The report still ships with its stats/table.
-            logger.error("AI period summary failed: %s", e)
-            return "[AI summary unavailable -- see logs] The stats and event table below are unaffected."
+            logger.error("AI summary failed (%s): %s", system_prompt[:32], e)
+            return f"[AI summary unavailable -- see logs] {fallback}"
+
+    def summarize_period(self, stats_block: str) -> str:
+        """Executive-summary narrative for the PDF activity report (see
+        core/report_generator.py)."""
+        return self._summarize(REPORT_SYSTEM_PROMPT, stats_block,
+                               "The stats and event table below are unaffected.")
+
+    def summarize_away(self, away_block: str) -> str:
+        """Plain-English recap of what happened while the screen was locked
+        (see core/dispatcher._attach_away_recap)."""
+        return self._summarize(AWAY_SYSTEM_PROMPT, away_block,
+                               "See the timeline for what happened while you were away.", max_tokens=350)
+
+    def summarize_incident(self, incident_block: str) -> str:
+        """One-paragraph tamper-incident summary (see core/evidence.py)."""
+        return self._summarize(INCIDENT_SYSTEM_PROMPT, incident_block,
+                               "See the incident record for the captured evidence.", max_tokens=250)

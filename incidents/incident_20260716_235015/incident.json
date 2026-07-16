@@ -1,0 +1,145 @@
+{
+  "timestamp": 1784226015.513885,
+  "reason": "unauthorized attempt: stop_monitoring",
+  "attempts": 2,
+  "username": "anubhavmohandas",
+  "hostname": "Anubhavs-MacBook-Pro.local",
+  "artifacts": {},
+  "context": {
+    "public_ip": null,
+    "local_ips": [
+      "172.20.10.4"
+    ],
+    "active_window": "Code",
+    "recent_processes": [
+      {
+        "pid": 13592,
+        "name": "Python",
+        "username": "anubhavmohandas",
+        "started": "23:50:14"
+      },
+      {
+        "pid": 13590,
+        "name": "zsh",
+        "username": "anubhavmohandas",
+        "started": "23:50:14"
+      },
+      {
+        "pid": 13589,
+        "name": "mdworker_shared",
+        "username": "anubhavmohandas",
+        "started": "23:50:13"
+      },
+      {
+        "pid": 13189,
+        "name": "managedappdistributionagent",
+        "username": "anubhavmohandas",
+        "started": "23:48:56"
+      },
+      {
+        "pid": 13145,
+        "name": "Code Helper (Plugin)",
+        "username": "anubhavmohandas",
+        "started": "23:48:47"
+      },
+      {
+        "pid": 12982,
+        "name": "FolderActionsDispatcher",
+        "username": "anubhavmohandas",
+        "started": "23:48:47"
+      },
+      {
+        "pid": 12888,
+        "name": "System Events",
+        "username": "anubhavmohandas",
+        "started": "23:48:47"
+      },
+      {
+        "pid": 12885,
+        "name": "claude",
+        "username": "anubhavmohandas",
+        "started": "23:48:47"
+      },
+      {
+        "pid": 12817,
+        "name": "mdworker_shared",
+        "username": "anubhavmohandas",
+        "started": "23:48:47"
+      },
+      {
+        "pid": 12816,
+        "name": "mdworker_shared",
+        "username": "anubhavmohandas",
+        "started": "23:48:47"
+      },
+      {
+        "pid": 12815,
+        "name": "mdworker_shared",
+        "username": "anubhavmohandas",
+        "started": "23:48:47"
+      },
+      {
+        "pid": 12814,
+        "name": "zsh",
+        "username": "anubhavmohandas",
+        "started": "23:48:47"
+      },
+      {
+        "pid": 12771,
+        "name": "pet",
+        "username": "anubhavmohandas",
+        "started": "23:48:46"
+      },
+      {
+        "pid": 12534,
+        "name": "Code Helper (Plugin)",
+        "username": "anubhavmohandas",
+        "started": "23:48:46"
+      },
+      {
+        "pid": 12410,
+        "name": "VTDecoderXPCService",
+        "username": "anubhavmohandas",
+        "started": "23:48:12"
+      },
+      {
+        "pid": 12409,
+        "name": "com.apple.audio.SandboxHelper",
+        "username": "anubhavmohandas",
+        "started": "23:48:12"
+      },
+      {
+        "pid": 12407,
+        "name": "MTLCompilerService",
+        "username": "anubhavmohandas",
+        "started": "23:48:12"
+      },
+      {
+        "pid": 12406,
+        "name": "MTLCompilerService",
+        "username": "anubhavmohandas",
+        "started": "23:48:12"
+      },
+      {
+        "pid": 12405,
+        "name": "QuickLookUIService",
+        "username": "anubhavmohandas",
+        "started": "23:48:10"
+      },
+      {
+        "pid": 12404,
+        "name": "com.apple.appkit.xpc.openAndSavePanelService",
+        "username": "anubhavmohandas",
+        "started": "23:48:10"
+      }
+    ],
+    "battery": {
+      "percent": 66,
+      "plugged_in": false
+    },
+    "platform": "Darwin 25.5.0",
+    "action": "stop_monitoring"
+  },
+  "ai_summary": "The user wants a one-paragraph incident summary under 90 words. Let me analyze the facts:\n\n- Incident: unauthorized attempt to stop_monitoring\n- Failed authentication attempts: 2\n- Artifacts captured: none\n- Active window: Code (VS Code)\n- Public IP: unknown\n- Recent processes: Python, zsh, mdworker_shared, managedappdistributionagent, Code Helper (Plugin), FolderActionsDispatcher, System Events, claude\n\nI need to write a factual paragraph about what happened, what was captured (nothing), and only include a next step if context genuinely warrants it.\n\nThe fact that someone tried to stop monitoring twice and failed authentication is the core incident. No artifacts were captured. The active window was Code (VS Code), and there are various development-related processes running.\n\nI should not speculate about who or intent. Just state facts.\n\nLet me draft:\n\n\"Two failed authentication attempts were made to stop monitoring while VS Code was the active application. No evidence artifacts were captured during the incident. The system showed recent development-related processes including Python, zsh, and Claude. Consider reviewing access logs and ensuring monitoring cannot be disabled without proper authentication.\"\n\nWait, that's 53 words. Let me check",
+  "id": 1
+}

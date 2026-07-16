@@ -40,6 +40,22 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_events_source ON events(source);
 CREATE INDEX IF NOT EXISTS idx_events_severity ON events(severity);
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS incidents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    reason TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    username TEXT,
+    hostname TEXT,
+    artifacts_json TEXT NOT NULL DEFAULT '{}',
+    context_json TEXT NOT NULL DEFAULT '{}',
+    ai_summary TEXT,
+    reviewed INTEGER NOT NULL DEFAULT 0
+);
 """
 
 # Additive migration for DBs created before `severity` existed -- avoids
@@ -96,6 +112,65 @@ class EventStore:
                 ).fetchall()
             cols = [d[0] for d in self._conn.execute("SELECT * FROM events LIMIT 0").description]
             return [dict(zip(cols, row)) for row in rows]
+
+    def between(self, since: float, until: float, limit: int = 500) -> list[dict]:
+        """Events inside a time window, oldest first -- the away-session recap
+        reads chronologically, like a story."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM events WHERE timestamp >= ? AND timestamp <= ? "
+                "ORDER BY timestamp, id LIMIT ?", (since, until, limit),
+            ).fetchall()
+            cols = [d[0] for d in self._conn.execute("SELECT * FROM events LIMIT 0").description]
+            return [dict(zip(cols, row)) for row in rows]
+
+    # --- meta (heartbeat & friends) --------------------------------------
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._lock:
+            self._conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+            self._conn.commit()
+
+    def get_meta(self, key: str) -> str | None:
+        with self._lock:
+            row = self._conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+            return row[0] if row else None
+
+    # --- incidents (tamper evidence) --------------------------------------
+
+    def insert_incident(self, *, reason: str, attempts: int, username: str | None,
+                        hostname: str | None, artifacts: dict, context: dict,
+                        ai_summary: str | None = None, timestamp: float | None = None) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO incidents (timestamp, reason, attempts, username, hostname, "
+                "artifacts_json, context_json, ai_summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (timestamp or time.time(), reason, attempts, username, hostname,
+                 json.dumps(artifacts), json.dumps(context), ai_summary),
+            )
+            self._conn.commit()
+            return cur.lastrowid
+
+    def list_incidents(self, limit: int = 100) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM incidents ORDER BY timestamp DESC LIMIT ?", (limit,)).fetchall()
+            cols = [d[0] for d in self._conn.execute("SELECT * FROM incidents LIMIT 0").description]
+            return [dict(zip(cols, row)) for row in rows]
+
+    def get_incident(self, incident_id: int) -> dict | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+            if row is None:
+                return None
+            cols = [d[0] for d in self._conn.execute("SELECT * FROM incidents LIMIT 0").description]
+            return dict(zip(cols, row))
+
+    def set_incident_reviewed(self, incident_id: int, reviewed: bool = True) -> None:
+        with self._lock:
+            self._conn.execute("UPDATE incidents SET reviewed = ? WHERE id = ?",
+                               (int(reviewed), incident_id))
+            self._conn.commit()
 
     def close(self):
         with self._lock:

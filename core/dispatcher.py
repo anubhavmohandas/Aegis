@@ -49,7 +49,7 @@ from .ai_explainer import AIExplainer
 from .config import AppConfig
 from .database import EventStore
 from .enrichment import ThreatEnricher
-from .events import MonitorEvent
+from .events import EventCategory, MonitorEvent
 from .notifier import notify
 from .rule_engine import RuleEngine
 from .severity_engine import SEVERITY_ORDER, SeverityEngine
@@ -61,6 +61,20 @@ logger = logging.getLogger("aegis.dispatcher")
 MAX_EVENTS_PER_MINUTE = 20
 DEDUPE_WINDOW_SECONDS = 30
 RATE_LIMIT_EXEMPT_SEVERITIES = {"high", "critical"}
+
+# Heartbeat: the dispatcher stamps "I am alive" into the DB meta table every
+# HEARTBEAT_INTERVAL. On the next startup, a last-heartbeat older than
+# GAP_THRESHOLD means Aegis wasn't running for that stretch -- a killed or
+# crashed process can't log its own death, but the missing heartbeat proves
+# the gap. The threshold is generous (well above the interval) so an ordinary
+# clean shutdown-then-restart doesn't read as a suspicious gap.
+HEARTBEAT_INTERVAL_SECONDS = 60
+HEARTBEAT_KEY = "last_heartbeat"
+GAP_THRESHOLD_SECONDS = 5 * 60
+# Bracketing an away session: the SESSION_UNLOCKED handler pulls every event
+# in the lock..unlock window for the recap. Cap so a multi-day away window
+# can't build an enormous prompt.
+AWAY_RECAP_EVENT_CAP = 300
 
 
 class Dispatcher:
@@ -77,9 +91,12 @@ class Dispatcher:
         self._minute_bucket: deque[float] = deque()
         self._stop = threading.Event()
         self._log_lock = threading.Lock()
+        self._last_heartbeat = 0.0
 
     def run_forever(self):
+        self._check_monitoring_gap()
         while not self._stop.is_set():
+            self._heartbeat()
             try:
                 event = self.in_queue.get(timeout=1)
             except Empty:
@@ -179,7 +196,13 @@ class Dispatcher:
         return True
 
     def _stage_explain_and_notify(self, event: MonitorEvent, severity: str) -> None:
-        explanation = self.explainer.explain(event, severity)
+        if event.category == EventCategory.SESSION_UNLOCKED:
+            # The "what happened while you were away" briefing IS this event's
+            # explanation -- built from the events inside the lock..unlock
+            # window, not from the unlock event alone.
+            explanation = self._away_recap(event)
+        else:
+            explanation = self.explainer.explain(event, severity)
         if not self.config.notify_enabled:
             logger.debug("notify_enabled=false -- no popup for [%s] %s", severity, event.summary)
         elif self._severity_meets_notify_floor(severity):
@@ -207,6 +230,8 @@ class Dispatcher:
             "usb": "USB device change",
             "startup": "Startup programs changed",
             "folder": "Watched folder changed",
+            "session": "Session activity",
+            "tamper": "Tamper alert",
         }.get(event.source, "System event")
         return f"{base} [{severity.upper()}]"
 
@@ -247,6 +272,70 @@ class Dispatcher:
             return False
         self._minute_bucket.append(now)
         return True
+
+    # --- away sessions + heartbeat ----------------------------------------
+
+    def _away_recap(self, event: MonitorEvent) -> str:
+        """Build the plain-English 'while you were away' briefing for an
+        unlock event, from everything that happened between lock and unlock."""
+        locked_at = event.details.get("locked_at")
+        unlocked_at = event.details.get("unlocked_at") or event.timestamp
+        if not locked_at:
+            return "Screen unlocked. No lock time was recorded, so there's no away session to summarize."
+        try:
+            window = self.store.between(locked_at, unlocked_at, limit=AWAY_RECAP_EVENT_CAP)
+        except Exception as e:
+            logger.error("Could not load away-session events: %s", e)
+            return "Screen unlocked. Could not load the events for this away session -- see the timeline."
+        # Don't narrate the lock/unlock markers themselves back to the user.
+        window = [e for e in window if e.get("source") != "session"]
+        away_min = int((unlocked_at - locked_at) // 60)
+        if not window:
+            return f"You were away about {away_min} minute(s) and the machine was quiet -- nothing was recorded."
+        lines = [f"Away for about {away_min} minute(s). Events during that time, in order:"]
+        for e in window:
+            ts = time.strftime("%H:%M:%S", time.localtime(e.get("timestamp", 0)))
+            lines.append(f"- {ts} [{e.get('severity','?')}] {e.get('summary','')}")
+        return self.explainer.summarize_away("\n".join(lines))
+
+    def _heartbeat(self) -> None:
+        now = time.time()
+        if now - self._last_heartbeat < HEARTBEAT_INTERVAL_SECONDS:
+            return
+        self._last_heartbeat = now
+        try:
+            self.store.set_meta(HEARTBEAT_KEY, str(now))
+        except Exception as e:
+            logger.debug("Heartbeat write failed: %s", e)
+
+    def _check_monitoring_gap(self) -> None:
+        """On startup, compare now against the last heartbeat. A large gap
+        means Aegis wasn't running for that stretch -- surface it as an event
+        so 'monitoring was silently off' can never look the same as 'nothing
+        happened'."""
+        try:
+            last = self.store.get_meta(HEARTBEAT_KEY)
+        except Exception as e:
+            logger.debug("Could not read last heartbeat: %s", e)
+            return
+        if not last:
+            return  # first run ever -- no prior heartbeat, so no gap to report
+        try:
+            last_ts = float(last)
+        except ValueError:
+            return
+        gap = time.time() - last_ts
+        if gap < GAP_THRESHOLD_SECONDS:
+            return
+        mins = int(gap // 60)
+        self._handle(MonitorEvent(
+            category=EventCategory.MONITORING_GAP,
+            summary=f"Monitoring was offline for about {mins} minute(s)",
+            details={"offline_from": last_ts, "offline_until": time.time(),
+                     "gap_seconds": round(gap, 1)},
+            source="session",
+            confidence="certain",
+        ))
 
     def _log_raw(self, event: MonitorEvent):
         # Every event is logged regardless of dedupe/rate-limit/AI outcome --

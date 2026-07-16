@@ -33,6 +33,7 @@ from core.config import load_config
 from core.dispatcher import Dispatcher
 from core.folder_monitor import FolderMonitor
 from core.notifier import notify
+from core.session_monitor import SessionMonitor
 from core.tray_app import TrayApp
 from core.version import __version__
 
@@ -89,10 +90,11 @@ def main(use_tray: bool = True):
 
     platform_monitors = build_platform_monitors(system, event_queue, config.poll_interval_seconds)
     folder_monitor = FolderMonitor(config.watched_folders, event_queue)
+    session_monitor = SessionMonitor(event_queue, config.poll_interval_seconds)
 
     dispatcher = Dispatcher(event_queue, config)
 
-    all_monitors = platform_monitors + [folder_monitor]
+    all_monitors = platform_monitors + [folder_monitor, session_monitor]
     for m in all_monitors:
         m.start()
 
