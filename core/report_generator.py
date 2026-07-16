@@ -137,7 +137,9 @@ def _summary_prompt_block(events: list[dict], stats: dict, range_label: str) -> 
         f"Report period: {range_label}",
         f"Total events: {stats['total']}",
         "By severity: " + ", ".join(f"{k}={stats['by_severity'].get(k, 0)}" for k in SEVERITY_ORDER),
-        "By source: " + ", ".join(f"{SOURCE_LABELS.get(k, k)}={v}" for k, v in stats["by_source"].items()) or "none",
+        # Parenthesized so `or "none"` applies to the join, not the whole
+        # concatenation (which is always truthy -- the fallback never fired).
+        "By source: " + (", ".join(f"{SOURCE_LABELS.get(k, k)}={v}" for k, v in stats["by_source"].items()) or "none"),
         "",
         "Highest-severity events in this period (subset):",
     ]

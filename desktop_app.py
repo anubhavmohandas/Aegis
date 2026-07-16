@@ -137,9 +137,17 @@ def _wire_monitor_log() -> None:
     wrote to it at all: logging.basicConfig below only attaches a console
     StreamHandler, invisible once packaged (no terminal). Confirmed bug: the
     Log modal always showed "(log is empty)" for the desktop app specifically.
-    Adding a FileHandler at the same path both processes agree on fixes it."""
+    Adding a FileHandler at the same path both processes agree on fixes it.
+
+    Rotating, not plain: this app is designed to sit resident for weeks, the
+    root logger writes every INFO line here, and nothing ever truncated the
+    file -- unbounded growth, plus monitor_log_tail() reads the WHOLE file
+    into memory on every click of the dashboard's Log button. 5MB x 2 backups
+    keeps a useful history while capping both costs."""
+    from logging.handlers import RotatingFileHandler
     MONITOR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    handler = logging.FileHandler(MONITOR_LOG_PATH, encoding="utf-8")
+    handler = RotatingFileHandler(MONITOR_LOG_PATH, encoding="utf-8",
+                                  maxBytes=5 * 1024 * 1024, backupCount=2)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     logging.getLogger().addHandler(handler)
 

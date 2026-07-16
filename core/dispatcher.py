@@ -76,7 +76,19 @@ class Dispatcher:
                 event = self.in_queue.get(timeout=1)
             except Empty:
                 continue
-            self._handle(event)
+            # One bad event must never kill this thread: it's the single
+            # consumer of every collector's queue, it runs as a daemon, and
+            # its death has no visible symptom -- the monitors keep queueing
+            # into a queue nobody drains while the app looks healthy. That
+            # "silently stops monitoring while looking fine" failure mode is
+            # the exact thing every collector in this codebase already guards
+            # its own threads against; the central loop was the one place
+            # still missing the guard.
+            try:
+                self._handle(event)
+            except Exception:
+                logger.exception("Unhandled error dispatching event %r -- "
+                                 "event skipped, dispatcher still running", event.summary)
 
     def stop(self):
         self._stop.set()
@@ -226,9 +238,16 @@ class Dispatcher:
     def _log_raw(self, event: MonitorEvent):
         # Every event is logged regardless of dedupe/rate-limit/AI outcome --
         # the AI layer can fail or be throttled, the audit trail should not be.
-        with self._log_lock:
-            with open(self.config.log_path, "a", encoding="utf-8") as f:
-                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | {event.source} | {event.summary}\n")
+        # A failed write (disk full, permissions, log dir deleted) must not
+        # abort the rest of the pipeline for this event: SQLite (_persist) is
+        # the redundant second trail, same reasoning as _persist's own guard
+        # in the other direction.
+        try:
+            with self._log_lock:
+                with open(self.config.log_path, "a", encoding="utf-8") as f:
+                    f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | {event.source} | {event.summary}\n")
+        except OSError as e:
+            logger.error("Failed to append to the flat event log %s: %s", self.config.log_path, e)
 
     def _persist(self, event: MonitorEvent, severity: str, explanation: str | None, ai_skipped: bool,
                  risk_hint: str | None = None):

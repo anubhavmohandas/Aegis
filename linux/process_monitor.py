@@ -75,9 +75,11 @@ class LinuxProcessMonitor:
                 proc = current[pid]
                 try:
                     info = proc.info
-                    name = info.get("name", "unknown")
-                    exe = info.get("exe", "unknown") or "unknown"
-                    ppid = info.get("ppid", "unknown")
+                    # psutil fills inaccessible attrs with None, not a missing
+                    # key -- `or` on all three keeps None out of details/summary.
+                    name = info.get("name") or "unknown"
+                    exe = info.get("exe") or "unknown"
+                    ppid = info.get("ppid") or "unknown"
                 except Exception:
                     name, exe, ppid = "unknown", "unknown", "unknown"
 

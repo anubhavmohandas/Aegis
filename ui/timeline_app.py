@@ -23,6 +23,7 @@ import argparse
 import json
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -30,7 +31,15 @@ from PySide6.QtWidgets import (
     QLabel, QListWidget, QListWidgetItem, QComboBox, QPushButton, QFrame,
 )
 
-from core.database import EventStore
+# `python ui/timeline_app.py` (this file's own documented invocation) puts
+# ui/ -- not the repo root -- at sys.path[0], so `import core.*` failed with
+# ModuleNotFoundError unless this happened to be imported as a module from
+# the root instead. Same fix dashboard/server.py already carries.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from core.database import EventStore  # noqa: E402 -- needs REPO_ROOT on sys.path first
 
 RISK_COLORS = {
     "certain": "#2e7d32",     # green-ish: high-confidence detection

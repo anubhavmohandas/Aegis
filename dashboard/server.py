@@ -293,34 +293,70 @@ SETTINGS_HEADER = (
 VALID_PROVIDERS = {"openai-compatible", "anthropic"}
 
 
+def _lenient_float(value, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _lenient_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _lenient_str_list(value) -> list[str]:
+    # Same failure shape core/config.py's _parse_str_list guards against: a
+    # YAML scalar (`watched_folders: ~/Desktop`) parses as a plain string, and
+    # returning that to the frontend breaks the whole Settings page (app.js
+    # calls .join() on it). Anything non-list degrades to [].
+    return [str(v) for v in value] if isinstance(value, list) else []
+
+
 def read_settings() -> dict:
+    # Lenient parsing throughout: this config file can be hand-edited (the
+    # from-source flow documents exactly that), and a typo like
+    # `poll_interval_seconds: "3s"` used to raise out of this function and
+    # 500 the settings API -- the Settings page just said "Could not load
+    # settings" until the yaml was fixed blind. core/config.py already
+    # degrades these same fields to defaults with a warning; mirror that here
+    # so the UI stays usable and shows what the monitors would actually use.
     import yaml
     raw = {}
     if CONFIG_PATH.is_file():
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            raw = yaml.safe_load(f) or {}
-    ai = raw.get("ai") or {}
-    api_key_env = ai.get("api_key_env", "NVIDIA_API_KEY")
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                raw = yaml.safe_load(f) or {}
+        except yaml.YAMLError:
+            raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+    ai = raw.get("ai")
+    if not isinstance(ai, dict):
+        ai = {}
+    api_key_env = str(ai.get("api_key_env", "NVIDIA_API_KEY"))
     key = _resolve_api_key(api_key_env)
     return {
         "ai": {
-            "provider": ai.get("provider", "openai-compatible"),
-            "base_url": ai.get("base_url", "https://integrate.api.nvidia.com/v1"),
+            "provider": str(ai.get("provider", "openai-compatible")),
+            "base_url": str(ai.get("base_url", "https://integrate.api.nvidia.com/v1")),
             "api_key_env": api_key_env,
-            "model": ai.get("model", "nvidia/nemotron-3-ultra-550b-a55b"),
-            "temperature": float(ai.get("temperature", 0.2)),
+            "model": str(ai.get("model", "nvidia/nemotron-3-ultra-550b-a55b")),
+            "temperature": _lenient_float(ai.get("temperature", 0.2), 0.2),
             # the key itself never leaves the server -- only whether one exists
             "api_key_set": bool(key),
             "api_key_hint": f"····{key[-4:]}" if key and len(key) >= 8 else ("set" if key else ""),
         },
-        "watched_folders": raw.get("watched_folders") or [],
-        "poll_interval_seconds": int(raw.get("poll_interval_seconds", 3)),
+        "watched_folders": _lenient_str_list(raw.get("watched_folders")),
+        "poll_interval_seconds": _lenient_int(raw.get("poll_interval_seconds", 3), 3),
         "notify_enabled": bool(raw.get("notify_enabled", False)),
         "notify_on_startup_scan": bool(raw.get("notify_on_startup_scan", True)),
-        "notify_min_severity": raw.get("notify_min_severity", "low"),
-        "trusted_process_names": raw.get("trusted_process_names") or [],
-        "trusted_process_hashes": raw.get("trusted_process_hashes") or [],
-        "trusted_usb_ids": raw.get("trusted_usb_ids") or [],
+        "notify_min_severity": str(raw.get("notify_min_severity", "low")),
+        "trusted_process_names": _lenient_str_list(raw.get("trusted_process_names")),
+        "trusted_process_hashes": _lenient_str_list(raw.get("trusted_process_hashes")),
+        "trusted_usb_ids": _lenient_str_list(raw.get("trusted_usb_ids")),
         "config_path": str(CONFIG_PATH),
     }
 
@@ -422,9 +458,12 @@ def _passthrough(key: str) -> str:
     """Keep yaml keys the settings UI doesn't manage (log/db paths) intact."""
     import yaml
     if CONFIG_PATH.is_file():
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            raw = yaml.safe_load(f) or {}
-        value = raw.get(key)
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                raw = yaml.safe_load(f) or {}
+        except yaml.YAMLError:
+            raw = {}
+        value = raw.get(key) if isinstance(raw, dict) else None
         if value:
             return str(value)
     return {"log_path": "events.log", "db_path": "aegis_events.db"}[key]

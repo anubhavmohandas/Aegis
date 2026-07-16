@@ -27,7 +27,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-def _import_smoke() -> None:
+def _import_smoke(include_timeline: bool = True) -> None:
     modules = [
         "core.version",
         "core.config",
@@ -36,8 +36,13 @@ def _import_smoke() -> None:
         "dashboard.server",
         "desktop_app",
         "main",
-        "ui.timeline_app",
     ]
+    if include_timeline:
+        # ui.timeline_app imports PySide6 at module level -- environments that
+        # pass --skip-timeline (because Qt isn't installed/wanted there) must
+        # not have the import smoke fail on the exact dependency the flag
+        # exists to avoid.
+        modules.append("ui.timeline_app")
     for module in modules:
         importlib.import_module(module)
 
@@ -103,7 +108,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        _import_smoke()
+        _import_smoke(include_timeline=not args.skip_timeline)
         print("import_smoke_ok")
 
         port = args.port if args.port else _pick_free_port(args.host)

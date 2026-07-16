@@ -76,11 +76,15 @@ public release.
 - ✅ Packaging: `pyinstaller packaging/aegis.spec` — macOS `.app`/`.dmg` built
   and smoke-run on real hardware; CI workflow builds both platforms
   ([`packaging/PACKAGING.md`](packaging/PACKAGING.md))
-- ✅ Windows validation, from source, on real hardware — process/USB/startup
-  monitoring confirmed working via the WMI polling fallback. Real-time ETW
-  was attempted and is blocked inside a third-party library's delivery path
-  (not Aegis's own code); parked in favor of the working WMI fallback rather
-  than shipping unverified ETW (see [`docs/DECISIONS.md`](docs/DECISIONS.md))
+- 🔶 Windows validation, from source, on real hardware — **partial**: the
+  standalone ETW probe ran and proved the trace session starts but the
+  third-party library's delivery path never invokes the callback (not
+  Aegis's own code; see [`docs/DECISIONS.md`](docs/DECISIONS.md)). The app
+  now detects that zero-event state and automatically falls back to WMI
+  polling, but that fallback path has not itself been re-run on real
+  Windows hardware since being fixed — treat Windows process monitoring as
+  implemented-with-fallback, not confirmed working, until the next
+  on-hardware run
 - 🔲 Windows **packaged build**, installer, and self-update — implemented,
   not yet run on real Windows hardware
   ([`TEST_REPORT_TEMPLATE.md`](TEST_REPORT_TEMPLATE.md))

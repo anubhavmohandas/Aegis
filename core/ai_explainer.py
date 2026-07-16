@@ -88,9 +88,9 @@ class AIExplainer:
         prompt = event.as_prompt_block() + f"\nLocally-computed severity: {severity}"
         try:
             if self.config.ai_provider == "anthropic":
-                return self._explain_anthropic(prompt)
+                return self._explain_anthropic(prompt, event.summary)
             else:
-                return self._explain_openai_compatible(prompt)
+                return self._explain_openai_compatible(prompt, event.summary)
         except Exception as e:
             # Never let an AI/network failure crash the monitor loop -- fall back
             # to the raw event so the user still gets *something* useful.
@@ -105,7 +105,20 @@ class AIExplainer:
             logger.error("AI explainer failed for event %r: %s", event.summary, e)
             return f"[AI explainer unavailable -- see logs] Raw event: {event.summary}"
 
-    def _explain_anthropic(self, prompt: str) -> str:
+    @staticmethod
+    def _nonempty(text, fallback_summary: str) -> str:
+        # An OpenAI-compatible endpoint can legally return `content: null`
+        # (e.g. a refusal or a filtered response), and Anthropic can return an
+        # empty content list -- neither raises, so explain()'s except clause
+        # never sees them. A None explanation used to flow straight into
+        # notify() (where len(None) raised) and into the timeline as an empty
+        # explanation. Coerce to the same style of honest fallback string that
+        # actual API errors already produce.
+        if text:
+            return text
+        return f"[AI returned an empty response] Raw event: {fallback_summary}"
+
+    def _explain_anthropic(self, prompt: str, event_summary: str) -> str:
         client = self._get_client()
         resp = client.messages.create(
             model=self.config.ai_model,
@@ -114,9 +127,10 @@ class AIExplainer:
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
-        return resp.content[0].text
+        text = resp.content[0].text if resp.content else None
+        return self._nonempty(text, event_summary)
 
-    def _explain_openai_compatible(self, prompt: str) -> str:
+    def _explain_openai_compatible(self, prompt: str, event_summary: str) -> str:
         client = self._get_client()
         resp = client.chat.completions.create(
             model=self.config.ai_model,
@@ -127,7 +141,7 @@ class AIExplainer:
                 {"role": "user", "content": prompt},
             ],
         )
-        return resp.choices[0].message.content
+        return self._nonempty(resp.choices[0].message.content, event_summary)
 
     def summarize_period(self, stats_block: str) -> str:
         """Executive-summary narrative for the PDF activity report (see
@@ -148,7 +162,8 @@ class AIExplainer:
                     system=REPORT_SYSTEM_PROMPT,
                     messages=[{"role": "user", "content": stats_block}],
                 )
-                return resp.content[0].text
+                text = resp.content[0].text if resp.content else None
+                return self._nonempty(text, "see the event table below")
             else:
                 client = self._get_client()
                 resp = client.chat.completions.create(
@@ -160,7 +175,7 @@ class AIExplainer:
                         {"role": "user", "content": stats_block},
                     ],
                 )
-                return resp.choices[0].message.content
+                return self._nonempty(resp.choices[0].message.content, "see the event table below")
         except Exception as e:
             # Same rationale as explain(): never surface the raw exception
             # text (may echo keys/URLs) into a document that gets exported
