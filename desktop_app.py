@@ -121,13 +121,44 @@ def _server_already_running(host: str, port: int) -> bool:
 _menubar_refs: list = []
 
 
-def _add_macos_menubar(window, on_quit):
+def _prompt_stop_password_macos(AppKit) -> str | None:
+    """Native secure-input dialog for the tray 'Stop Monitoring' action, so the
+    tamper password gate is honored from the menu bar too (not just the web UI).
+    Runs on the main thread (menu actions already are). Returns the entered
+    password, or None if cancelled."""
+    alert = AppKit.NSAlert.alloc().init()
+    alert.setMessageText_("Stop Monitoring")
+    alert.setInformativeText_("Enter the dashboard password to stop monitoring.")
+    field = AppKit.NSSecureTextField.alloc().initWithFrame_(((0.0, 0.0), (240.0, 24.0)))
+    alert.setAccessoryView_(field)
+    alert.addButtonWithTitle_("Stop")
+    alert.addButtonWithTitle_("Cancel")
+    if alert.runModal() == AppKit.NSAlertFirstButtonReturn:
+        return str(field.stringValue())
+    return None
+
+
+def _info_alert_macos(AppKit, title: str, message: str) -> None:
+    alert = AppKit.NSAlert.alloc().init()
+    alert.setMessageText_(title)
+    alert.setInformativeText_(message)
+    alert.addButtonWithTitle_("OK")
+    alert.runModal()
+
+
+def _add_macos_menubar(window, pipeline, config, on_quit):
     """Add a native macOS menu-bar (status bar) item so Aegis has a persistent
     presence even when the window is closed/behind others -- this is the 'tray'
     for the desktop app. pywebview owns the Cocoa main run loop, so a separate
     pystray thread can't run here; NSStatusItem lives inside that same run loop
-    instead. Entirely best-effort: any failure just means no menu-bar icon, the
-    app runs exactly as before (same contract as _darken_titlebar)."""
+    instead.
+
+    MUST build on the main thread: NSStatusItem instantiates an NSWindow
+    internally, and Cocoa raises 'NSWindow should only be instantiated on the
+    main thread' otherwise. pywebview fires the `shown` event on a BACKGROUND
+    thread, so we hop to the main operation queue to do the actual work.
+    Entirely best-effort: any failure just means no menu-bar icon, the app runs
+    exactly as before (same contract as _darken_titlebar)."""
     if sys.platform != "darwin":
         return
     try:
@@ -142,6 +173,36 @@ def _add_macos_menubar(window, on_quit):
                 except Exception:
                     logger.debug("menu-bar Open failed", exc_info=True)
 
+            def startMonitoring_(self, _sender):
+                try:
+                    pipeline.start()   # start is not password-gated
+                    _info_alert_macos(AppKit, "Aegis", "Monitoring started.")
+                except Exception:
+                    logger.warning("Tray start failed", exc_info=True)
+
+            def stopMonitoring_(self, _sender):
+                # Honor the tamper gate: stopping requires the dashboard password
+                # (with lockout + evidence capture), exactly like the web UI.
+                try:
+                    if not pipeline.running:
+                        _info_alert_macos(AppKit, "Aegis", "Monitoring is already stopped.")
+                        return
+                    from dashboard.server import guard_protected_action
+                    pw = _prompt_stop_password_macos(AppKit)
+                    if pw is None:
+                        return   # cancelled
+                    result = guard_protected_action("stop_monitoring", pw)
+                    if result.get("error"):
+                        note = result["error"]
+                        if result.get("evidence_captured"):
+                            note += f"\nEvidence captured (incident #{result.get('incident_id')})."
+                        _info_alert_macos(AppKit, "Stop blocked", note)
+                        return
+                    pipeline.stop()
+                    _info_alert_macos(AppKit, "Aegis", "Monitoring stopped.")
+                except Exception:
+                    logger.warning("Tray stop failed", exc_info=True)
+
             def quitAegis_(self, _sender):
                 on_quit()
                 try:
@@ -149,33 +210,70 @@ def _add_macos_menubar(window, on_quit):
                 except Exception:
                     os._exit(0)
 
-        target = _AegisMenuTarget.alloc().init()
-        status_item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(
-            AppKit.NSVariableStatusItemLength)
+        def _build_on_main():
+            try:
+                target = _AegisMenuTarget.alloc().init()
+                status_item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(
+                    AppKit.NSVariableStatusItemLength)
 
-        button = status_item.button()
-        if APP_ICON.is_file():
-            img = AppKit.NSImage.alloc().initByReferencingFile_(str(APP_ICON))
-            img.setSize_((18.0, 18.0))  # pyobjc bridges NSSize from a 2-tuple
-            img.setTemplate_(True)  # let macOS tint it for light/dark menu bars
-            button.setImage_(img)
-        else:
-            button.setTitle_("Aegis")
+                button = status_item.button()
+                if APP_ICON.is_file():
+                    img = AppKit.NSImage.alloc().initByReferencingFile_(str(APP_ICON))
+                    img.setSize_((18.0, 18.0))  # pyobjc bridges NSSize from a 2-tuple
+                    # NOT a template: the Aegis mark is a full-color logo, and
+                    # template mode would flatten it to a solid white/black
+                    # silhouette (the "white square" bug). Show the real colors.
+                    img.setTemplate_(False)
+                    button.setImage_(img)
+                else:
+                    button.setTitle_("Aegis")
 
-        menu = AppKit.NSMenu.alloc().init()
-        # pyobjc maps the "openAegis:" selector to the target's openAegis_ method.
-        for title, selector in (("Open Aegis", "openAegis:"), ("Quit Aegis", "quitAegis:")):
-            mi = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, selector, "")
-            mi.setTarget_(target)
-            menu.addItem_(mi)
-        status_item.setMenu_(menu)
+                menu = AppKit.NSMenu.alloc().init()
+                items = [
+                    ("Open Aegis", "openAegis:"),
+                    (None, None),                       # separator
+                    ("Start Monitoring", "startMonitoring:"),
+                    ("Stop Monitoring", "stopMonitoring:"),
+                    (None, None),
+                    ("Quit Aegis", "quitAegis:"),
+                ]
+                for title, selector in items:
+                    if title is None:
+                        menu.addItem_(AppKit.NSMenuItem.separatorItem())
+                        continue
+                    mi = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, selector, "")
+                    mi.setTarget_(target)
+                    menu.addItem_(mi)
+                status_item.setMenu_(menu)
 
-        _menubar_refs.extend([target, status_item])
-        logger.info("macOS menu-bar item added")
+                _menubar_refs.extend([target, status_item])
+                logger.info("macOS menu-bar item added")
+            except Exception:
+                logger.warning("Could not add macOS menu-bar item", exc_info=True)
+
+        # Hop to the main thread; the run loop pywebview started there executes it.
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(_build_on_main)
     except Exception:
-        # Visible (not debug): a missing menu-bar icon is a user-facing
-        # regression worth surfacing in the log, and the reason matters.
-        logger.warning("Could not add macOS menu-bar item", exc_info=True)
+        logger.warning("Could not schedule macOS menu-bar item", exc_info=True)
+
+
+def _set_macos_app_name(name: str = "Aegis") -> None:
+    """From-source runs (`python desktop_app.py`) show 'Python' as the app name
+    in the menu bar and app switcher, because the process has no app bundle with
+    a CFBundleName. Patch the main bundle's info dictionary before AppKit builds
+    the application menu so it reads 'Aegis' instead. A packaged .app already
+    has the right CFBundleName, so this is a no-op cosmetic fix for source runs;
+    fully best-effort."""
+    if sys.platform != "darwin":
+        return
+    try:
+        from Foundation import NSBundle
+        bundle = NSBundle.mainBundle()
+        info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+        if info is not None:
+            info["CFBundleName"] = name
+    except Exception:
+        logger.debug("Could not set macOS app name", exc_info=True)
 
 
 def _darken_titlebar(window):
@@ -219,6 +317,7 @@ def _wire_monitor_log() -> None:
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    _set_macos_app_name()   # show "Aegis", not "Python", when run from source
     _wire_monitor_log()
     config = load_config()
 
@@ -290,7 +389,7 @@ def main():
         )
         window.events.closed += _on_closed
         window.events.shown += lambda: _darken_titlebar(window)
-        window.events.shown += lambda: _add_macos_menubar(window, _on_closed)
+        window.events.shown += lambda: _add_macos_menubar(window, pipeline, config, _on_closed)
         webview.start(icon=str(APP_ICON) if APP_ICON.is_file() else None)
     except Exception:
         logger.exception("Failed to open the desktop window -- shutting down cleanly instead of "

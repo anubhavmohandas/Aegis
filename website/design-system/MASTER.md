@@ -29,7 +29,19 @@ placeholders, not a brand"). Overwritten with real values, see history below.
    leftover green/Inter traces and confirmed every CSS variable the page
    uses is still defined after the revert.
 
-## What's actually live now (as of the revert)
+4. **Rebranded, 2026-07-17, on explicit request:** full identity change away
+   from the "AI blue" look — Palette Option 1 (Obsidian `#0E1116` bg, Emerald
+   `#3CB179` primary, Muted Gold `#D6A94F` accent), typography Geist / Inter /
+   JetBrains Mono. Design language: `●` = event marker (severity-colored),
+   `◆` = AI-explanation marker (gold), one radius (`--radius: 10px`), one pill
+   shape for all badges, timeline "rail" as the recurring visual motif,
+   Linear-style whitespace, glass only on the nav. Page restructured the same
+   day around the 14-section story flow (problem → why → how → memory →
+   scenario → …), dashboard timeline renamed "Memory" on the site, and an
+   interactive "Simulate an incident" demo added to the hero. This supersedes
+   everything below.
+
+## What was live before the 2026-07-17 rebrand (historical)
 
 The original palette: `--bg: #04070e`, `--panel: #0a1120`, `--chrome:
 #dbe4f0`, `--blue: #39a1ff` (real blue), `--font-display`/`--font-body`:
