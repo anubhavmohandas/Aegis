@@ -100,7 +100,8 @@ class AppConfig:
     tamper_require_password: bool = True    # require the dashboard password to Stop Monitoring / Quit
     tamper_attempts_before_capture: int = 3 # failed attempts before evidence is captured
     tamper_evidence_screenshot: bool = True # capture a screenshot as evidence
-    tamper_evidence_webcam: bool = False    # RESERVED for v2 -- see core/evidence.py._webcam (currently a no-op)
+    tamper_evidence_webcam: bool = False    # capture a webcam photo as evidence -- see core/evidence.py._webcam
+    evidence_dir: str = ""                  # custom incident-evidence folder; empty = <data dir>/incidents
 
     @property
     def api_key(self) -> str | None:
@@ -168,6 +169,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         tamper_attempts_before_capture=max(1, _parse_int(raw, "tamper_attempts_before_capture", 3)),
         tamper_evidence_screenshot=bool(raw.get("tamper_evidence_screenshot", True)),
         tamper_evidence_webcam=bool(raw.get("tamper_evidence_webcam", False)),
+        evidence_dir=str(raw.get("evidence_dir", "") or "").strip(),
     )
     if not cfg.watched_folders:
         cfg = _with_default_folders(cfg)

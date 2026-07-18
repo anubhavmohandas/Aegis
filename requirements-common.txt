@@ -13,3 +13,4 @@ certifi        # was only ever an indirect dep (anthropic/openai's httpx) -- cor
                # directly for its CA bundle, since some Python installs ship an ssl module with ZERO
                # trust anchors loaded by default (confirmed here), which made every self-update check
                # fail CERTIFICATE_VERIFY_FAILED regardless of real network/GitHub availability
+opencv-python-headless>=4.9

@@ -1005,7 +1005,10 @@ async function loadSettings() {
     $("vt-key-status").textContent = s.vt_api_key_set ? "configured" : "not set";
     $("set-tamper-require").checked = s.tamper_require_password;
     $("set-tamper-screenshot").checked = s.tamper_evidence_screenshot;
+    $("set-tamper-webcam").checked = s.tamper_evidence_webcam;
     $("set-tamper-attempts").value = s.tamper_attempts_before_capture;
+    $("set-evidence-dir").value = s.evidence_dir || "";
+    $("set-evidence-dir").placeholder = s.evidence_dir_default || "";
 
     checkForUpdate();
   } catch (err) {
@@ -1153,7 +1156,9 @@ async function saveSettings() {
         vt_api_key: $("set-vt-key").value,   // blank = keep existing
         tamper_require_password: $("set-tamper-require").checked,
         tamper_evidence_screenshot: $("set-tamper-screenshot").checked,
+        tamper_evidence_webcam: $("set-tamper-webcam").checked,
         tamper_attempts_before_capture: Number($("set-tamper-attempts").value) || 3,
+        evidence_dir: $("set-evidence-dir").value.trim(),
       }),
     });
     if (res.status === 401) { location.replace("/login"); return; }
@@ -1467,8 +1472,16 @@ function bind() {
   });
   $("load-older").addEventListener("click", loadOlder);
 
+  $("open-evidence-btn").addEventListener("click", async () => {
+    const res = await fetch("/api/evidence/open-folder", { method: "POST" });
+    if (res.status === 401) { location.replace("/login"); return; }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) toast(data.error || "Could not open folder", true);
+  });
+
   $("new-events-pill").addEventListener("click", () => {
     hidePill();
+    switchView("console");   // the pill can appear over Settings/Incidents; new events live in Console
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
   window.addEventListener("scroll", () => { if (window.scrollY < 100) hidePill(); }, { passive: true });

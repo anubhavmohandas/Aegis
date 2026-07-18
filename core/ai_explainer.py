@@ -16,6 +16,7 @@ in full regardless of what the AI says, so nothing is silently dropped.
 from __future__ import annotations
 
 import logging
+import re
 
 from .config import AppConfig
 from .events import MonitorEvent
@@ -160,6 +161,14 @@ class AIExplainer:
         # notify() (where len(None) raised) and into the timeline as an empty
         # explanation. Coerce to the same style of honest fallback string that
         # actual API errors already produce.
+        if text:
+            # Reasoning models (DeepSeek-R1 style, common on Ollama/NVIDIA)
+            # prepend their chain of thought in <think>/<thinking> blocks; the
+            # dashboard was showing that monologue as the "summary". Keep only
+            # the answer; an unclosed block means the reply was all reasoning
+            # (truncated) -- drop it and fall through to the honest fallback.
+            text = re.sub(r"<think(?:ing)?>.*?</think(?:ing)?>\s*", "", text, flags=re.S | re.I)
+            text = re.sub(r"<think(?:ing)?>.*", "", text, flags=re.S | re.I).strip()
         if text:
             return text
         return f"[AI returned an empty response] Raw event: {fallback_summary}"

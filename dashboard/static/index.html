@@ -341,8 +341,24 @@
       <input id="set-tamper-attempts" class="text-input" type="number" min="1" max="10" step="1">
     </div>
 
-    <p class="settings-desc" style="margin-top:6px;opacity:.75">Webcam evidence capture is planned for
-       a future version and is intentionally disabled — screenshot evidence only for now.</p>
+    <div class="field">
+      <label for="set-evidence-dir">Evidence folder</label>
+      <input id="set-evidence-dir" class="text-input" type="text"
+             autocomplete="off" spellcheck="false">
+      <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
+        <button class="btn" id="open-evidence-btn" type="button">Open folder</button>
+        <span class="switch-desc">Where incident evidence is saved. Leave empty for the default
+          shown above — an absolute path like /Users/you/Documents/AegisEvidence moves future captures there.</span>
+      </div>
+    </div>
+
+    <label class="switch-row" for="set-tamper-webcam">
+      <span>
+        <span class="switch-label">Capture webcam photo as evidence</span>
+        <span class="switch-desc">One photo from the camera alongside the screenshot (needs Camera permission)</span>
+      </span>
+      <input type="checkbox" id="set-tamper-webcam" class="switch">
+    </label>
   </div>
 
   <div class="settings-card">

@@ -55,7 +55,10 @@ hiddenimports = ["anthropic", "openai"]
 
 # Never bundle the other platforms' collector packages or their native deps;
 # they can't import on this OS and only produce warnings/bloat.
-excludes = ["PySide6", "tkinter", "pytest"]
+# tkinter only excluded on macOS: the tray's password/info dialogs use native
+# NSAlert there, but desktop_app._prompt_stop_password_tk needs tkinter on
+# Windows/Linux -- excluding it everywhere silently broke the packaged tray Stop.
+excludes = ["PySide6", "pytest"]
 
 if IS_MAC:
     # WebKit/PyObjCTools are pywebview's Cocoa backend (webview/platforms/cocoa.py)
@@ -63,7 +66,7 @@ if IS_MAC:
     # were: PyInstaller's static scan is unreliable specifically for PyObjC's
     # Objective-C bridge modules.
     hiddenimports += ["AppKit", "Foundation", "objc", "WebKit", "PyObjCTools"]
-    excludes += ["windows", "linux", "plyer", "pyudev", "wmi", "win32com", "win32api", "etw"]
+    excludes += ["tkinter", "windows", "linux", "plyer", "pyudev", "wmi", "win32com", "win32api", "etw"]
 elif IS_WIN:
     hiddenimports += ["plyer.platforms.win.notification"]
     excludes += ["macos", "linux", "pyudev", "AppKit", "Foundation", "objc"]
@@ -93,6 +96,13 @@ exe = EXE(
     # Windows collectors have hardware evidence behind them.
     console=not IS_MAC,
     icon=str(ROOT / "assets" / "aegis.ico") if IS_WIN else None,
+    # Stable self-signed identity ("Aegis Dev" in the login keychain): keeps
+    # the macOS TCC grants (Screen Recording for evidence capture) valid
+    # across rebuilds and self-updates -- ad-hoc signatures change every
+    # build and silently invalidate them. Swap for a Developer ID before
+    # public beta (also fixes Gatekeeper for downloaded DMGs).
+    codesign_identity="Aegis Dev" if IS_MAC else None,
+    entitlements_file=str(ROOT / "packaging" / "entitlements.plist") if IS_MAC else None,
 )
 
 coll = COLLECT(
@@ -115,5 +125,11 @@ if IS_MAC:
             # meant to be opened, looked at, and configured.
             "CFBundleShortVersionString": __version__,
             "NSHumanReadableCopyright": "Created by Anubhav",
+            # Without this string macOS refuses (and may kill) camera access
+            # outright -- required for the opt-in webcam evidence capture.
+            "NSCameraUsageDescription":
+                "Aegis takes one webcam photo as tamper evidence when repeated "
+                "wrong passwords are entered on a protected action, and only if "
+                "you enable webcam evidence in Settings.",
         },
     )

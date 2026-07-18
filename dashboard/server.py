@@ -453,8 +453,15 @@ def read_settings() -> dict:
         "tamper_attempts_before_capture": _lenient_int(raw.get("tamper_attempts_before_capture", 3), 3),
         "tamper_evidence_screenshot": bool(raw.get("tamper_evidence_screenshot", True)),
         "tamper_evidence_webcam": bool(raw.get("tamper_evidence_webcam", False)),
+        "evidence_dir": str(raw.get("evidence_dir", "") or ""),
+        "evidence_dir_default": _default_evidence_dir(),
         "config_path": str(CONFIG_PATH),
     }
+
+
+def _default_evidence_dir() -> str:
+    from core.evidence import incidents_dir
+    return str(incidents_dir())
 
 
 def _read_env_value(name: str) -> str | None:
@@ -533,8 +540,7 @@ def write_settings(body: dict) -> dict:
         "trusted_usb_ids": _clean_str_list(body.get("trusted_usb_ids")),
         # VirusTotal threat enrichment (core/enrichment.py) -- now UI-managed.
         "enrich_enabled": bool(body.get("enrich_enabled", _passthrough("enrich_enabled", False))),
-        # Tamper protection (core/evidence.py). Webcam stays passthrough-only:
-        # it's a reserved v2 toggle with no UI control yet (see index.html).
+        # Tamper protection (core/evidence.py).
         "tamper_require_password": bool(body.get("tamper_require_password",
                                                  _passthrough("tamper_require_password", True))),
         "tamper_attempts_before_capture": max(1, _lenient_int(
@@ -542,8 +548,28 @@ def write_settings(body: dict) -> dict:
                      _passthrough("tamper_attempts_before_capture", 3)), 3)),
         "tamper_evidence_screenshot": bool(body.get("tamper_evidence_screenshot",
                                                     _passthrough("tamper_evidence_screenshot", True))),
-        "tamper_evidence_webcam": bool(_passthrough("tamper_evidence_webcam", False)),
+        "tamper_evidence_webcam": bool(body.get("tamper_evidence_webcam",
+                                                _passthrough("tamper_evidence_webcam", False))),
     }
+
+    # Custom evidence folder: must be absolute (a relative path would silently
+    # anchor somewhere different frozen vs from-source) and provably writable
+    # NOW -- an evidence capture is the worst moment to discover it isn't.
+    evidence_dir = str(body.get("evidence_dir", _passthrough("evidence_dir", "")) or "").strip()
+    if evidence_dir:
+        p = Path(evidence_dir).expanduser()
+        if not p.is_absolute():
+            example = r"C:\Users\you\Documents\AegisEvidence" if os.name == "nt" else "/Users/you/Documents/AegisEvidence"
+            return {"error": f"Evidence folder must be an absolute path (e.g. {example})"}
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            probe = p / ".aegis_write_test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+        except OSError as e:
+            return {"error": f"Evidence folder is not writable: {e}"}
+        evidence_dir = str(p)
+    config["evidence_dir"] = evidence_dir
 
     # one-time backup of the original hand-written config before the first
     # dashboard-managed rewrite (yaml.safe_dump drops comments)
@@ -1103,6 +1129,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({**guard, "tamper_blocked": True}, status=403)
                 else:
                     self._send_json(stop_monitor())
+            elif parsed.path == "/api/evidence/open-folder":
+                if not self._authed():
+                    self._send_json({"error": "authentication required"}, status=401)
+                    return
+                # No client-supplied path here on purpose: the server opens the
+                # folder it resolved from config, nothing else.
+                from core.evidence import incidents_dir
+                folder = incidents_dir(load_config())
+                try:
+                    folder.mkdir(parents=True, exist_ok=True)
+                    if sys.platform == "darwin":
+                        r = subprocess.run(["open", str(folder)], capture_output=True,
+                                           text=True, timeout=10)
+                    elif os.name == "nt":
+                        os.startfile(str(folder))  # noqa -- windows only
+                        r = None
+                    else:
+                        r = subprocess.run(["xdg-open", str(folder)], capture_output=True,
+                                           text=True, timeout=10)
+                    if r is not None and r.returncode != 0:
+                        detail = (r.stderr or r.stdout or "").strip()
+                        logger_srv.error("open-folder failed (rc=%s): %s", r.returncode, detail)
+                        self._send_json({"error": f"could not open folder: {detail or 'opener exited '+str(r.returncode)}"},
+                                        status=500)
+                    else:
+                        self._send_json({"ok": True, "path": str(folder)})
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    self._send_json({"error": f"could not open folder: {e}"}, status=500)
             elif parsed.path == "/api/incidents/review":
                 if not self._authed():
                     self._send_json({"error": "authentication required"}, status=401)

@@ -15,11 +15,10 @@ Design contract, stated plainly:
   editable from Settings). Every single collector below degrades to "field
   absent" on failure -- an incident with no screenshot is still an incident.
 
-  WEBCAM CAPTURE IS DELIBERATELY NOT IMPLEMENTED IN THIS VERSION. The
-  settings model reserves `evidence_webcam` for v2: it needs an explicit
-  opt-in flow, a camera-permission story per OS, and jurisdictional
-  consent caveats that a screenshot doesn't carry. The toggle exists so
-  the config shape doesn't change later; it currently only logs.
+  Webcam capture is implemented (see _webcam) and off by default: it
+  needs the Settings opt-in, opencv bundled in the build, and the OS
+  camera permission (macOS: NSCameraUsageDescription + camera
+  entitlement, both in packaging/).
 
 Artifacts live under the per-user data dir (survives self-update, works
 from a packaged .app -- see core/config.persistent_dir):
@@ -47,7 +46,10 @@ _PUBLIC_IP_URL = "https://api.ipify.org"   # plain-text response, 3s timeout, be
 _PROCESS_SNAPSHOT_LIMIT = 20               # most recently started processes
 
 
-def incidents_dir() -> Path:
+def incidents_dir(config=None) -> Path:
+    custom = str(getattr(config, "evidence_dir", "") or "").strip()
+    if custom:
+        return Path(custom).expanduser()
     from core.config import persistent_dir
     return persistent_dir() / "incidents"
 
@@ -94,12 +96,116 @@ def _screenshot(dest: Path) -> tuple[Path | None, str | None]:
         return None, reason
 
 
-def _webcam(dest: Path) -> Path | None:
-    # occam: reserved for v2 -- needs opencv (a heavy new dependency), a
-    # per-OS camera permission flow, and an explicit consent story. The
-    # config toggle exists; the capture deliberately does not yet.
-    logger.info("Webcam evidence is a v2 feature -- not captured (screenshot evidence only).")
-    return None
+def _camera_indices() -> list[int]:
+    """Camera indices for _webcam to try, in order. On macOS, iPhones/iPads
+    (Continuity Camera) are excluded outright -- evidence must come from the
+    machine's own camera, never from whatever phone happens to be nearby --
+    and the built-in camera is ranked first. Uses pyobjc-core's bridge to
+    AVFoundation (no extra dependency); index order matches OpenCV's
+    AVFoundation backend, which enumerates devices with the same
+    devicesWithMediaType: call. Any failure -> plain 0..2 scan."""
+    if platform.system() != "Darwin":
+        return list(range(3))
+    try:
+        import objc
+        objc.loadBundle("AVFoundation", {},
+                        bundle_path="/System/Library/Frameworks/AVFoundation.framework")
+        devs = objc.lookUpClass("AVCaptureDevice").devicesWithMediaType_("vide")  # AVMediaTypeVideo
+        allowed = []
+        for i, d in enumerate(devs):
+            dtype = str(d.deviceType() or "")
+            model = str(d.modelID() or "")
+            if "Continuity" in dtype or model.startswith(("iPhone", "iPad")):
+                continue   # never an Apple mobile device, even if it's the system default
+            allowed.append((0 if "BuiltIn" in dtype else 1, i))
+        return [i for _, i in sorted(allowed)]
+    except Exception:
+        logger.debug("AVFoundation camera enumeration failed", exc_info=True)
+        return list(range(3))
+
+
+def _webcam(dest: Path) -> tuple[Path | None, str | None]:
+    """One frame from the default camera, saved as JPEG. Same contract as
+    _screenshot: (path, None) on success, (None, why) on failure.
+
+    macOS specifics: the packaged .app needs NSCameraUsageDescription in its
+    Info.plist and the com.apple.security.device.camera entitlement (both in
+    packaging/) or the hardened runtime kills the capture; the user grants
+    Camera permission once on first use."""
+    try:
+        import cv2
+    except ImportError:
+        return None, "webcam capture needs opencv-python (not installed in this build)"
+    # occam: mean-brightness heuristic for "this frame is black". A genuinely
+    # pitch-dark room false-positives; good enough until that's a real report.
+    _BLACK = 8.0
+
+    def _grab(index: int):
+        """Open device `index`, read until a frame with actual content or ~0.5s:
+        the first frames after opening are black while auto-exposure settles."""
+        cam = cv2.VideoCapture(index)
+        try:
+            if not cam.isOpened():
+                return None
+            frame = None
+            for _ in range(10):
+                ok, f = cam.read()
+                if ok and f is not None:
+                    frame = f
+                    if f.mean() > _BLACK:
+                        break
+                time.sleep(0.05)
+            return frame
+        finally:
+            cam.release()
+
+    try:
+        # Only cameras _camera_indices() allows (built-in first, never an
+        # iPhone/iPad); a black feed is skipped in favor of the next camera.
+        # The outer retry loop covers first-ever capture on macOS: authorization
+        # is "not determined", OpenCV requests access asynchronously and fails
+        # THIS open, so re-try for a few seconds so a prompt answered now (or a
+        # slow camera init) still yields a photo instead of always losing the
+        # first incident.
+        # occam: fixed 8s retry budget blocks the tamper response; go async if that lag matters
+        indices = _camera_indices()
+        if not indices:
+            return None, ("no usable camera -- the only camera present is an iPhone/iPad "
+                          "(Continuity Camera), which Aegis deliberately never uses")
+        best = None
+        deadline = time.time() + 8.0
+        while True:
+            for index in indices:
+                frame = _grab(index)
+                if frame is None:
+                    continue
+                if best is None or frame.mean() > best.mean():
+                    best = frame
+                if frame.mean() > _BLACK:
+                    break
+            if best is not None or time.time() >= deadline:
+                break
+            time.sleep(1.0)
+        if best is None:
+            hint = {"Darwin": "System Settings > Privacy & Security > Camera",
+                    "Windows": "Settings > Privacy & security > Camera"}.get(
+                        platform.system(), "your OS camera permissions")
+            logger.warning("Evidence webcam capture failed: camera not readable "
+                           "(no camera, or Camera permission not granted)")
+            return None, ("could not read from the camera -- no camera found, or Camera "
+                          f"permission not granted ({hint}; if a permission prompt just "
+                          "appeared, Allow means the next capture will include the photo)")
+        if not cv2.imwrite(str(dest), best):
+            return None, "could not write the webcam image to disk"
+        if best.mean() <= _BLACK:
+            # Every camera gave only black frames -- save the least-bad one
+            # anyway (a black photo plus a note beats no evidence) and say why.
+            return dest, ("webcam image appears black -- covered lens, closed laptop lid, "
+                          "or a very dark room; photo saved anyway")
+        return dest, None
+    except Exception as e:
+        logger.warning("Evidence webcam capture failed: %s", e)
+        return None, f"webcam capture failed: {e}"
 
 
 def _public_ip() -> str | None:
@@ -184,7 +290,7 @@ def capture_incident(*, reason: str, attempts: int, store, config=None,
     """
     ts = time.time()
     stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(ts))
-    inc_dir = incidents_dir() / f"incident_{stamp}"
+    inc_dir = incidents_dir(config) / f"incident_{stamp}"
     try:
         inc_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
@@ -203,9 +309,11 @@ def capture_incident(*, reason: str, attempts: int, store, config=None,
     else:
         capture_notes["screenshot"] = "screenshot evidence is turned off in Settings."
     if want_webcam:
-        cam = _webcam(inc_dir / "webcam.jpg")
+        cam, cam_err = _webcam(inc_dir / "webcam.jpg")
         if cam:
             artifacts["webcam"] = {"path": str(cam), "sha256": _sha256_file(cam)}
+        if cam_err:
+            capture_notes["webcam"] = cam_err   # blocked, or saved with a caveat -- record why
 
     import getpass
     try:
@@ -294,7 +402,7 @@ if __name__ == "__main__":
     # __main__, so `import core.evidence` would stub a second, unused copy):
     _screenshot = lambda dest: (None, "macOS blocked the screenshot -- grant Screen Recording permission")
     _public_ip = lambda: None
-    incidents_dir = lambda: Path(tempfile.mkdtemp())  # don't litter the repo's incidents/
+    incidents_dir = lambda config=None: Path(tempfile.mkdtemp())  # don't litter the repo's incidents/
 
     store = EventStore(str(Path(tempfile.mkdtemp()) / "t.db"))
     inc = capture_incident(reason="unauthorized monitoring stop attempt",

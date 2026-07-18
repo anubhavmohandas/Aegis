@@ -203,6 +203,16 @@ def _add_macos_menubar(window, pipeline, config, on_quit):
                 except Exception:
                     logger.warning("Tray stop failed", exc_info=True)
 
+            def menuWillOpen_(self, menu):
+                # Start/Stop reflect the live pipeline state instead of both
+                # being clickable all the time (requires autoenablesItems off).
+                try:
+                    running = pipeline.running
+                    menu.itemWithTitle_("Start Monitoring").setEnabled_(not running)
+                    menu.itemWithTitle_("Stop Monitoring").setEnabled_(running)
+                except Exception:
+                    logger.debug("menu enable-state update failed", exc_info=True)
+
             def quitAegis_(self, _sender):
                 on_quit()
                 try:
@@ -244,6 +254,8 @@ def _add_macos_menubar(window, pipeline, config, on_quit):
                     mi = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, selector, "")
                     mi.setTarget_(target)
                     menu.addItem_(mi)
+                menu.setAutoenablesItems_(False)
+                menu.setDelegate_(target)   # menuWillOpen_ keeps Start/Stop honest
                 status_item.setMenu_(menu)
 
                 _menubar_refs.extend([target, status_item])
@@ -255,6 +267,118 @@ def _add_macos_menubar(window, pipeline, config, on_quit):
         AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(_build_on_main)
     except Exception:
         logger.warning("Could not schedule macOS menu-bar item", exc_info=True)
+
+
+def _prompt_stop_password_tk() -> str | None:
+    """tkinter (stdlib) secure-input dialog -- the Windows/Linux counterpart of
+    _prompt_stop_password_macos. A fresh Tk root per call, created and destroyed
+    on the calling (pystray callback) thread. Returns the password, or None if
+    cancelled or tkinter is unavailable."""
+    import tkinter as tk
+    from tkinter import simpledialog
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        return simpledialog.askstring("Stop Monitoring",
+                                      "Enter the dashboard password to stop monitoring.",
+                                      show="*", parent=root)
+    finally:
+        root.destroy()
+
+
+def _info_alert_tk(title: str, message: str) -> None:
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        try:
+            messagebox.showinfo(title, message, parent=root)
+        finally:
+            root.destroy()
+    except Exception:
+        logger.info("%s: %s", title, message)   # headless/no-tkinter fallback
+
+
+def _add_pystray_tray(window, pipeline, on_quit):
+    """Windows/Linux counterpart of _add_macos_menubar: same menu (Open /
+    Start / password-gated Stop / Quit) via pystray, which happily runs on a
+    background thread alongside pywebview's GUI loop everywhere except macOS
+    (where the Cocoa run loop conflict is exactly why the NSStatusItem path
+    above exists). Same best-effort contract: any failure just means no tray
+    icon -- e.g. Linux without an appindicator/X11 backend."""
+    if sys.platform == "darwin":
+        return
+    try:
+        import pystray
+        from core.tray_app import _load_icon_image
+
+        def _open(icon, item):
+            try:
+                window.restore()
+                window.show()
+            except Exception:
+                logger.debug("tray Open failed", exc_info=True)
+
+        def _start(icon, item):
+            try:
+                pipeline.start()   # start is not password-gated
+                _info_alert_tk("Aegis", "Monitoring started.")
+            except Exception:
+                logger.warning("Tray start failed", exc_info=True)
+
+        def _stop(icon, item):
+            # Honor the tamper gate exactly like the web UI and macOS menu bar.
+            try:
+                if not pipeline.running:
+                    _info_alert_tk("Aegis", "Monitoring is already stopped.")
+                    return
+                from dashboard.server import guard_protected_action
+                try:
+                    pw = _prompt_stop_password_tk()
+                except Exception:
+                    logger.warning("No password dialog available (tkinter missing) -- "
+                                   "use the dashboard's Stop button instead.", exc_info=True)
+                    return
+                if pw is None:
+                    return   # cancelled
+                result = guard_protected_action("stop_monitoring", pw)
+                if result.get("error"):
+                    note = result["error"]
+                    if result.get("evidence_captured"):
+                        note += f"\nEvidence captured (incident #{result.get('incident_id')})."
+                    _info_alert_tk("Stop blocked", note)
+                    return
+                pipeline.stop()
+                _info_alert_tk("Aegis", "Monitoring stopped.")
+            except Exception:
+                logger.warning("Tray stop failed", exc_info=True)
+
+        def _quit(icon, item):
+            icon.stop()
+            try:
+                window.destroy()   # fires the closed event -> normal cleanup
+            except Exception:
+                on_quit()
+                os._exit(0)
+
+        menu = pystray.Menu(
+            pystray.MenuItem("Open Aegis", _open, default=True),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Start Monitoring", _start,
+                             enabled=lambda item: not pipeline.running),
+            pystray.MenuItem("Stop Monitoring", _stop,
+                             enabled=lambda item: pipeline.running),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Quit Aegis", _quit),
+        )
+        icon = pystray.Icon("aegis", _load_icon_image(), "Aegis", menu=menu)
+        threading.Thread(target=icon.run, daemon=True).start()
+        logger.info("System tray icon added (pystray)")
+    except Exception:
+        logger.warning("Could not add system tray icon", exc_info=True)
 
 
 def _set_macos_app_name(name: str = "Aegis") -> None:
@@ -390,6 +514,7 @@ def main():
         window.events.closed += _on_closed
         window.events.shown += lambda: _darken_titlebar(window)
         window.events.shown += lambda: _add_macos_menubar(window, pipeline, config, _on_closed)
+        window.events.shown += lambda: _add_pystray_tray(window, pipeline, _on_closed)
         webview.start(icon=str(APP_ICON) if APP_ICON.is_file() else None)
     except Exception:
         logger.exception("Failed to open the desktop window -- shutting down cleanly instead of "
