@@ -36,7 +36,7 @@ const CONFIDENCE_TITLES = {
    style.css theme blocks keyed by [data-theme]. Swatch colors here are only
    for the preview cards. */
 const THEMES = [
-  { id: "obsidian",  label: "Obsidian",  mode: "dark",  bg: "#0b0f16", accent: "#46d3bd" },
+  { id: "obsidian",  label: "Obsidian",  mode: "dark",  bg: "#0e1116", accent: "#3cb179" },
   { id: "indigo",    label: "Indigo",    mode: "dark",  bg: "#0d0d1b", accent: "#8f8ff2" },
   { id: "phosphor",  label: "Phosphor",  mode: "dark",  bg: "#090f0a", accent: "#45d97e" },
   { id: "daylight",  label: "Daylight",  mode: "light", bg: "#f3f5f9", accent: "#0d7d8c" },

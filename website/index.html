@@ -32,6 +32,7 @@ body{
 /* ================= design language =================
    ● event marker (severity-colored)
    ◆ explanation marker (gold — the AI voice)
+   ◉ memory marker (emerald — where events come to rest)
    one radius: var(--radius). badges: one pill shape.
    emerald = product · gold = intelligence · red = threat
 ==================================================== */
@@ -69,7 +70,14 @@ nav{
 .nav-links .btn{padding:8px 16px;font-size:13.5px}
 
 /* ---- hero ---- */
-.hero{padding:130px 0 90px}
+.hero{padding:130px 0 90px;position:relative}
+.hero::after{
+  content:"";position:absolute;top:4%;right:-14%;width:640px;height:640px;
+  border-radius:50%;pointer-events:none;
+  background:radial-gradient(circle, rgba(60,177,121,.08), transparent 62%);
+  animation:breathe 9s ease-in-out infinite alternate;
+}
+@keyframes breathe{from{opacity:.5;transform:scale(.92)}to{opacity:1;transform:scale(1.05)}}
 .hero-grid{display:grid;grid-template-columns:1.04fr .96fr;gap:72px;align-items:center}
 .status-pill{
   display:inline-flex;align-items:center;gap:9px;
@@ -127,6 +135,7 @@ h1 .em{color:var(--primary)}
   display:flex;align-items:center;gap:8px;
 }
 .panel-bar .t i{color:var(--primary);font-style:normal;font-size:9px}
+.panel-bar .t i.g,.stop .n i.g{font-size:12px}
 .panel-bar .demo-btn{
   margin-left:auto;
   font-family:var(--font-mono);font-size:11.5px;letter-spacing:.04em;
@@ -137,6 +146,9 @@ h1 .em{color:var(--primary)}
 .panel-bar .demo-btn:hover{background:#46C287}
 .panel-bar .demo-btn:disabled{opacity:.45;cursor:default}
 .mem{padding:6px 0 12px;min-height:328px}
+.mem .mk{animation:memPulse 7s infinite}
+.mem-evt:nth-child(even) .mk{animation-delay:3.5s}
+@keyframes memPulse{0%,88%,100%{text-shadow:0 0 0 rgba(0,0,0,0)}93%{text-shadow:0 0 10px currentColor}}
 .mem-day{
   padding:10px 18px 4px;font-size:10.5px;letter-spacing:.16em;color:var(--dim);
 }
@@ -356,6 +368,49 @@ h2{
   margin-bottom:4px;letter-spacing:-.005em;
 }
 .arch .node p{font-family:var(--font-mono);font-size:12px;color:var(--dim);letter-spacing:.05em;line-height:1.9}
+.arch .node.mem::before{content:"◉";font-size:13px;top:4px}
+html.js .arch .node{opacity:0;transform:translateY(14px);transition:opacity .55s ease,transform .55s ease}
+html.js .arch.in .node{opacity:1;transform:none}
+html.js .arch .node:nth-child(2){transition-delay:.12s}
+html.js .arch .node:nth-child(3){transition-delay:.24s}
+html.js .arch .node:nth-child(4){transition-delay:.36s}
+html.js .arch .node:nth-child(5){transition-delay:.48s}
+html.js .arch .node:nth-child(6){transition-delay:.6s}
+
+/* ---- meet the engine ---- */
+#engine .doc h4{font-family:var(--font-mono);font-weight:500;font-size:14px;letter-spacing:.01em}
+
+/* ---- download status ---- */
+.status-box{
+  margin-top:34px;border:1px solid var(--border);border-radius:var(--radius);
+  background:var(--surface-2);padding:4px 20px;
+  font-family:var(--font-mono);font-size:12.5px;
+}
+.status-box .kv{display:flex;justify-content:space-between;gap:14px;padding:10px 0;color:#D6DEE8}
+.status-box .kv + .kv{border-top:1px solid var(--border-soft)}
+.status-box .k{color:var(--dim)}
+
+/* ---- keyboard shortcuts overlay ---- */
+.kbd-overlay{
+  position:fixed;inset:0;z-index:100;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(8,11,15,.72);backdrop-filter:blur(4px);
+}
+.kbd-overlay[hidden]{display:none}
+.kbd-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:26px 32px;min-width:280px;
+  font-family:var(--font-mono);font-size:13px;
+  box-shadow:0 30px 70px -35px rgba(0,0,0,.8);
+}
+.kbd-card .kt{font-size:11px;letter-spacing:.18em;color:var(--dim);margin-bottom:14px}
+.kbd-row{display:flex;justify-content:space-between;gap:24px;padding:8px 0;color:var(--secondary)}
+.kbd-row + .kbd-row{border-top:1px solid var(--border-soft)}
+.kbd-row kbd{
+  font-family:inherit;color:var(--text);background:var(--surface-2);
+  border:1px solid var(--border);border-radius:6px;padding:1px 8px;font-size:12px;
+}
+
 
 /* ---- privacy ---- */
 .priv-list{display:grid;grid-template-columns:repeat(3,1fr);gap:0 48px;margin-top:64px}
@@ -492,7 +547,7 @@ html.js .reveal.in{opacity:1;transform:none}
 
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
-  .reveal,.mem-evt.enter{opacity:1;transform:none}
+  .reveal,.mem-evt.enter,html.js .arch .node{opacity:1;transform:none}
   html{scroll-behavior:auto}
 }
 
@@ -569,7 +624,7 @@ html.js .reveal.in{opacity:1;transform:none}
     <div>
       <div class="panel" aria-label="Interactive demo of the Aegis Memory feed. Press the simulate button to watch an incident unfold.">
         <div class="panel-bar">
-          <span class="t"><i>●</i>MEMORY — TODAY</span>
+          <span class="t"><i class="g">◉</i>MEMORY — TODAY</span>
           <button class="demo-btn" id="demo-btn" type="button">▶ Simulate an incident</button>
         </div>
         <div class="mem" id="mem" aria-live="polite">
@@ -610,7 +665,7 @@ html.js .reveal.in{opacity:1;transform:none}
       <div class="rail-item mute"><h4>Leaves.</h4></div>
     </div>
     <p class="ask reveal">Would you know?</p>
-    <p class="answer reveal">AEGIS WOULD</p>
+    <p class="answer reveal">AEGIS REMEMBERS</p>
   </div>
 </section>
 
@@ -660,7 +715,7 @@ html.js .reveal.in{opacity:1;transform:none}
         </div>
       </div>
       <div class="stop">
-        <span class="n"><i>●</i>04</span>
+        <span class="n"><i class="g">◉</i>04</span>
         <h3>Remember</h3>
         <div class="d">
           <p>Everything lands in Memory — searchable, grouped into Away Sessions, condensed into a Daily Brief.</p>
@@ -688,7 +743,7 @@ html.js .reveal.in{opacity:1;transform:none}
 
     <div class="shots">
       <div class="shot panel reveal" role="img" aria-label="Mock of the Memory view grouped by day">
-        <div class="panel-bar"><span class="t"><i>●</i>MEMORY</span></div>
+        <div class="panel-bar"><span class="t"><i class="g">◉</i>MEMORY</span></div>
         <div class="body" style="padding:6px 0 12px">
           <div class="mem-day">TODAY</div>
           <div class="mem-evt"><span class="mk med">●</span><span class="tm">09:31</span><span class="what">USB device connected — Kingston DataTraveler</span></div>
@@ -884,7 +939,58 @@ html.js .reveal.in{opacity:1;transform:none}
       <div class="node"><h4>Rule Engine</h4><p>local severity scoring — no network required</p></div>
       <div class="node gold"><h4>Threat Intelligence</h4><p>virustotal hashes · mitre att&amp;ck — opt-in</p></div>
       <div class="node gold"><h4>AI Explainer</h4><p>openai · anthropic · nvidia · ollama</p></div>
-      <div class="node"><h4>Memory</h4><p>timeline · incidents · daily brief · settings</p></div>
+      <div class="node mem"><h4>Memory</h4><p>timeline · incidents · daily brief · settings</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 9b · MEET THE ENGINE ============ -->
+<section id="engine">
+  <div class="wrap">
+    <div class="sec-tag reveal">MEET THE ENGINE</div>
+    <h2 class="reveal">Inside the engine.</h2>
+    <p class="sec-lede reveal">No framework, no magic — <span class="mono" style="font-family:var(--font-mono);font-size:14px">core/</span> is a handful of readable Python modules, each with one job. Don't take the diagram's word for it.</p>
+    <div class="docs-grid">
+      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/dispatcher.py" target="_blank" rel="noopener">
+        <span class="k">PIPELINE</span>
+        <h4>dispatcher.py</h4>
+        <p>Every event passes through here — deduped, scored, rate-limited, explained, persisted.</p>
+      </a>
+      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/rule_engine.py" target="_blank" rel="noopener">
+        <span class="k">GATE</span>
+        <h4>rule_engine.py</h4>
+        <p>Decides locally whether an event deserves an AI call at all.</p>
+      </a>
+      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/severity_engine.py" target="_blank" rel="noopener">
+        <span class="k">SCORE</span>
+        <h4>severity_engine.py</h4>
+        <p>Deterministic low-to-critical scoring, before any network call.</p>
+      </a>
+      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/folder_monitor.py" target="_blank" rel="noopener">
+        <span class="k">WATCH</span>
+        <h4>folder_monitor.py</h4>
+        <p>Near-real-time file watching, genuinely cross-platform.</p>
+      </a>
+      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/session_monitor.py" target="_blank" rel="noopener">
+        <span class="k">SESSIONS</span>
+        <h4>session_monitor.py</h4>
+        <p>Lock and unlock — the boundaries of every Away Session.</p>
+      </a>
+      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/enrichment.py" target="_blank" rel="noopener">
+        <span class="k">INTEL</span>
+        <h4>enrichment.py</h4>
+        <p>Attaches VirusTotal and MITRE ATT&amp;CK context before the AI speaks.</p>
+      </a>
+      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/evidence.py" target="_blank" rel="noopener">
+        <span class="k">EVIDENCE</span>
+        <h4>evidence.py</h4>
+        <p>Turns tamper attempts into stored incidents, evidence attached.</p>
+      </a>
+      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/ai_explainer.py" target="_blank" rel="noopener">
+        <span class="k">VOICE</span>
+        <h4>ai_explainer.py</h4>
+        <p>One module speaks to OpenAI, Claude, NVIDIA, or Ollama — plain English out.</p>
+      </a>
     </div>
   </div>
 </section>
@@ -1068,6 +1174,12 @@ html.js .reveal.in{opacity:1;transform:none}
         <div class="cta-row reveal" style="margin-top:36px">
           <a class="btn btn-primary" href="https://github.com/anubhavmohandas/Aegis/releases" target="_blank" rel="noopener">Get the latest release ↗</a>
         </div>
+        <div class="status-box reveal">
+          <div class="kv"><span class="k">version</span><span>v2.0.2-alpha</span></div>
+          <div class="kv"><span class="k">platforms</span><span>windows · macos · linux</span></div>
+          <div class="kv"><span class="k">latest build</span><span>july 2026</span></div>
+          <div class="kv"><span class="k">source</span><span>open · github</span></div>
+        </div>
       </div>
       <div class="reveal">
         <div class="codebox">
@@ -1124,6 +1236,8 @@ html.js .reveal.in{opacity:1;transform:none}
       <a href="#docs">Docs</a>
       <span class="sep">·</span>
       <a href="https://github.com/anubhavmohandas/Aegis/issues" target="_blank" rel="noopener">Report an issue</a>
+      <span class="sep">·</span>
+      <span style="color:#4A5462;font-family:var(--font-mono);font-size:11.5px;letter-spacing:.04em">press ? for shortcuts</span>
     </div>
     <p class="foot-disclaimer">
       AEGIS IS NOT ANTIVIRUS AND PROVIDES NO SECURITY GUARANTEES. IT IS A PERSONAL
@@ -1133,6 +1247,17 @@ html.js .reveal.in{opacity:1;transform:none}
     </p>
   </div>
 </footer>
+
+<div class="kbd-overlay" id="kbd" hidden>
+  <div class="kbd-card" role="dialog" aria-label="Keyboard shortcuts">
+    <div class="kt">KEYBOARD</div>
+    <div class="kbd-row"><span>github</span><kbd>G</kbd></div>
+    <div class="kbd-row"><span>download</span><kbd>D</kbd></div>
+    <div class="kbd-row"><span>back to top</span><kbd>T</kbd></div>
+    <div class="kbd-row"><span>simulate incident</span><kbd>S</kbd></div>
+    <div class="kbd-row"><span>close</span><kbd>Esc</kbd></div>
+  </div>
+</div>
 
 <script>
 /* reveal on scroll */
@@ -1172,6 +1297,23 @@ demoBtn.addEventListener('click', () => {
     }, reduced ? i * 60 : 650 + i * 900);
   });
 });
+
+/* keyboard shortcuts */
+const kbd = document.getElementById('kbd');
+addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  const behavior = reduced ? 'auto' : 'smooth';
+  if (e.key === '?'){ kbd.hidden = !kbd.hidden; }
+  else if (e.key === 'Escape'){ kbd.hidden = true; return; }
+  else if (e.key === 'g' || e.key === 'G'){ window.open('https://github.com/anubhavmohandas/Aegis', '_blank', 'noopener'); }
+  else if (e.key === 'd' || e.key === 'D'){ document.getElementById('download').scrollIntoView({behavior}); }
+  else if (e.key === 't' || e.key === 'T'){ scrollTo({top:0, behavior}); }
+  else if (e.key === 's' || e.key === 'S'){ scrollTo({top:0, behavior}); demoBtn.click(); }
+  else return;
+  e.preventDefault();
+});
+kbd.addEventListener('click', (e) => { if (e.target === kbd) kbd.hidden = true; });
 </script>
 
 </body>

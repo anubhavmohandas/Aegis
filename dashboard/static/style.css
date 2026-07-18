@@ -7,14 +7,14 @@
 
 /* ---------- themes ---------- */
 
-:root, :root[data-theme="obsidian"] {          /* dark · teal — default */
+:root, :root[data-theme="obsidian"] {          /* dark · emerald — default, matches the website brand (website/design-system/tokens.css) */
   color-scheme: dark;
-  --bg: #0b0f16; --bg-raised: #111723; --bg-hover: #16202f;
-  --border: #1f2a3c; --border-strong: #2c3a52;
-  --ink: #e6ecf5; --ink-2: #93a1b5; --ink-3: #5c6980;
-  --accent: #46d3bd;
-  --sev-low: #7da2d4; --sev-medium: #d99a2e; --sev-high: #e2622e; --sev-critical: #ef3a5d;
-  --badge-ink: #0b0f16;
+  --bg: #0e1116; --bg-raised: #171b22; --bg-hover: #1d2430;
+  --border: #1e242e; --border-strong: #2a313d;
+  --ink: #f5f7fa; --ink-2: #a3afbf; --ink-3: #6b7684;
+  --accent: #3cb179;
+  --sev-low: #7f8ea3; --sev-medium: #d99a2e; --sev-high: #e2622e; --sev-critical: #ef3a5d;
+  --badge-ink: #0e1116;
   --grain: rgba(255, 255, 255, .014);
   --shadow-card: none;
   --shadow-float: 0 12px 40px rgba(0, 0, 0, .55);
