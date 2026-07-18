@@ -65,6 +65,10 @@ htmlcov/
 aegis-report-*.pdf
 audit-report-*.pdf
 
+# --- Website QA screenshots (Playwright output, regenerated on demand) ---
+desktop_full.png
+mobile_full.png
+
 # --- IDE ---
 .vscode/
 .idea/
