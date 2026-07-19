@@ -889,6 +889,66 @@ def get_incident(incident_id: int) -> dict:
     return row or {"error": "incident not found"}
 
 
+def delete_incidents_action(ids: list[int]) -> dict:
+    """Delete incident rows and their on-disk evidence folders. The password
+    gate happens at the route (same guard as Stop Monitoring); this just does
+    the work. Deletion itself leaves a timeline event -- evidence that
+    evidence was deleted -- so a wipe is never fully silent."""
+    import re
+    import shutil
+    from core.config import load_config
+    from core.evidence import incidents_dir
+    inc_root = incidents_dir(load_config())
+    store = _writable_store()
+    deleted_ids: list[int] = []
+    file_errors: list[str] = []
+    try:
+        for iid in ids:
+            row = store.get_incident(iid)
+            if row is None:
+                continue
+            # Evidence folders come from the artifact paths (still correct for
+            # incidents captured under an older evidence_dir setting), plus the
+            # timestamp-derived folder under the current one. Only a directory
+            # literally named incident_YYYYMMDD_HHMMSS is ever removed -- a
+            # poisoned artifact path can't point this at anything else.
+            folders: set[Path] = set()
+            try:
+                artifacts = json.loads(row.get("artifacts_json") or "{}") or {}
+            except json.JSONDecodeError:
+                artifacts = {}
+            for art in artifacts.values():
+                if isinstance(art, dict) and art.get("path"):
+                    folders.add(Path(art["path"]).resolve().parent)
+            stamp = time.strftime("incident_%Y%m%d_%H%M%S",
+                                  time.localtime(row["timestamp"]))
+            folders.add((inc_root / stamp).resolve())
+            for folder in folders:
+                if re.fullmatch(r"incident_\d{8}_\d{6}", folder.name) and folder.is_dir():
+                    try:
+                        shutil.rmtree(folder)
+                    except OSError as e:
+                        file_errors.append(f"{folder.name}: {e}")
+            store.delete_incidents([iid])
+            deleted_ids.append(iid)
+        if deleted_ids:
+            try:
+                store.insert(
+                    source="tamper", category="evidence_deleted",
+                    summary=(f"{len(deleted_ids)} tamper incident record(s) deleted "
+                             "via dashboard (password confirmed)"),
+                    details={"incident_ids": deleted_ids},
+                    confidence="certain", severity="medium")
+            except Exception as e:
+                logger_srv.error("Could not log evidence deletion: %s", e)
+    finally:
+        store.close()
+    result = {"ok": True, "deleted": len(deleted_ids)}
+    if file_errors:
+        result["file_errors"] = file_errors
+    return result
+
+
 def mark_incident_reviewed(incident_id: int) -> dict:
     store = _writable_store()
     try:
@@ -898,6 +958,35 @@ def mark_incident_reviewed(incident_id: int) -> dict:
     finally:
         store.close()
     return {"ok": True}
+
+
+def test_enrichment() -> dict:
+    """Settings-card 'Test connection': one live VirusTotal lookup of the EICAR
+    test file's hash with the configured key. Proves key + network + response
+    parsing end-to-end — the terminal-free version of
+    `python -m core.enrichment --live`. Uses an in-memory cache db so the test
+    never writes to the real event store."""
+    from core.config import load_config
+    from core.enrichment import ThreatEnricher
+
+    cfg = load_config()
+    if not cfg.vt_api_key:
+        return {"error": "No VirusTotal API key configured — enter one above and Save first."}
+
+    class _TestCfg:
+        db_path = ":memory:"
+        vt_api_key = cfg.vt_api_key
+
+    enricher = ThreatEnricher(_TestCfg())
+    eicar = "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
+    result = enricher._vt_fetch(eicar)
+    if enricher._auth_failed:
+        return {"error": "VirusTotal rejected the API key (401) — check the key and Save again."}
+    if result is None:
+        return {"error": "Could not reach VirusTotal — network problem or free-tier quota exceeded."}
+    if result.get("status") != "known" or not result.get("detections"):
+        return {"error": "Unexpected VirusTotal reply — the EICAR test file should always be flagged."}
+    return {"ok": True, "detections": result["detections"], "engines_total": result["engines_total"]}
 
 
 def add_trusted(kind: str, value: str) -> dict:
@@ -1135,6 +1224,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     return
                 # No client-supplied path here on purpose: the server opens the
                 # folder it resolved from config, nothing else.
+                from core.config import load_config
                 from core.evidence import incidents_dir
                 folder = incidents_dir(load_config())
                 try:
@@ -1172,6 +1262,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 else:
                     result = mark_incident_reviewed(raw_id)
                     self._send_json(result, status=404 if result.get("error") else 200)
+            elif parsed.path == "/api/incidents/delete":
+                if not self._authed():
+                    self._send_json({"error": "authentication required"}, status=401)
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                except (json.JSONDecodeError, ValueError):
+                    body = {}
+                raw_ids = body.get("ids")
+                ids = ([i for i in raw_ids if isinstance(i, int) and not isinstance(i, bool)]
+                       if isinstance(raw_ids, list) else [])
+                if not ids or len(ids) != len(raw_ids) or len(ids) > 200:
+                    self._send_json({"error": "ids must be a non-empty list of integers (max 200)"},
+                                    status=400)
+                    return
+                # Deleting evidence is itself tamper-sensitive: same password
+                # gate, attempt logging, capture threshold, and lockout as
+                # Stop Monitoring, tracked as its own action.
+                guard = guard_protected_action("delete_incidents", str(body.get("password", "")))
+                if guard.get("error"):
+                    self._send_json({**guard, "tamper_blocked": True}, status=403)
+                else:
+                    self._send_json(delete_incidents_action(ids))
+            elif parsed.path == "/api/enrich/test":
+                if not self._authed():
+                    self._send_json({"error": "authentication required"}, status=401)
+                else:
+                    result = test_enrichment()
+                    self._send_json(result, status=400 if result.get("error") else 200)
             elif parsed.path == "/api/trust/add":
                 if not self._authed():
                     self._send_json({"error": "authentication required"}, status=401)

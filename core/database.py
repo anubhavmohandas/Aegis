@@ -166,6 +166,15 @@ class EventStore:
             cols = [d[0] for d in self._conn.execute("SELECT * FROM incidents LIMIT 0").description]
             return dict(zip(cols, row))
 
+    def delete_incidents(self, ids: list[int]) -> int:
+        if not ids:
+            return 0
+        with self._lock:
+            marks = ",".join("?" * len(ids))
+            cur = self._conn.execute(f"DELETE FROM incidents WHERE id IN ({marks})", ids)
+            self._conn.commit()
+            return cur.rowcount
+
     def set_incident_reviewed(self, incident_id: int, reviewed: bool = True) -> None:
         with self._lock:
             self._conn.execute("UPDATE incidents SET reviewed = ? WHERE id = ?",

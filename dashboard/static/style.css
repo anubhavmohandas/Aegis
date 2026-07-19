@@ -674,6 +674,11 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   font-size: 13px; color: var(--ink-2);
 }
 
+.vt-test-row { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+.vt-test-result { font-size: 12.5px; color: var(--ink-2); }
+.vt-test-result.ok  { color: var(--accent); }
+.vt-test-result.err { color: var(--sev-critical); }
+
 /* Threat-intel panel: one class, verdict picks the tint. Neutral (unknown /
    0 detections) deliberately uses --sev-low, not green — "no detections" is
    never presented as an all-clear. */
@@ -1116,8 +1121,13 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 
 .incidents-view { padding: 20px 4px; max-width: 1000px; margin: 0 auto; }
-.incidents-head { margin-bottom: 16px; }
+.incidents-head { margin-bottom: 16px; display: flex; align-items: flex-start; gap: 14px; }
+.incidents-head > div { flex: 1; }
 .incidents-list { display: flex; flex-direction: column; gap: 10px; }
+
+.incident-row { display: flex; align-items: center; gap: 12px; }
+.incident-row .incident-card { flex: 1; min-width: 0; }
+.incident-check { flex: none; width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
 
 .incident-card {
   width: 100%; text-align: left; cursor: pointer;

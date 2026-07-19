@@ -179,6 +179,7 @@
         active app, network and process context — and keeps the record here even if the files are
         later deleted. This is tamper <em>evidence</em>, not tamper <em>proof</em>.</p>
     </div>
+    <button class="btn btn-stop" id="incidents-delete-btn" hidden>Delete selected</button>
   </div>
   <div class="incidents-list" id="incidents-list">
     <div class="ai-skipped-note">Loading…</div>
@@ -311,6 +312,13 @@
       <label for="set-vt-key">VirusTotal API key <span class="key-status" id="vt-key-status"></span></label>
       <input id="set-vt-key" class="text-input" type="password"
              placeholder="leave blank to keep the current key" autocomplete="new-password">
+    </div>
+
+    <div class="vt-test-row">
+      <button class="btn" id="vt-test-btn"
+              title="One live lookup of the harmless EICAR test file's hash — proves the saved key and connection work">
+        Test connection</button>
+      <span class="vt-test-result" id="vt-test-result"></span>
     </div>
   </div>
 
@@ -475,11 +483,11 @@
 <div class="drawer-overlay" id="stoppw-overlay" hidden></div>
 <div class="log-modal report-modal stoppw-modal" id="stoppw-modal" hidden aria-label="Confirm stop monitoring">
   <div class="drawer-head">
-    <span class="drawer-title">STOP MONITORING</span>
+    <span class="drawer-title" id="stoppw-title">STOP MONITORING</span>
     <button class="drawer-close" id="stoppw-close" aria-label="Close">✕</button>
   </div>
   <div class="drawer-body">
-    <p class="settings-desc">Stopping monitoring is a protected action. Enter the dashboard password
+    <p class="settings-desc" id="stoppw-desc">Stopping monitoring is a protected action. Enter the dashboard password
        to confirm. Wrong attempts are logged, and repeated failures capture evidence.</p>
     <div class="field">
       <label for="stoppw-input">Password</label>

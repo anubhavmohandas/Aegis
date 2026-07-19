@@ -565,7 +565,28 @@ async function startMonitor() {
 
 let stopLockoutTimer = null;   // non-null while a lockout countdown is running
 
+/* The password modal is shared between the two protected actions: null means
+   Stop Monitoring, an array of incident ids means Delete Evidence. */
+let deleteIds = null;
+
 function openStopModal() {
+  deleteIds = null;
+  $("stoppw-title").textContent = "STOP MONITORING";
+  $("stoppw-desc").textContent = "Stopping monitoring is a protected action. Enter the dashboard password to confirm. Wrong attempts are logged, and repeated failures capture evidence.";
+  $("stoppw-confirm").textContent = "Stop Monitoring";
+  showPasswordModal();
+}
+
+function openDeleteModal(ids) {
+  deleteIds = ids;
+  const what = ids.length === 1 ? "this incident" : `these ${ids.length} incidents`;
+  $("stoppw-title").textContent = "DELETE EVIDENCE";
+  $("stoppw-desc").textContent = `Permanently delete ${what} and the captured evidence files. This cannot be undone and is a protected action — enter the dashboard password to confirm. Wrong attempts are logged, and repeated failures capture evidence.`;
+  $("stoppw-confirm").textContent = ids.length === 1 ? "Delete Incident" : `Delete ${ids.length} Incidents`;
+  showPasswordModal();
+}
+
+function showPasswordModal() {
   $("stoppw-overlay").hidden = false;
   $("stoppw-modal").hidden = false;
   $("stoppw-note").textContent = "";
@@ -609,19 +630,19 @@ async function confirmStop() {
   if (stopLockoutTimer) return;   // locked out — ignore clicks/Enter
   const password = $("stoppw-input").value;
   const btn = $("stoppw-confirm");
+  const deleting = deleteIds !== null;
   btn.disabled = true;
-  state.monitorBusy = true;
-  renderMonitorPill();
+  if (!deleting) { state.monitorBusy = true; renderMonitorPill(); }
   try {
-    const res = await fetch("/api/monitor/stop", {
+    const res = await fetch(deleting ? "/api/incidents/delete" : "/api/monitor/stop", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify(deleting ? { ids: deleteIds, password } : { password }),
     });
     if (res.status === 401) { location.replace("/login"); return; }
     const data = await res.json();
     if (res.status === 403 && data.tamper_blocked) {
-      // Wrong password -- monitoring keeps running; keep the modal open.
+      // Wrong password -- nothing happened; keep the modal open.
       if (data.locked) {
         startStopLockout(data.retry_after);
         if (data.evidence_captured) refreshShield();
@@ -633,6 +654,18 @@ async function confirmStop() {
       if (data.evidence_captured) { refreshShield(); toast("Tamper evidence captured", true); }
       return;
     }
+    if (data.error) {
+      $("stoppw-note").textContent = data.error;
+      return;
+    }
+    if (deleting) {
+      closeStopModal();
+      closeIncidentDrawer();
+      toast(`Deleted ${data.deleted} incident${data.deleted === 1 ? "" : "s"}`);
+      if (data.file_errors) toast("Some evidence files could not be removed — see logs", true);
+      loadIncidents();   // re-renders the list and refreshes the shield
+      return;
+    }
     state.monitor = data;
     closeStopModal();
     toast("Monitoring stopped");
@@ -640,9 +673,11 @@ async function confirmStop() {
     $("stoppw-note").textContent = "Request failed — is the dashboard server still running?";
   } finally {
     if (!stopLockoutTimer) btn.disabled = false;   // stay disabled while locked out
-    state.monitorBusy = false;
-    renderMonitorPill();
-    refreshStatsOnly();
+    if (!deleting) {
+      state.monitorBusy = false;
+      renderMonitorPill();
+      refreshStatsOnly();
+    }
   }
 }
 
@@ -1289,6 +1324,30 @@ function bindSettings() {
   });
 
   $("settings-save").addEventListener("click", saveSettings);
+
+  $("vt-test-btn").addEventListener("click", async () => {
+    const btn = $("vt-test-btn"), out = $("vt-test-result");
+    btn.disabled = true;
+    out.className = "vt-test-result";
+    out.textContent = "Looking up the EICAR test file on VirusTotal…";
+    try {
+      const res = await fetch("/api/enrich/test", { method: "POST" });
+      if (res.status === 401) { location.replace("/login"); return; }
+      const data = await res.json().catch(() => ({}));
+      if (data.ok) {
+        out.classList.add("ok");
+        out.textContent = `✓ Working — test file flagged by ${data.detections}/${data.engines_total} engines`;
+      } else {
+        out.classList.add("err");
+        out.textContent = data.error || "Test failed.";
+      }
+    } catch {
+      out.classList.add("err");
+      out.textContent = "Could not reach Aegis.";
+    } finally {
+      btn.disabled = false;
+    }
+  });
   $("password-save").addEventListener("click", changePassword);
 
   $("update-check-btn").addEventListener("click", (e) => {
@@ -1332,6 +1391,8 @@ function incidentRowHtml(inc) {
   try { artifacts = JSON.parse(inc.artifacts_json) || {}; } catch { /* ignore */ }
   const tags = Object.keys(artifacts).map((k) => `<span class="meta-badge">${escapeHtml(k)}</span>`).join("");
   return `
+  <div class="incident-row">
+    <input type="checkbox" class="incident-check" data-id="${inc.id}" aria-label="Select incident #${inc.id}">
     <button class="incident-card ${inc.reviewed ? "" : "unreviewed"}" data-id="${inc.id}">
       <div class="incident-card-head">
         <span class="badge badge-critical">tamper</span>
@@ -1344,11 +1405,17 @@ function incidentRowHtml(inc) {
         ${inc.username ? `<span>${escapeHtml(inc.username)}@${escapeHtml(inc.hostname || "?")}</span>` : ""}
         ${tags}
       </div>
-    </button>`;
+    </button>
+  </div>`;
+}
+
+function checkedIncidentIds() {
+  return [...document.querySelectorAll(".incident-check:checked")].map((c) => Number(c.dataset.id));
 }
 
 async function loadIncidents() {
   const list = $("incidents-list");
+  $("incidents-delete-btn").hidden = true;   // re-render resets the checkboxes
   list.innerHTML = '<div class="ai-skipped-note">Loading…</div>';
   try {
     const data = await api("/api/incidents");
@@ -1418,6 +1485,7 @@ async function openIncident(id) {
 
       <div class="drawer-actions">
         ${inc.reviewed ? "" : `<button class="btn btn-primary" id="incident-review-btn" data-id="${inc.id}">Mark Reviewed</button>`}
+        <button class="btn btn-stop" id="incident-delete-btn" data-id="${inc.id}">Delete Evidence</button>
       </div>`;
 
     $("incident-drawer").hidden = false;
@@ -1615,11 +1683,21 @@ function bind() {
     const card = e.target.closest(".incident-card");
     if (card) openIncident(Number(card.dataset.id));
   });
+  $("incidents-list").addEventListener("change", (e) => {
+    if (e.target.classList.contains("incident-check"))
+      $("incidents-delete-btn").hidden = checkedIncidentIds().length === 0;
+  });
+  $("incidents-delete-btn").addEventListener("click", () => {
+    const ids = checkedIncidentIds();
+    if (ids.length) openDeleteModal(ids);
+  });
   $("incident-drawer-close").addEventListener("click", closeIncidentDrawer);
   $("incident-overlay").addEventListener("click", closeIncidentDrawer);
   $("incident-drawer-body").addEventListener("click", (e) => {
     const btn = e.target.closest("#incident-review-btn");
     if (btn) reviewIncident(btn.dataset.id);
+    const del = e.target.closest("#incident-delete-btn");
+    if (del) openDeleteModal([Number(del.dataset.id)]);
   });
   $("log-modal-close").addEventListener("click", closeLogModal);
   $("log-overlay").addEventListener("click", closeLogModal);
