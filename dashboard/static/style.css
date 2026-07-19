@@ -511,6 +511,18 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   100% { background: transparent; border-color: transparent; }
 }
 
+/* Collapsed run of near-identical events. The <summary> reuses .event-row
+   styling wholesale; only the marker and the nested-body indent are new. */
+.event-group { margin-bottom: 6px; }
+.event-group > summary { list-style: none; cursor: pointer; margin-bottom: 0; }
+.event-group > summary::-webkit-details-marker { display: none; }
+.event-group .group-chevron { transition: transform .15s; }
+.event-group[open] > summary .group-chevron { transform: rotate(90deg); }
+.event-group-body {
+  margin: 4px 0 2px 12px; padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+
 .event-time { font-family: var(--font-mono); font-size: 12px; color: var(--ink-3); white-space: nowrap; }
 
 .badge {
@@ -661,6 +673,29 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   padding: 10px 12px;
   font-size: 13px; color: var(--ink-2);
 }
+
+/* Threat-intel panel: one class, verdict picks the tint. Neutral (unknown /
+   0 detections) deliberately uses --sev-low, not green — "no detections" is
+   never presented as an all-clear. */
+.ti-panel {
+  --ti-color: var(--sev-low);
+  border: 1px solid color-mix(in srgb, var(--ti-color) 55%, transparent);
+  background: color-mix(in srgb, var(--ti-color) 9%, transparent);
+  border-radius: var(--radius);
+  padding: 11px 12px;
+}
+.ti-panel.bad  { --ti-color: var(--sev-critical); }
+.ti-panel.warn { --ti-color: var(--sev-medium); }
+.ti-head {
+  display: flex; align-items: center; gap: 8px;
+  font-weight: 600; font-size: 13.5px; color: var(--ink);
+}
+.ti-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ti-color); flex: none; }
+.ti-link { margin-left: auto; font-size: 12px; font-weight: 500; color: var(--ti-color); text-decoration: none; white-space: nowrap; }
+.ti-link:hover { text-decoration: underline; }
+.ti-sub { margin-top: 5px; font-size: 12.5px; color: var(--ink-2); }
+.ti-sub b { color: var(--ink); }
+.ti-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 
 .ai-skipped-note { font-size: 13px; color: var(--ink-3); font-style: italic; }
 
@@ -1105,7 +1140,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
    shares .report-modal with -- the 3 stat tiles were clipping off the right
    edge at 460px. Auto-fit lets them sit 3-across when there's room and wrap to
    2 when there isn't, so nothing is ever cut off. */
-#daily-modal { width: min(620px, 94vw); }
+#daily-modal { width: min(620px, 94vw); max-height: 82vh; }
 .daily-tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

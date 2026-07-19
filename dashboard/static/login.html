@@ -21,7 +21,7 @@
     <span class="login-logo" role="img" aria-label="Aegis logo"></span>
   </div>
   <div class="login-title">AEGIS</div>
-  <div class="login-sub">Event Console</div>
+  <div class="login-sub">Memory</div>
 
   <form class="login-form" id="form" autocomplete="off">
     <div class="login-error" id="error" hidden></div>
@@ -69,7 +69,7 @@
         ? "Invalid credentials — access denied."
         : `Sign-in failed (${res.status}).`;
     } catch {
-      errorBox.textContent = "Console unreachable — is the server running?";
+      errorBox.textContent = "Aegis unreachable — is the server running?";
     }
     errorBox.hidden = false;
     card.classList.remove("shake");

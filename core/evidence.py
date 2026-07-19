@@ -141,19 +141,26 @@ def _webcam(dest: Path) -> tuple[Path | None, str | None]:
     _BLACK = 8.0
 
     def _grab(index: int):
-        """Open device `index`, read until a frame with actual content or ~0.5s:
-        the first frames after opening are black while auto-exposure settles."""
+        """Open device `index` and give auto-exposure time to converge: taking
+        the FIRST non-black frame yields a severely underexposed silhouette
+        (AE starts dark and brightens over ~1s of streaming). Once frames go
+        non-black, keep reading for another ~1.2s and return the last one;
+        a camera that stays black gives up at ~1s so the next one gets a turn."""
+        # occam: fixed settle window; an exposure-stability check if 1.2s misjudges some camera
         cam = cv2.VideoCapture(index)
         try:
             if not cam.isOpened():
                 return None
             frame = None
-            for _ in range(10):
+            lit_at = None
+            deadline = time.time() + 1.0
+            while time.time() < deadline:
                 ok, f = cam.read()
                 if ok and f is not None:
                     frame = f
-                    if f.mean() > _BLACK:
-                        break
+                    if lit_at is None and f.mean() > _BLACK:
+                        lit_at = time.time()
+                        deadline = lit_at + 1.2
                 time.sleep(0.05)
             return frame
         finally:

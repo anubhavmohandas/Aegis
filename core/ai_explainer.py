@@ -185,6 +185,18 @@ class AIExplainer:
         text = resp.content[0].text if resp.content else None
         return self._nonempty(text, event_summary)
 
+    def _reasoning_off_kwargs(self) -> dict:
+        # NVIDIA NIM's Nemotron reasoning models leak their chain of thought
+        # into `content` (duplicated from reasoning_content, no <think> tags)
+        # and routinely blow the whole max_tokens budget on it, so incidents
+        # were stored with the monologue instead of the summary. This template
+        # kwarg turns thinking off at the server (verified live 2026-07-19:
+        # clean answer, finish=stop). Only sent to NVIDIA -- OpenAI proper
+        # rejects unrecognized body arguments.
+        if "nvidia" in (self.config.ai_base_url or ""):
+            return {"extra_body": {"chat_template_kwargs": {"thinking": False}}}
+        return {}
+
     def _explain_openai_compatible(self, prompt: str, event_summary: str, system_prompt: str = SYSTEM_PROMPT) -> str:
         client = self._get_client()
         resp = client.chat.completions.create(
@@ -195,6 +207,7 @@ class AIExplainer:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
+            **self._reasoning_off_kwargs(),
         )
         return self._nonempty(resp.choices[0].message.content, event_summary)
 
@@ -221,6 +234,7 @@ class AIExplainer:
                 temperature=self.config.ai_temperature,
                 messages=[{"role": "system", "content": system_prompt},
                           {"role": "user", "content": user_block}],
+                **self._reasoning_off_kwargs(),
             )
             return self._nonempty(resp.choices[0].message.content, fallback)
         except Exception as e:

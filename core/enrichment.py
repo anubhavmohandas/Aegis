@@ -310,3 +310,42 @@ if __name__ == "__main__":
     assert hi.details["threat_intel"]["mitre"][0]["id"] == "T1547"  # offline half still works keyless
 
     print("enrichment self-check: OK")
+
+    # Live VT validation: python -m core.enrichment --live
+    # Needs a real key (VT_API_KEY env/.env, or saved via Settings -> Threat
+    # Intelligence). Three lookups, inside the 4/min free-tier budget, against
+    # a throwaway cache db -- never the real event store.
+    import sys
+    if "--live" in sys.argv:
+        from core.config import load_config
+        cfg = load_config()
+        if not cfg.vt_api_key:
+            sys.exit("--live needs VT_API_KEY (env, .env, or Settings → Threat Intelligence)")
+
+        class _LiveCfg:
+            db_path = os.path.join(tempfile.mkdtemp(), "live.db")
+            vt_api_key = cfg.vt_api_key
+        live = ThreatEnricher(_LiveCfg())
+
+        # 1. EICAR test file: must be known to VT with real detections.
+        eicar = "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
+        r = live._vt_fetch(eicar)
+        print("EICAR:", json.dumps(r, indent=2))
+        assert r and r["status"] == "known" and r["detections"] > 0, \
+            "EICAR should be a known detection (401 in the log means a bad key)"
+
+        # 2. Nonsense hash: must map to the unknown_hash verdict, not an error.
+        r = live._vt_fetch("f" * 64)
+        print("bogus hash:", r)
+        assert r == {"source": "virustotal", "status": "unknown_hash"}
+
+        # 3. Full annotate() pipeline on a real local binary: hash -> lookup
+        #    -> details["threat_intel"] -> cached.
+        evt = MonitorEvent(category=EventCategory.PROCESS_STARTED,
+                           summary="live test", details={"exe": "/bin/ls"})
+        live.annotate(evt, "high")
+        print("/bin/ls:", json.dumps(evt.details.get("threat_intel"), indent=2))
+        assert "vt" in evt.details.get("threat_intel", {}), "annotate() attached no VT verdict"
+        assert live._cache_get(evt.details["sha256"]) is not None, "lookup was not cached"
+
+        print("enrichment live check: OK")

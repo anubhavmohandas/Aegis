@@ -280,6 +280,44 @@ function eventRowHtml(ev, fresh) {
     </button>`;
 }
 
+/* Consecutive near-identical rows (same source+severity+category+subject)
+   collapse into one <details> group — "Chrome · 17 events ▸" instead of 17
+   rows. <details> is the whole widget: open/closed state needs no JS and
+   the existing .event-row click delegation still opens the drawer for the
+   inner rows. Runs shorter than GROUP_MIN stay individual rows. */
+const GROUP_MIN = 4;
+
+function groupKey(ev) {
+  const m = PROCESS_SUMMARY_RE.exec(ev.summary);
+  return `${ev.source}|${ev.severity}|${ev.category}|${m ? m[1] : ev.summary}`;
+}
+
+function groupHtml(run, freshIds) {
+  const newest = run[0], oldest = run[run.length - 1];
+  // Never hide the row the user is looking at, or ones that just arrived.
+  const open = run.some((ev) => freshIds.has(ev.id) || ev.id === state.selectedId);
+  const m = PROCESS_SUMMARY_RE.exec(newest.summary);
+  const name = m ? m[1] : newest.summary;
+  return `
+    <details class="event-group" ${open ? "open" : ""}>
+      <summary class="event-row" style="--sev-color: var(--sev-${newest.severity})">
+        <span class="event-time">${fmtTime(newest.timestamp)}</span>
+        <span class="badge badge-${newest.severity}">${newest.severity}</span>
+        <span class="event-main">
+          <span class="event-summary">${escapeHtml(name)}</span>
+          <span class="event-sub">
+            <span class="src">${SOURCE_LABELS[newest.source] || escapeHtml(newest.source)}</span>
+            <span>${run.length} events · ${fmtTime(oldest.timestamp)} – ${fmtTime(newest.timestamp)}</span>
+          </span>
+        </span>
+        <span class="event-chevron group-chevron">›</span>
+      </summary>
+      <div class="event-group-body">
+        ${run.map((ev) => eventRowHtml(ev, freshIds.has(ev.id))).join("")}
+      </div>
+    </details>`;
+}
+
 function renderTimeline(freshIds = new Set()) {
   const timeline = $("timeline");
 
@@ -303,15 +341,25 @@ function renderTimeline(freshIds = new Set()) {
     const label = dayLabel(ev.timestamp);
     counts.set(label, (counts.get(label) || 0) + 1);
   }
+  let run = [];
+  const flush = () => {
+    if (!run.length) return;
+    if (run.length >= GROUP_MIN) parts.push(groupHtml(run, freshIds));
+    else for (const ev of run) parts.push(eventRowHtml(ev, freshIds.has(ev.id)));
+    run = [];
+  };
   for (const ev of state.events) {
     const label = dayLabel(ev.timestamp);
-    if (label !== currentDay) {
+    const dayChanged = label !== currentDay;
+    if (dayChanged || (run.length && groupKey(run[0]) !== groupKey(ev))) flush();
+    if (dayChanged) {
       currentDay = label;
       parts.push(`<div class="day-header">${label}
         <span class="day-count">${counts.get(label)} event${counts.get(label) === 1 ? "" : "s"}</span></div>`);
     }
-    parts.push(eventRowHtml(ev, freshIds.has(ev.id)));
+    run.push(ev);
   }
+  flush();
   timeline.innerHTML = parts.join("");
 
   if (state.selectedId != null) {
@@ -718,6 +766,50 @@ function hidePill() {
 
 /* ---------- drawer ---------- */
 
+/* details.threat_intel is Aegis's own normalized shape (core/enrichment.py),
+   never raw VT JSON: { mitre?: [{id,name}], vt?: { status, detections,
+   suspicious, engines_total, link, family?, first_seen_utc? } }. Verdict
+   framing follows the enrichment philosophy: unknown/zero detections are
+   stated as "not proof of safety", never as a green all-clear. */
+function threatIntelHtml(details) {
+  const ti = details.threat_intel;
+  if (!ti || (!ti.vt && !(ti.mitre || []).length)) return "";
+  const vt = ti.vt;
+  let cls = "", head = "", sub = "";
+  if (vt) {
+    if (vt.status === "unknown_hash") {
+      head = "Unknown to VirusTotal";
+      sub = "No engine has scanned this file's hash yet. Unknown is not safe — brand-new files start here.";
+    } else if (vt.detections > 0) {
+      cls = "bad";
+      head = `${vt.detections} / ${vt.engines_total} engines flagged this file`;
+      sub = vt.family ? `Classified as <b>${escapeHtml(vt.family)}</b>` : "";
+    } else if (vt.suspicious > 0) {
+      cls = "warn";
+      head = `${vt.suspicious} / ${vt.engines_total} engines call this file suspicious`;
+    } else {
+      head = `0 / ${vt.engines_total} detections`;
+      sub = "Zero detections is not proof of safety — only that no engine flags this hash yet.";
+    }
+  } else {
+    head = "Technique annotation";
+    sub = "Matched offline — no file hash was looked up for this event.";
+  }
+  const meta = [];
+  if (vt && vt.first_seen_utc) meta.push(`<span class="meta-badge">first seen ${escapeHtml(vt.first_seen_utc)}</span>`);
+  for (const t of ti.mitre || [])
+    meta.push(`<span class="meta-badge" title="MITRE ATT&amp;CK — ${escapeHtml(t.name)}">${escapeHtml(t.id)} · ${escapeHtml(t.name)}</span>`);
+  const link = vt && typeof vt.link === "string" && vt.link.startsWith("https://www.virustotal.com/")
+    ? `<a class="ti-link" href="${escapeHtml(vt.link)}" target="_blank" rel="noopener">View on VirusTotal ↗</a>` : "";
+  return `
+    <div class="drawer-section-label">Threat Intelligence</div>
+    <div class="ti-panel ${cls}">
+      <div class="ti-head"><span class="ti-dot"></span>${head}${link}</div>
+      ${sub ? `<div class="ti-sub">${sub}</div>` : ""}
+      ${meta.length ? `<div class="ti-meta">${meta.join("")}</div>` : ""}
+    </div>`;
+}
+
 function openDrawer(id) {
   const ev = state.byId.get(id);
   if (!ev) return;
@@ -728,7 +820,7 @@ function openDrawer(id) {
   let details = {};
   try { details = JSON.parse(ev.details_json) || {}; } catch { /* show raw below regardless */ }
   const detailRows = Object.entries(details)
-    .filter(([k]) => k !== "_schema")
+    .filter(([k]) => k !== "_schema" && k !== "threat_intel")  // threat_intel has its own panel
     .map(([k, v]) => `<tr><td class="k">${escapeHtml(k)}</td>
                       <td class="v">${escapeHtml(typeof v === "object" ? JSON.stringify(v) : String(v))}</td></tr>`)
     .join("");
@@ -753,7 +845,7 @@ function openDrawer(id) {
     </div>
     <div class="drawer-summary">${escapeHtml(ev.summary)}</div>
     <div class="drawer-time">${fmtFullTime(ev.timestamp)}</div>
-
+    ${threatIntelHtml(details)}
     <div class="drawer-section-label">${ev.ai_skipped ? "Explanation" : "AI Explanation"}</div>
     ${ev.explanation
       ? `<div class="explanation">${renderMarkdownLite(ev.explanation)}</div>`
@@ -1456,7 +1548,7 @@ function bind() {
 
   $("timeline").addEventListener("click", (e) => {
     const row = e.target.closest(".event-row");
-    if (row) openDrawer(Number(row.dataset.id));
+    if (row && row.dataset.id) openDrawer(Number(row.dataset.id));  // group summaries have no id — <details> handles them
   });
 
   $("drawer-close").addEventListener("click", closeDrawer);
@@ -1481,7 +1573,7 @@ function bind() {
 
   $("new-events-pill").addEventListener("click", () => {
     hidePill();
-    switchView("console");   // the pill can appear over Settings/Incidents; new events live in Console
+    switchView("console");   // the pill can appear over Settings/Incidents; new events live in Memory
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
   window.addEventListener("scroll", () => { if (window.scrollY < 100) hidePill(); }, { passive: true });
