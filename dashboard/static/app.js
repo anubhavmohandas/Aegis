@@ -563,6 +563,28 @@ async function startMonitor() {
   }
 }
 
+async function restartMonitoring() {
+  const btn = $("settings-restart");
+  btn.disabled = true;
+  state.monitorBusy = true;
+  renderMonitorPill();
+  try {
+    const res = await fetch("/api/monitor/restart", { method: "POST" });
+    if (res.status === 401) { location.replace("/login"); return; }
+    const data = await res.json();
+    state.monitor = data;
+    toast(data.running ? "Monitoring restarted — saved settings are now active"
+                       : "Restart failed — monitoring did not come back up, check the log", !data.running);
+  } catch {
+    toast("Request failed — is the dashboard server still running?", true);
+  } finally {
+    btn.disabled = false;
+    state.monitorBusy = false;
+    renderMonitorPill();
+    refreshStatsOnly();
+  }
+}
+
 let stopLockoutTimer = null;   // non-null while a lockout countdown is running
 
 /* The password modal is shared between the two protected actions: null means
@@ -1324,6 +1346,7 @@ function bindSettings() {
   });
 
   $("settings-save").addEventListener("click", saveSettings);
+  $("settings-restart").addEventListener("click", restartMonitoring);
 
   $("vt-test-btn").addEventListener("click", async () => {
     const btn = $("vt-test-btn"), out = $("vt-test-result");

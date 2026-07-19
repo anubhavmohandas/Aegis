@@ -1201,6 +1201,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({"error": "authentication required"}, status=401)
                 else:
                     self._send_json(start_monitor())
+            elif parsed.path == "/api/monitor/restart":
+                # Stop + start so the pipeline is rebuilt against freshly
+                # loaded config -- how saved settings take effect without
+                # relaunching the app. Not password-gated like stop: it ends
+                # with monitoring RUNNING, so it can't be used to disable it.
+                if not self._authed():
+                    self._send_json({"error": "authentication required"}, status=401)
+                    return
+                stop_monitor()
+                self._send_json(start_monitor())
             elif parsed.path == "/api/monitor/stop":
                 if not self._authed():
                     self._send_json({"error": "authentication required"}, status=401)

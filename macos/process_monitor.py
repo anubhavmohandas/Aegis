@@ -55,7 +55,7 @@ logger = logging.getLogger("aegis.macos.process_monitor")
 # it's redefining the *class* that ObjC won't allow.
 try:
     from AppKit import NSWorkspace, NSWorkspaceDidLaunchApplicationNotification
-    from Foundation import NSObject
+    from Foundation import NSDate, NSDefaultRunLoopMode, NSObject, NSRunLoop
 
     class _LaunchObserver(NSObject):
         out_queue = None  # set per-instance right after alloc().init(), see below
@@ -148,11 +148,15 @@ class MacProcessMonitor:
                 self._ns_notification_center.removeObserver_(self._ns_observer)
         except Exception as e:
             logger.debug("Could not remove NSWorkspace observer: %s", e)
-        try:
-            from PyObjCTools import AppHelper
-            AppHelper.stopEventLoop()
-        except Exception as e:
-            logger.debug("Could not stop NSWorkspace run loop: %s", e)
+        # No explicit run-loop stop call here on purpose. This used to call
+        # AppHelper.stopEventLoop(), which -- when invoked from any thread
+        # other than the observer thread (it always is: HTTP worker for the
+        # dashboard button, main thread for the menu bar) -- finds no run-loop
+        # stopper for the CALLING thread and falls back to
+        # NSApp().terminate_(None): it quit the entire desktop app. That was
+        # the "Stop/Restart Monitoring closes Aegis" bug. The observer loop
+        # below now polls self._stop (already set by stop() before we get
+        # here) and exits on its own within its 0.5s runMode timeout.
         if self._nsworkspace_thread:
             self._nsworkspace_thread.join(timeout=5)
             if self._nsworkspace_thread.is_alive():
@@ -167,8 +171,6 @@ class MacProcessMonitor:
                         "pip install pyobjc-framework-Cocoa")
             return
 
-        from PyObjCTools import AppHelper
-
         try:
             observer = _LaunchObserver.alloc().init()
             observer.out_queue = self.out_queue
@@ -179,7 +181,21 @@ class MacProcessMonitor:
             self._ns_observer = observer
             self._ns_notification_center = nc
             logger.info("NSWorkspace GUI-app-launch observer started.")
-            AppHelper.runConsoleEventLoop(installInterrupt=False)
+            # Own the run loop instead of AppHelper.runConsoleEventLoop():
+            # that loop could only be ended by stopEventLoop(), whose
+            # cross-thread fallback is NSApp terminate (see
+            # _stop_nsworkspace_observer). Spinning runMode ourselves keyed
+            # off the same self._stop event every other monitor thread uses
+            # makes shutdown uniform and can't touch the application object.
+            runloop = NSRunLoop.currentRunLoop()
+            while not self._stop.is_set():
+                if not runloop.runMode_beforeDate_(
+                        NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(0.5)):
+                    # No input sources for this mode: runMode returns
+                    # immediately instead of blocking. Wait on the stop event
+                    # so this can't busy-spin a core (same guard AppHelper's
+                    # own loop uses, minus its NSApp coupling).
+                    self._stop.wait(0.2)
         except Exception as e:
             logger.error("Failed to start NSWorkspace observer (%s). GUI launches will only be "
                          "caught by the slower psutil poll.", e)

@@ -68,6 +68,10 @@ class MonitorPipeline:
     def start(self) -> None:
         if self.running:
             return
+        # Re-read config every start: settings saved in the dashboard only
+        # land in config.yaml/.env, so reusing the object loaded at app launch
+        # made every setting change require a full app relaunch to apply.
+        self.config = load_config()
         event_queue: Queue = Queue()
         system = platform.system()
         platform_monitors = build_platform_monitors(system, event_queue, self.config.poll_interval_seconds)
