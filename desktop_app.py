@@ -415,9 +415,23 @@ def _darken_titlebar(window):
         return
     try:
         import AppKit
-        window.native.setAppearance_(AppKit.NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
+
+        # Confirmed crash (not just best-effort ugliness): pywebview fires
+        # `shown` on a background thread (same fact _add_macos_menubar's
+        # docstring already notes and hops off of), and setAppearance_ is a
+        # main-thread-only Cocoa call -- calling it here directly trapped
+        # with EXC_BREAKPOINT/SIGTRAP inside -[NSView setAppearance:], taking
+        # the whole app down. That's a hard OS-level main-thread assertion,
+        # not a Python exception, so the try/except below never caught it.
+        def _apply():
+            try:
+                window.native.setAppearance_(AppKit.NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
+            except Exception:
+                logger.debug("Could not force a dark title bar", exc_info=True)
+
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(_apply)
     except Exception:
-        logger.debug("Could not force a dark title bar", exc_info=True)
+        logger.debug("Could not schedule dark title bar", exc_info=True)
 
 
 def _wire_monitor_log() -> None:
