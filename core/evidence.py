@@ -247,10 +247,24 @@ def _active_window() -> str | None:
             return out.stdout.strip() or None
         if system == "Windows":
             import ctypes
-            hwnd = ctypes.windll.user32.GetForegroundWindow()
-            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            from ctypes import wintypes
+            # Declare restype/argtypes explicitly. ctypes defaults a foreign
+            # function's return to a 32-bit c_int; on 64-bit Windows an HWND is
+            # a 64-bit handle, so the default truncates it and the (also
+            # int-defaulted) text calls get a mangled handle -> wrong or empty
+            # title. Typing them as HWND/LPWSTR keeps the handle intact.
+            user32 = ctypes.windll.user32
+            user32.GetForegroundWindow.restype = wintypes.HWND
+            user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+            user32.GetWindowTextLengthW.restype = ctypes.c_int
+            user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+            user32.GetWindowTextW.restype = ctypes.c_int
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:      # nothing focused (e.g. the lock screen) -> no title
+                return None
+            length = user32.GetWindowTextLengthW(hwnd)
             buf = ctypes.create_unicode_buffer(length + 1)
-            ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
             return buf.value or None
     except Exception:
         pass

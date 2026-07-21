@@ -141,7 +141,14 @@ def _verify_password(username: str, password: str) -> bool:
     # username can't short-circuit before the password hash is even computed
     # -- avoids a timing side-channel that would let an attacker enumerate
     # valid usernames faster than valid passwords.
-    return hmac.compare_digest(username, creds["username"]) & hmac.compare_digest(candidate, creds["hash"])
+    # The username is compared as UTF-8 bytes: hmac.compare_digest raises
+    # TypeError on a str containing non-ASCII characters, and `username` comes
+    # straight from the login form -- a submitted non-ASCII username would
+    # otherwise surface as an unhandled HTTP 500 instead of a clean "invalid
+    # credentials". candidate/hash are hex digests (always ASCII), so they
+    # stay as str.
+    return (hmac.compare_digest(username.encode("utf-8"), creds["username"].encode("utf-8"))
+            & hmac.compare_digest(candidate, creds["hash"]))
 
 
 def change_password(current_password: str, new_password: str) -> dict:

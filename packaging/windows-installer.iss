@@ -32,10 +32,21 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayName={#MyAppName} {#MyAppVersion}
 OutputDir=output
 OutputBaseFilename=aegis-{#MyAppVersion}-setup
 Compression=lzma2
 SolidCompression=yes
+WizardStyle=modern
+; Installer branding + the license the user must accept. LICENSE lives at the
+; repo root and aegis.ico under assets/ -- both relative to this file in
+; packaging/. If either path moves, Inno Setup fails loudly at compile time,
+; not silently, so these are safe to assert without a Windows run.
+SetupIconFile=..\assets\aegis.ico
+LicenseFile=..\LICENSE
+; Python 3.14 (what the bundle ships) dropped support for anything below
+; Windows 8.1; the x64 build below already excludes 32-bit. 6.3 = Windows 8.1.
+MinVersion=6.3
 ; The ETW process-monitoring backend needs elevation at RUNTIME (see
 ; windows/process_monitor.py); the INSTALLER only needs it to write to
 ; Program Files. Runtime elevation is the user's call each launch -- an

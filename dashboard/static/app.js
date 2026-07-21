@@ -26,6 +26,24 @@ function displaySummary(ev, now = Date.now()) {
 const SEVERITY_ORDER = ["critical", "high", "medium", "low"];
 const SOURCE_LABELS = { process: "Process", usb: "USB", startup: "Startup", folder: "Folder",
                         session: "Session", tamper: "Tamper" };
+
+/* Per-source glyph shown at the head of each event row and in the drawer,
+   the way the reference SOC dashboards give USB / shell / file their own
+   icon. Inline 16x16 SVG (stroke = currentColor) so they inherit the row's
+   severity tint and theme color with zero extra requests. */
+const SOURCE_ICONS = {
+  process: '<path d="M3 4.5h10v7H3z"/><polyline points="5,7 6.8,8.5 5,10"/><line x1="8.2" y1="10" x2="11" y2="10"/>',
+  usb: '<line x1="8" y1="2.5" x2="8" y2="13.5"/><polygon points="8,2.5 6.6,4.6 9.4,4.6" fill="currentColor" stroke="none"/><circle cx="5.2" cy="9" r="1.1"/><line x1="5.2" y1="9" x2="8" y2="7"/><rect x="9.8" y="6.2" width="2.4" height="2.4"/><line x1="11" y1="8.6" x2="8" y2="10.5"/>',
+  startup: '<rect x="3" y="3" width="4" height="4" rx="1"/><rect x="9" y="3" width="4" height="4" rx="1"/><rect x="3" y="9" width="4" height="4" rx="1"/><rect x="9" y="9" width="4" height="4" rx="1"/>',
+  folder: '<path d="M2.5 5.5 A1 1 0 0 1 3.5 4.5 H6.2 L7.5 6 H12.5 A1 1 0 0 1 13.5 7 V11.5 A1 1 0 0 1 12.5 12.5 H3.5 A1 1 0 0 1 2.5 11.5 Z"/>',
+  session: '<rect x="4" y="7" width="8" height="6" rx="1"/><path d="M5.8 7 V5.2 A2.2 2.2 0 0 1 10.2 5.2 V7"/>',
+  tamper: '<path d="M8 2 L13 4 V8 C13 11 10.8 13.2 8 14 C5.2 13.2 3 11 3 8 V4 Z"/><line x1="8" y1="5.5" x2="8" y2="9"/><circle cx="8" cy="11" r="0.5" fill="currentColor" stroke="none"/>',
+};
+function sourceIcon(source) {
+  const glyph = SOURCE_ICONS[source] || SOURCE_ICONS.process;
+  return `<span class="event-icon src-${source}" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none"
+    stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${glyph}</svg></span>`;
+}
 const CONFIDENCE_TITLES = {
   certain: "Real-time detection",
   polled: "Polled detection — may be delayed or incomplete",
@@ -265,6 +283,7 @@ function eventRowHtml(ev, fresh) {
     <button class="event-row ${fresh ? "fresh" : ""}" data-id="${ev.id}"
             style="--sev-color: var(--sev-${ev.severity})">
       <span class="event-time">${fmtTime(ev.timestamp)}</span>
+      ${sourceIcon(ev.source)}
       <span class="badge badge-${ev.severity}">${ev.severity}</span>
       <span class="event-main">
         <span class="event-summary">${escapeHtml(displaySummary(ev))}</span>
@@ -302,6 +321,7 @@ function groupHtml(run, freshIds) {
     <details class="event-group" ${open ? "open" : ""}>
       <summary class="event-row" style="--sev-color: var(--sev-${newest.severity})">
         <span class="event-time">${fmtTime(newest.timestamp)}</span>
+        ${sourceIcon(newest.source)}
         <span class="badge badge-${newest.severity}">${newest.severity}</span>
         <span class="event-main">
           <span class="event-summary">${escapeHtml(name)}</span>
@@ -511,6 +531,16 @@ function renderMonitorPill() {
     el.classList.add("idle");
     label.textContent = "MONITORING STOPPED";
     el.title = "";
+  }
+
+  // Mirror the same state into the sidebar footer badge.
+  const sideMon = $("side-monitor"), sideSub = $("side-monitor-sub");
+  if (sideMon && sideSub) {
+    const stopped = state.consoleReachable === false || (!state.monitor.running && !state.monitorBusy);
+    sideMon.classList.toggle("stopped", stopped);
+    sideSub.textContent = state.consoleReachable === false ? "Console offline"
+      : state.monitorBusy ? "Working…"
+      : state.monitor.running ? "All systems operational" : "Monitoring stopped";
   }
 
   if (!toggle) return;
@@ -891,8 +921,10 @@ function openDrawer(id) {
     : "";
 
   const conf = ev.confidence || "certain";
+  const ti = threatIntelHtml(details);
   $("drawer-body").innerHTML = `
     <div class="drawer-badges">
+      ${sourceIcon(ev.source)}
       <span class="badge badge-${ev.severity}">${ev.severity}</span>
       <span class="meta-badge">${SOURCE_LABELS[ev.source] || escapeHtml(ev.source)}</span>
       <span class="meta-badge">${escapeHtml(prettyCategory(ev.category))}</span>
@@ -902,41 +934,66 @@ function openDrawer(id) {
     </div>
     <div class="drawer-summary">${escapeHtml(ev.summary)}</div>
     <div class="drawer-time">${fmtFullTime(ev.timestamp)}</div>
-    ${threatIntelHtml(details)}
-    <div class="drawer-section-label">${ev.ai_skipped ? "Explanation" : "AI Explanation"}</div>
-    ${ev.explanation
-      ? `<div class="explanation">${renderMarkdownLite(ev.explanation)}</div>`
-      : ev.ai_skipped
-        ? '<div class="ai-skipped-note">AI explanation was skipped for this event (trusted/ignored by config, or the explainer was unavailable).</div>'
-        : '<div class="ai-skipped-note">No explanation stored.</div>'}
 
-    ${ev.risk_hint ? `
-      <div class="drawer-section-label">Risk Hint</div>
-      <div class="risk-hint">${renderMarkdownLite(ev.risk_hint)}</div>` : ""}
-
-    <div class="drawer-section-label">Details</div>
-    ${detailRows ? `<table class="details-table">${detailRows}</table>`
-                 : '<div class="ai-skipped-note">No structured details.</div>'}
-    <details class="raw-json">
-      <summary>raw event JSON</summary>
-      <pre>${escapeHtml(JSON.stringify({ ...ev, details_json: details }, null, 2))}</pre>
-    </details>
-
-    <div class="drawer-section-label">Related Events · ±5 min</div>
-    <div class="related-list" id="related-list">
-      <div class="ai-skipped-note">Loading…</div>
+    <div class="drawer-tabs" role="tablist">
+      <button class="drawer-tab active" data-tab="summary" role="tab">Summary</button>
+      <button class="drawer-tab" data-tab="ai" role="tab">AI Explanation</button>
+      <button class="drawer-tab" data-tab="details" role="tab">Details</button>
+      <button class="drawer-tab" data-tab="related" role="tab">Related</button>
     </div>
 
-    <div class="drawer-actions">
-      <button class="btn" id="drawer-report-btn"
-              title="AI-summarized PDF report of everything in the ±5 minute window around this event">
-        PDF Report · this window</button>
-      ${trustBtn}
+    <div class="tab-panel active" data-panel="summary">
+      ${ti || '<div class="ai-skipped-note">No threat-intelligence lookup for this event.</div>'}
+    </div>
+
+    <div class="tab-panel" data-panel="ai" hidden>
+      <div class="drawer-section-label">${ev.ai_skipped ? "Explanation" : "AI Explanation"}</div>
+      ${ev.explanation
+        ? `<div class="explanation">${renderMarkdownLite(ev.explanation)}</div>`
+        : ev.ai_skipped
+          ? '<div class="ai-skipped-note">AI explanation was skipped for this event (trusted/ignored by config, or the explainer was unavailable).</div>'
+          : '<div class="ai-skipped-note">No explanation stored.</div>'}
+      ${ev.risk_hint ? `
+        <div class="drawer-section-label">Risk Hint</div>
+        <div class="risk-hint">${renderMarkdownLite(ev.risk_hint)}</div>` : ""}
+    </div>
+
+    <div class="tab-panel" data-panel="details" hidden>
+      <div class="drawer-section-label">Details</div>
+      ${detailRows ? `<table class="details-table">${detailRows}</table>`
+                   : '<div class="ai-skipped-note">No structured details.</div>'}
+      <details class="raw-json">
+        <summary>raw event JSON</summary>
+        <pre>${escapeHtml(JSON.stringify({ ...ev, details_json: details }, null, 2))}</pre>
+      </details>
+    </div>
+
+    <div class="tab-panel" data-panel="related" hidden>
+      <div class="drawer-section-label">Related Events · ±5 min</div>
+      <div class="related-list" id="related-list">
+        <div class="ai-skipped-note">Loading…</div>
+      </div>
     </div>`;
+
+  // Persistent action footer sits below the tabs, always visible.
+  $("drawer-foot").innerHTML = `
+    <button class="btn" id="drawer-report-btn"
+            title="AI-summarized PDF report of everything in the ±5 minute window around this event">
+      PDF Report · this window</button>
+    ${trustBtn}`;
 
   $("drawer").hidden = false;
   $("drawer-overlay").hidden = false;
   loadRelated(id);
+}
+
+/* Tab switching for the event drawer — toggles which .tab-panel is shown.
+   Delegated once on the drawer body; panels are rebuilt on each openDrawer. */
+function switchDrawerTab(tab) {
+  document.querySelectorAll("#drawer-body .drawer-tab").forEach((t) =>
+    t.classList.toggle("active", t.dataset.tab === tab));
+  document.querySelectorAll("#drawer-body .tab-panel").forEach((p) =>
+    p.hidden = p.dataset.panel !== tab);
 }
 
 /* Time-proximity context for the investigation flow: what else happened
@@ -1083,7 +1140,7 @@ function switchView(view) {
   $("view-console").hidden = view !== "console";
   $("view-incidents").hidden = view !== "incidents";
   $("view-settings").hidden = view !== "settings";
-  document.querySelectorAll(".view-tab").forEach((t) =>
+  document.querySelectorAll(".side-item[data-view]").forEach((t) =>
     t.classList.toggle("active", t.dataset.view === view));
   if (view === "settings" && !settingsLoaded) loadSettings();
   if (view === "incidents") loadIncidents();
@@ -1327,8 +1384,14 @@ async function saveSettings() {
 }
 
 function bindSettings() {
-  document.querySelectorAll(".view-tab").forEach((t) =>
-    t.addEventListener("click", () => switchView(t.dataset.view)));
+  // Sidebar: data-view items switch the main view; data-action items fire
+  // their existing modal/handler (Daily Brief, Reports, Monitor Log).
+  const SIDE_ACTIONS = { daily: openDailyBrief, report: openReportModal, log: openLogModal };
+  document.querySelectorAll(".side-item").forEach((t) =>
+    t.addEventListener("click", () => {
+      if (t.dataset.view) switchView(t.dataset.view);
+      else if (t.dataset.action) SIDE_ACTIONS[t.dataset.action]?.();
+    }));
 
   $("set-notify-enabled").addEventListener("change", (e) => {
     applyNotifyEnabledState(e.target.checked);
@@ -1644,9 +1707,11 @@ function bind() {
 
   $("drawer-close").addEventListener("click", closeDrawer);
   $("drawer-overlay").addEventListener("click", closeDrawer);
-  // Delegated: the drawer body is re-rendered per event, so its related-row
-  // and report-button handlers live here on the stable parent instead.
-  $("drawer-body").addEventListener("click", (e) => {
+  // Delegated: the drawer body/foot are re-rendered per event, so tab,
+  // related-row and action-button handlers live here on the stable #drawer.
+  $("drawer").addEventListener("click", (e) => {
+    const tab = e.target.closest(".drawer-tab");
+    if (tab) { switchDrawerTab(tab.dataset.tab); return; }
     const row = e.target.closest(".related-row");
     if (row) { openDrawer(Number(row.dataset.id)); return; }
     if (e.target.closest("#drawer-report-btn")) reportEventWindow();
@@ -1691,8 +1756,7 @@ function bind() {
   $("stoppw-confirm").addEventListener("click", confirmStop);
   $("stoppw-input").addEventListener("keydown", (e) => { if (e.key === "Enter") confirmStop(); });
 
-  // daily brief
-  $("daily-brief-btn").addEventListener("click", openDailyBrief);
+  // daily brief (opened from the sidebar; see bindSettings SIDE_ACTIONS)
   $("daily-modal-close").addEventListener("click", closeDailyBrief);
   $("daily-overlay").addEventListener("click", closeDailyBrief);
   $("daily-body").addEventListener("click", (e) => {

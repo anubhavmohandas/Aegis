@@ -60,9 +60,18 @@ public release.
 - ✅ Desktop app (`desktop_app.py`) — one window: live console + Settings,
   wrapping the dashboard below; `main.py`'s tray-only mode still exists for
   headless use
-- ✅ Dashboard UI — live timeline with filters/search, a details drawer with
-  AI explanation, AI-generated PDF report export, and a Settings page
+- ✅ Dashboard UI — live timeline with filters/search (repeated same-source
+  events collapse into one expandable group), a details drawer with AI
+  explanation, AI-generated PDF report export, and a Settings page
   (AI provider/key, notifications, watched folders, trust lists)
+- ✅ Opt-in threat enrichment — VirusTotal hash reputation (hash-only, the
+  file is never uploaded; cached in SQLite so repeat binaries cost one
+  lookup and verdicts work offline) plus offline MITRE ATT&CK annotations,
+  surfaced in the drawer and fed to the AI as structured evidence
+- ✅ Away Sessions & tamper evidence — screen lock/unlock bracket what
+  happened while you were gone, and repeated failed auth on a protected
+  action (e.g. Stop Monitoring) captures webcam/screenshot evidence into a
+  stored, password-gated Incident
 - ✅ Encrypted local API-key storage — set once from Settings, survives
   self-updates (previously had to be re-entered after every update: the key
   was written next to the app's own code, which self-update replaces

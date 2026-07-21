@@ -91,6 +91,7 @@
   --font-body: "Archivo", "Helvetica Neue", sans-serif;
   --font-mono: "IBM Plex Mono", "SF Mono", Menlo, monospace;
   --radius: 6px;
+  --side-w: 216px;
 }
 
 /* ---------- base ---------- */
@@ -490,8 +491,8 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 .event-row {
   display: grid;
-  grid-template-columns: 78px 86px 1fr auto;
-  gap: 14px; align-items: baseline;
+  grid-template-columns: 72px 30px 86px 1fr auto;
+  gap: 12px; align-items: baseline;
   width: 100%; text-align: left;
   padding: 9px 12px;
   margin-bottom: 6px;
@@ -524,6 +525,25 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 
 .event-time { font-family: var(--font-mono); font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+
+/* Per-source glyph tile at the head of each row. Tinted by source so USB,
+   shell, file etc. read at a glance the way the reference dashboard does. */
+.event-icon {
+  align-self: center;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 7px;
+  background: color-mix(in srgb, var(--icon-tint, var(--ink-2)) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--icon-tint, var(--border-strong)) 30%, transparent);
+  color: var(--icon-tint, var(--ink-2));
+}
+.event-icon svg { width: 15px; height: 15px; }
+.src-process { --icon-tint: var(--accent); }
+.src-usb     { --icon-tint: var(--sev-medium); }
+.src-startup { --icon-tint: var(--sev-high); }
+.src-folder  { --icon-tint: var(--ink-2); }
+.src-session { --icon-tint: var(--sev-low); }
+.src-tamper  { --icon-tint: var(--sev-critical); }
+.drawer-badges .event-icon { width: 30px; height: 30px; }
 
 .badge {
   display: inline-block;
@@ -645,6 +665,34 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .drawer-summary { font-size: 16px; font-weight: 600; line-height: 1.4; margin-bottom: 6px; }
 .drawer-time { font-family: var(--font-mono); font-size: 12px; color: var(--ink-3); margin-bottom: 18px; }
 
+/* Tabbed detail: Summary / AI Explanation / Details / Related. */
+.drawer-tabs {
+  display: flex; gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.drawer-tab {
+  font-family: var(--font-display);
+  font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  padding: 8px 11px 10px;
+  color: var(--ink-3);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color .14s, border-color .14s;
+}
+.drawer-tab:hover { color: var(--ink); }
+.drawer-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-panel { animation: fade .18s ease both; }
+.tab-panel .drawer-section-label:first-child { margin-top: 0; }
+
+.drawer-foot {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 40%, transparent);
+}
+.drawer-foot:empty { display: none; }
+
 .drawer-section-label {
   font-family: var(--font-display);
   font-size: 10px; font-weight: 700; letter-spacing: .22em; text-transform: uppercase;
@@ -748,7 +796,7 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 /* ---------- status bar ---------- */
 
 .statusbar {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  position: fixed; left: var(--side-w); right: 0; bottom: 0; z-index: 40;
   display: flex; align-items: center; gap: 12px;
   padding: 8px 24px;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
@@ -758,25 +806,65 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 .statusbar-sep { width: 1px; height: 12px; background: var(--border-strong); }
 
-/* ---------- view nav ---------- */
+/* ---------- sidebar nav ---------- */
 
-.view-nav {
-  display: flex; gap: 2px;
-  background: var(--bg-raised);
-  border: 1px solid var(--border-strong);
-  border-radius: 99px;
-  padding: 3px;
+.sidebar {
+  position: fixed; top: 0; left: 0; bottom: 0; z-index: 45;
+  width: var(--side-w);
+  display: flex; flex-direction: column;
+  padding: 16px 12px;
+  background: color-mix(in srgb, var(--bg-raised) 70%, var(--bg));
+  border-right: 1px solid var(--border);
+  backdrop-filter: blur(6px);
 }
-.view-tab {
-  font-family: var(--font-display);
-  font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
-  padding: 6px 16px;
-  border-radius: 99px;
+.sidebar .brand { padding: 4px 6px 18px; }
+
+.side-nav { display: flex; flex-direction: column; gap: 3px; }
+.side-item {
+  display: flex; align-items: center; gap: 11px;
+  width: 100%; text-align: left;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid transparent;
   color: var(--ink-3);
-  transition: color .15s, background .15s;
+  font-family: var(--font-display);
+  font-size: 12.5px; font-weight: 600; letter-spacing: .04em;
+  transition: color .14s, background .14s, border-color .14s;
 }
-.view-tab:hover { color: var(--ink); }
-.view-tab.active { background: var(--accent); color: var(--badge-ink); }
+.side-item svg { width: 18px; height: 18px; flex: none; stroke: currentColor; stroke-width: 1.5; fill: none; }
+.side-item:hover { color: var(--ink); background: var(--bg-hover); }
+.side-item.active {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.side-item .tab-badge { margin-left: auto; }
+
+.side-foot { margin-top: auto; padding: 10px 8px 4px; }
+.side-monitor { display: flex; align-items: center; gap: 9px; }
+.side-monitor .live-dot { flex: none; }
+.side-monitor.stopped .live-dot { background: var(--ink-3); animation: none; }
+.side-monitor-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.side-monitor-text b {
+  font-family: var(--font-display); font-size: 11px; font-weight: 700;
+  letter-spacing: .1em; color: var(--ink-2);
+}
+.side-monitor-text small {
+  font-size: 10px; color: var(--ink-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Main column sits to the right of the fixed sidebar. */
+.main-col { margin-left: var(--side-w); }
+
+/* Collapse to an icon rail on narrow windows. */
+@media (max-width: 820px) {
+  :root { --side-w: 60px; }
+  .sidebar { padding: 14px 8px; }
+  .sidebar .brand-text, .side-item span:not(.tab-badge), .side-monitor-text { display: none; }
+  .side-item { justify-content: center; padding: 10px; }
+  .sidebar .brand { justify-content: center; padding: 4px 0 16px; }
+}
 
 /* ---------- settings ---------- */
 

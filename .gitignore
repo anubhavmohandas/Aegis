@@ -69,6 +69,11 @@ audit-report-*.pdf
 desktop_full.png
 mobile_full.png
 
+# --- Personal / promo images (not part of the product) ---
+LinkedIN.png
+LinkedIn.png
+linkedin.png
+
 # --- IDE ---
 .vscode/
 .idea/

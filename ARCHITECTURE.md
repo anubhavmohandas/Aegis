@@ -15,10 +15,18 @@ Aegis/
     ai_explainer.py    Claude/OpenAI plain-English explanation
     rule_engine.py     opt-in allowlist gate (skip AI call for user-trusted items)
     severity_engine.py  local low/medium/high/critical heuristic (runs before the AI call)
+    enrichment.py      opt-in VirusTotal hash lookup + local MITRE ATT&CK annotations,
+                       attached to the event BEFORE the AI runs (see "Threat enrichment")
     database.py        SQLite event history (read by ui/timeline_app.py)
-    dispatcher.py       queue -> dedupe -> rule engine -> severity -> rate-limit -> AI -> notify -> persist
+    dispatcher.py       queue -> dedupe -> rule engine -> severity -> rate-limit -> enrich -> AI -> notify -> persist
     notifier.py         desktop notifications, per platform (macOS: osascript primary; Windows/Linux: plyer)
     folder_monitor.py   watchdog-based folder watching (real-time on all OSes)
+    session_monitor.py  screen lock/unlock detection -- brackets "Away Sessions"
+    evidence.py        tamper evidence: repeated failed auth on a protected action
+                       (e.g. Stop Monitoring) -> webcam/screenshot capture -> stored Incident
+    report_generator.py AI executive summary -> printable PDF (fpdf2, pure Python)
+    secrets_store.py   encrypted-at-rest API-key storage that survives self-update
+    updater.py         self-update from GitHub Releases (explicit user click only)
     tray_app.py         system tray icon (pystray)
   windows/            Windows collector
     process_monitor.py  ETW (pywintrace) with WMI polling fallback
@@ -59,6 +67,8 @@ Collector (OS-specific)
        |-- rule engine (skip AI call only for items on YOUR trusted list)
        |-- severity engine (low/medium/high/critical, local heuristic)
        |-- rate limit (hard cap 20 AI calls/min -- high/critical are EXEMPT)
+       |-- enrichment (opt-in: high/critical get a VirusTotal hash verdict + MITRE
+       |    ATT&CK tags attached before the AI runs -- see "Threat enrichment")
        |-- AI explainer (Claude/OpenAI) -> plain-English explanation, told the severity
        v
    Notification (desktop toast, title tagged with severity) + persisted row
@@ -85,6 +95,27 @@ call for process names / USB device IDs **you** add to `config.yaml`. It's
 a personal noise filter for things you already recognize, not a verdict the
 tool hands down on your behalf. Every event is still logged and persisted
 regardless of whether the AI was called.
+
+## Threat enrichment (opt-in)
+
+`core/enrichment.py` attaches structured evidence to high/critical events
+*before* the AI explainer runs, so the explanation is grounded in facts
+rather than model inference. Two sources, both off by default:
+
+- **VirusTotal hash reputation** — looks up the sha256 of the executable/file
+  involved. **Hash-only: the file itself is never uploaded.** Verdicts are
+  cached in SQLite, so a repeated binary costs one lookup and cached results
+  work offline. Off by default because querying a hash discloses that hash to
+  VirusTotal; the API key lives in the `VT_API_KEY` env var (or `.env`), never
+  in `config.yaml`. Zero detections is surfaced as "unknown / not flagged,"
+  never as "safe" — same false-confidence discipline as the rule engine.
+- **MITRE ATT&CK annotations** — local, offline, no API. Tags an event with
+  relevant technique IDs/names, shown as badges in the drawer.
+
+The normalized result lands on `event.details["threat_intel"]` and is
+rendered in the dashboard drawer (verdict, detection count, MITRE badges, a
+VirusTotal link). `enrich_enabled` (Settings, or `config.yaml`) is the master
+switch.
 
 ## Confidence tagging (`certain` vs `polled`)
 
@@ -288,10 +319,13 @@ them to a per-user data dir when running frozen.
    but don't build new features on top of `pywintrace` without checking its
    repo's current state first.
 
-4. **AI explanations are not a security verdict.** No malware database, no
-   hash reputation, no threat intel feed — a plain-English narrator with an
-   opinion, not a detector. Every event is persisted regardless of what the
-   AI says or whether it was called at all.
+4. **AI explanations are not a security verdict.** A plain-English narrator
+   with an opinion, not a detector. Opt-in enrichment (VirusTotal hash
+   reputation + MITRE ATT&CK, see "Threat enrichment") adds real evidence
+   when enabled, but it is still evidence for *you* to weigh — a "not
+   flagged" VT result is never treated as proof of safety, and there is no
+   local malware database or behavioral detector. Every event is persisted
+   regardless of what the AI says or whether it was called at all.
 
 5. **Windows source validation exists; Windows packaged validation still doesn't.**
    macOS has been run and debugged live on real hardware (see "Live
@@ -320,8 +354,10 @@ SEO collision and "wait, is this the 2FA app?" confusion.
 - **v0.2:** network connections, PowerShell execution logging, services,
   scheduled tasks, registry modification monitoring beyond Run keys, AI risk
   scoring.
-- **v0.3:** Sigma rules, YARA, VirusTotal lookups, MITRE ATT&CK mapping,
-  timeline/behavioral analysis across events.
+- **v0.3:** ✅ VirusTotal lookups and MITRE ATT&CK mapping shipped (opt-in,
+  see "Threat enrichment"). Still ahead: Sigma rules, YARA, and
+  timeline/behavioral correlation across events (USB → exe → persistence →
+  PowerShell as one linked chain rather than isolated rows).
 
 Each of these is a new collector or a new dispatcher-stage plugin under the
 existing architecture — none of them require restructuring `core/`.
