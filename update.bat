@@ -87,7 +87,7 @@ if errorlevel 2 goto :done
 
 REM %~dp0 ends with a backslash; append a dot so the escaped closing quote
 REM isn't swallowed as \" by PowerShell's argument parsing.
-powershell -NoProfile -Command "Start-Process cmd -Verb RunAs -ArgumentList '/k cd /d \"%~dp0.\" && call venv\Scripts\activate.bat && python main.py'"
+powershell -NoProfile -Command "Start-Process cmd -Verb RunAs -ArgumentList '/k cd /d \"%~dp0.\" && call venv\Scripts\activate.bat && python desktop_app.py'"
 
 :done
 echo.

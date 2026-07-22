@@ -677,6 +677,29 @@ def _find_external_monitor_pid() -> int | None:
     return None
 
 
+def _heartbeat_age() -> float | None:
+    """Seconds since the dispatcher last stamped its heartbeat, or None if it
+    never has / can't be read. The dispatcher writes 'last_heartbeat' every
+    HEARTBEAT_INTERVAL (core/dispatcher). A growing age while the process is
+    still 'running' means the loop stalled -- process-alive is not loop-alive,
+    and only the heartbeat can tell those two apart."""
+    try:
+        conn = _connect_ro(DashboardHandler.db_path)
+        try:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = 'last_heartbeat'").fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+    if not row:
+        return None
+    try:
+        return max(0.0, time.time() - float(row[0]))
+    except (TypeError, ValueError):
+        return None
+
+
 def monitor_status() -> dict:
     if DashboardHandler.in_process_monitor:
         # The monitor pipeline lives in this same process, but -- unlike the
@@ -691,6 +714,7 @@ def monitor_status() -> dict:
             "pid": os.getpid() if running else None,
             "started_at": started_at,
             "uptime_seconds": max(0.0, time.time() - started_at) if (running and started_at) else None,
+            "heartbeat_age": _heartbeat_age() if running else None,
             "managed": "in_process",
         }
     state = _read_monitor_state()
@@ -714,6 +738,7 @@ def monitor_status() -> dict:
         "pid": pid,
         "started_at": state["started_at"],
         "uptime_seconds": max(0.0, time.time() - state["started_at"]),
+        "heartbeat_age": _heartbeat_age(),
         "managed": "external",
     }
 

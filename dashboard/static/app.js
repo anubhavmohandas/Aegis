@@ -511,19 +511,34 @@ async function refreshMonitorStatus() {
   renderMonitorPill();
 }
 
+// The dispatcher stamps a heartbeat every 60s (core/dispatcher). Past this
+// many seconds without one, the process is up but its loop isn't ticking --
+// so the pulse stops lying and flips to STALLED. 150s = miss ~2.5 beats
+// before warning, so one slow tick never false-alarms.
+const HEARTBEAT_STALE_SECONDS = 150;
+
 function renderMonitorPill() {
   const el = $("live-indicator");
   const label = $("live-label");
+  const beat = $("live-beat");
   const toggle = $("monitor-toggle");
 
   el.classList.remove("stale", "idle");
   const inProcess = state.monitor.managed === "in_process";
+  const hbAge = state.monitor.heartbeat_age;
+  // Running process, but its heartbeat has gone quiet -> loop stalled, not healthy.
+  const stalled = state.monitor.running && !state.monitorBusy
+                  && hbAge != null && hbAge > HEARTBEAT_STALE_SECONDS;
   if (state.consoleReachable === false) {
     el.classList.add("stale");
     label.textContent = "CONSOLE OFFLINE";
   } else if (state.monitorBusy) {
     el.classList.add("idle");
     label.textContent = state.monitor.running ? "STOPPING…" : "STARTING…";
+  } else if (stalled) {
+    el.classList.add("stale");
+    label.textContent = "MONITORING STALLED";
+    el.title = `No heartbeat for ${formatUptime(hbAge)} — process is up but its loop may be stuck`;
   } else if (state.monitor.running) {
     label.textContent = "MONITORING ACTIVE";
     el.title = inProcess ? "" : `PID ${state.monitor.pid} · up ${formatUptime(state.monitor.uptime_seconds)}`;
@@ -533,13 +548,28 @@ function renderMonitorPill() {
     el.title = "";
   }
 
+  // The visible heartbeat: a steadily pulsing heart while monitoring is
+  // confirmed alive (heartbeat still fresh as of this poll), gone the moment we
+  // stall/stop/go offline. The CSS animation carries the continuous beat; the
+  // exact age is tucked into the tooltip rather than shown as a climbing number.
+  if (beat) {
+    const healthy = state.monitor.running && !state.monitorBusy && !stalled
+                    && state.consoleReachable !== false;
+    const alive = healthy && hbAge != null;
+    // U+FE0E (text variation selector) forces the ♥ to a CSS-colorable glyph
+    // instead of the OS red-heart emoji, so it takes --sev-critical and scales.
+    beat.textContent = alive ? "♥︎" : "";
+    beat.title = alive ? `last heartbeat ${Math.round(hbAge)}s ago` : "";
+  }
+
   // Mirror the same state into the sidebar footer badge.
   const sideMon = $("side-monitor"), sideSub = $("side-monitor-sub");
   if (sideMon && sideSub) {
     const stopped = state.consoleReachable === false || (!state.monitor.running && !state.monitorBusy);
-    sideMon.classList.toggle("stopped", stopped);
+    sideMon.classList.toggle("stopped", stopped || stalled);
     sideSub.textContent = state.consoleReachable === false ? "Console offline"
       : state.monitorBusy ? "Working…"
+      : stalled ? "Monitor stalled — loop not responding"
       : state.monitor.running ? "All systems operational" : "Monitoring stopped";
   }
 
