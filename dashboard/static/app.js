@@ -855,45 +855,58 @@ function hidePill() {
 
 /* details.threat_intel is Aegis's own normalized shape (core/enrichment.py),
    never raw VT JSON: { mitre?: [{id,name}], vt?: { status, detections,
-   suspicious, engines_total, link, family?, first_seen_utc? } }. Verdict
-   framing follows the enrichment philosophy: unknown/zero detections are
-   stated as "not proof of safety", never as a green all-clear. */
+   suspicious, engines_total, link, family?, first_seen_utc? } }.
+
+   Rendered as a labelled forensic block — Verdict / Detection Ratio / MITRE /
+   Family / Confidence — not prose. Verdict framing follows the enrichment
+   philosophy: unknown / zero detections are stated as "not proof of safety",
+   never a green all-clear, and Confidence for those rows says exactly that
+   instead of implying a clean result. VT returns no confidence field of its
+   own, so it's derived here from how many engines actually agree. */
+function tiVerdict(vt) {
+  if (!vt) return { label: "Technique annotation", cls: "", confidence: "Annotation only",
+    note: "Matched offline — no file hash was looked up for this event." };
+  if (vt.status === "unknown_hash") return { label: "Unknown", cls: "", confidence: "No data yet",
+    note: "No engine has scanned this file's hash yet. Unknown is not safe — brand-new files start here." };
+  const det = vt.detections || 0, sus = vt.suspicious || 0;
+  if (det > 0) return { label: "Malicious", cls: "bad",
+    confidence: det >= 10 ? "High" : det >= 4 ? "Medium" : "Low", note: "" };
+  if (sus > 0) return { label: "Suspicious", cls: "warn",
+    confidence: sus >= 3 ? "Medium" : "Low", note: "" };
+  return { label: "Undetected", cls: "", confidence: "Not a safety signal",
+    note: "Zero detections is not proof of safety — only that no engine flags this hash yet." };
+}
+
 function threatIntelHtml(details) {
   const ti = details.threat_intel;
   if (!ti || (!ti.vt && !(ti.mitre || []).length)) return "";
   const vt = ti.vt;
-  let cls = "", head = "", sub = "";
-  if (vt) {
-    if (vt.status === "unknown_hash") {
-      head = "Unknown to VirusTotal";
-      sub = "No engine has scanned this file's hash yet. Unknown is not safe — brand-new files start here.";
-    } else if (vt.detections > 0) {
-      cls = "bad";
-      head = `${vt.detections} / ${vt.engines_total} engines flagged this file`;
-      sub = vt.family ? `Classified as <b>${escapeHtml(vt.family)}</b>` : "";
-    } else if (vt.suspicious > 0) {
-      cls = "warn";
-      head = `${vt.suspicious} / ${vt.engines_total} engines call this file suspicious`;
-    } else {
-      head = `0 / ${vt.engines_total} detections`;
-      sub = "Zero detections is not proof of safety — only that no engine flags this hash yet.";
-    }
-  } else {
-    head = "Technique annotation";
-    sub = "Matched offline — no file hash was looked up for this event.";
+  const v = tiVerdict(vt);
+
+  const rows = [];  // [label, value-html] pairs, in the order the user sketched
+  if (vt && vt.status !== "unknown_hash") {
+    let ratio = `<span class="mono">${vt.detections || 0} / ${vt.engines_total || 0}</span>`;
+    if ((vt.suspicious || 0) > 0) ratio += ` <span class="ti-note">+${vt.suspicious} suspicious</span>`;
+    rows.push(["Detection Ratio", ratio]);
+  } else if (vt) {
+    rows.push(["Detection Ratio", `<span class="ti-note">not yet scanned</span>`]);
   }
-  const meta = [];
-  if (vt && vt.first_seen_utc) meta.push(`<span class="meta-badge">first seen ${escapeHtml(vt.first_seen_utc)}</span>`);
-  for (const t of ti.mitre || [])
-    meta.push(`<span class="meta-badge" title="MITRE ATT&amp;CK — ${escapeHtml(t.name)}">${escapeHtml(t.id)} · ${escapeHtml(t.name)}</span>`);
+  const mitre = (ti.mitre || []).map((t) =>
+    `<span class="meta-badge" title="MITRE ATT&amp;CK — ${escapeHtml(t.name)}">${escapeHtml(t.id)} · ${escapeHtml(t.name)}</span>`);
+  rows.push(["MITRE", mitre.length ? mitre.join("") : `<span class="ti-note">none mapped</span>`]);
+  if (vt) rows.push(["Family", vt.family ? `<b>${escapeHtml(vt.family)}</b>` : `<span class="ti-note">not classified</span>`]);
+  rows.push(["Confidence", escapeHtml(v.confidence)]);
+  if (vt && vt.first_seen_utc) rows.push(["First seen", `<span class="mono">${escapeHtml(vt.first_seen_utc)}</span>`]);
+
   const link = vt && typeof vt.link === "string" && vt.link.startsWith("https://www.virustotal.com/")
     ? `<a class="ti-link" href="${escapeHtml(vt.link)}" target="_blank" rel="noopener">View on VirusTotal ↗</a>` : "";
+  const grid = rows.map(([k, val]) => `<div class="ti-k">${k}</div><div class="ti-v">${val}</div>`).join("");
   return `
     <div class="drawer-section-label">Threat Intelligence</div>
-    <div class="ti-panel ${cls}">
-      <div class="ti-head"><span class="ti-dot"></span>${head}${link}</div>
-      ${sub ? `<div class="ti-sub">${sub}</div>` : ""}
-      ${meta.length ? `<div class="ti-meta">${meta.join("")}</div>` : ""}
+    <div class="ti-panel ${v.cls}">
+      <div class="ti-head"><span class="ti-dot"></span>${escapeHtml(v.label)}${link}</div>
+      <div class="ti-grid">${grid}</div>
+      ${v.note ? `<div class="ti-sub">${v.note}</div>` : ""}
     </div>`;
 }
 

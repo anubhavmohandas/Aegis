@@ -40,9 +40,12 @@ is never skipped.
 from __future__ import annotations
 
 import logging
+import platform
+import subprocess
 import threading
 import time
 from collections import deque
+from datetime import datetime
 from queue import Empty, Queue
 
 from .ai_explainer import AIExplainer
@@ -75,6 +78,37 @@ GAP_THRESHOLD_SECONDS = 5 * 60
 # in the lock..unlock window for the recap. Cap so a multi-day away window
 # can't build an enormous prompt.
 AWAY_RECAP_EVENT_CAP = 300
+
+
+def _lid_closed_during(start_ts: float, end_ts: float) -> bool:
+    """True if the Mac slept because the lid was shut inside [start_ts, end_ts].
+
+    macOS names lid-close sleeps 'Clamshell Sleep' in `pmset -g log`; that's the
+    only place the reason is exposed without extra deps. Best-effort context for
+    the gap message, never load-bearing -- any failure (non-macOS, pmset missing,
+    unparseable line, timeout) returns False and the gap is reported without the
+    lid note. macOS-only: other platforms have no clamshell concept, so False.
+    """
+    if platform.system() != "Darwin":
+        return False
+    try:
+        out = subprocess.run(["pmset", "-g", "log"], capture_output=True,
+                             text=True, timeout=8).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    for line in out.splitlines():
+        if "Clamshell Sleep" not in line or "Sleep " not in line:
+            continue
+        try:  # line starts "2026-07-22 07:14:03 +0530 Sleep  ..."
+            ts = datetime.strptime(" ".join(line.split()[:3]),
+                                   "%Y-%m-%d %H:%M:%S %z").timestamp()
+        except (ValueError, IndexError):
+            continue
+        # Heartbeat granularity means the last stamp can predate the actual
+        # sleep by up to the interval, so allow a small lead-in before start_ts.
+        if start_ts - HEARTBEAT_INTERVAL_SECONDS <= ts <= end_ts:
+            return True
+    return False
 
 
 class Dispatcher:
@@ -318,21 +352,38 @@ class Dispatcher:
         except Exception as e:
             logger.debug("Could not read last heartbeat: %s", e)
             return
+        # Close the gap window NOW, before the slow AI-backed _handle below.
+        # This runs before the loop writes its first heartbeat, and explaining
+        # the gap event can block this thread for seconds. Any second startup
+        # that races that window -- a settings restart (stop+start), or a second
+        # instance sharing this DB -- would otherwise re-read the SAME stale
+        # baseline and emit a duplicate gap ("offline 16 min" then "17 min").
+        # Advancing the shared heartbeat first makes that second startup see no
+        # gap. (First-call guard in _heartbeat writes immediately since
+        # _last_heartbeat is still 0.)
+        self._heartbeat()
         if not last:
             return  # first run ever -- no prior heartbeat, so no gap to report
         try:
             last_ts = float(last)
         except ValueError:
             return
-        gap = time.time() - last_ts
+        now = time.time()
+        gap = now - last_ts
         if gap < GAP_THRESHOLD_SECONDS:
             return
         mins = int(gap // 60)
+        # Explain WHY it was offline when we can: a lid-close/sleep is expected,
+        # a killed process is not, and they should not read identically.
+        lid_closed = _lid_closed_during(last_ts, now)
+        summary = f"Monitoring was offline for about {mins} minute(s)"
+        if lid_closed:
+            summary += " -- the lid was closed and the Mac was asleep"
         self._handle(MonitorEvent(
             category=EventCategory.MONITORING_GAP,
-            summary=f"Monitoring was offline for about {mins} minute(s)",
-            details={"offline_from": last_ts, "offline_until": time.time(),
-                     "gap_seconds": round(gap, 1)},
+            summary=summary,
+            details={"offline_from": last_ts, "offline_until": now,
+                     "gap_seconds": round(gap, 1), "lid_closed": lid_closed},
             source="session",
             confidence="certain",
         ))

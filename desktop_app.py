@@ -124,18 +124,24 @@ def _server_already_running(host: str, port: int) -> bool:
 # them the icon silently vanishes from the menu bar and the menu stops working.
 _menubar_refs: list = []
 
+# Set True once any quit path (menu-bar/tray Quit, or the window-close gate)
+# has authenticated the user, so a subsequent programmatic window close doesn't
+# prompt for the password a second time. Quitting Aegis is a protected action:
+# closing the app must NOT be a free way to escape monitoring.
+_quit_authorized = False
 
-def _prompt_stop_password_macos(AppKit) -> str | None:
-    """Native secure-input dialog for the tray 'Stop Monitoring' action, so the
-    tamper password gate is honored from the menu bar too (not just the web UI).
-    Runs on the main thread (menu actions already are). Returns the entered
-    password, or None if cancelled."""
+
+def _prompt_password_macos(AppKit, title: str, informative: str, confirm: str) -> str | None:
+    """Native secure-input dialog for a password-gated action (Stop Monitoring,
+    Quit) triggered from the menu bar or the window-close handler, so the tamper
+    gate is honored outside the web UI too. Runs on the main thread. Returns the
+    entered password, or None if cancelled."""
     alert = AppKit.NSAlert.alloc().init()
-    alert.setMessageText_("Stop Monitoring")
-    alert.setInformativeText_("Enter the dashboard password to stop monitoring.")
+    alert.setMessageText_(title)
+    alert.setInformativeText_(informative)
     field = AppKit.NSSecureTextField.alloc().initWithFrame_(((0.0, 0.0), (240.0, 24.0)))
     alert.setAccessoryView_(field)
-    alert.addButtonWithTitle_("Stop")
+    alert.addButtonWithTitle_(confirm)
     alert.addButtonWithTitle_("Cancel")
     if alert.runModal() == AppKit.NSAlertFirstButtonReturn:
         return str(field.stringValue())
@@ -191,16 +197,8 @@ def _add_macos_menubar(window, pipeline, config, on_quit):
                     if not pipeline.running:
                         _info_alert_macos(AppKit, "Aegis", "Monitoring is already stopped.")
                         return
-                    from dashboard.server import guard_protected_action
-                    pw = _prompt_stop_password_macos(AppKit)
-                    if pw is None:
-                        return   # cancelled
-                    result = guard_protected_action("stop_monitoring", pw)
-                    if result.get("error"):
-                        note = result["error"]
-                        if result.get("evidence_captured"):
-                            note += f"\nEvidence captured (incident #{result.get('incident_id')})."
-                        _info_alert_macos(AppKit, "Stop blocked", note)
+                    if not _authorize_action("stop_monitoring", "Stop Monitoring",
+                                             "Enter the dashboard password to stop monitoring."):
                         return
                     pipeline.stop()
                     _info_alert_macos(AppKit, "Aegis", "Monitoring stopped.")
@@ -218,6 +216,14 @@ def _add_macos_menubar(window, pipeline, config, on_quit):
                     logger.debug("menu enable-state update failed", exc_info=True)
 
             def quitAegis_(self, _sender):
+                # Quitting is password-gated too: closing Aegis must not be a
+                # free way to escape monitoring. Only tear down + terminate once
+                # the dashboard password is verified.
+                if not _authorize_action("quit", "Quit Aegis",
+                                         "Enter the dashboard password to quit Aegis."):
+                    return   # blocked/cancelled -> Aegis keeps running
+                global _quit_authorized
+                _quit_authorized = True   # let the window-close gate pass, no 2nd prompt
                 on_quit()
                 try:
                     AppKit.NSApplication.sharedApplication().terminate_(None)
@@ -273,22 +279,95 @@ def _add_macos_menubar(window, pipeline, config, on_quit):
         logger.warning("Could not schedule macOS menu-bar item", exc_info=True)
 
 
-def _prompt_stop_password_tk() -> str | None:
+def _prompt_password_tk(title: str, informative: str) -> str | None:
     """tkinter (stdlib) secure-input dialog -- the Windows/Linux counterpart of
-    _prompt_stop_password_macos. A fresh Tk root per call, created and destroyed
-    on the calling (pystray callback) thread. Returns the password, or None if
-    cancelled or tkinter is unavailable."""
+    _prompt_password_macos. A fresh Tk root per call, created and destroyed on
+    the calling thread. Returns the password, or None if cancelled or tkinter is
+    unavailable."""
     import tkinter as tk
     from tkinter import simpledialog
     root = tk.Tk()
     root.withdraw()
     root.attributes("-topmost", True)
     try:
-        return simpledialog.askstring("Stop Monitoring",
-                                      "Enter the dashboard password to stop monitoring.",
-                                      show="*", parent=root)
+        return simpledialog.askstring(title, informative, show="*", parent=root)
     finally:
         root.destroy()
+
+
+def _authorize_action(action: str, title: str, informative: str) -> bool:
+    """Password-gate a protected action (Stop Monitoring / Quit) from the tray,
+    menu bar, or the window-close handler. Returns True only if the dashboard
+    password is entered correctly -- or tamper protection is disabled, in which
+    case there's no prompt. Returns False on cancel, wrong password, or when no
+    password dialog is available; callers treat False as "do not proceed" (keep
+    monitoring / keep the window open). On a wrong password this shows the same
+    block + evidence notice as the web UI (guard_protected_action logs the
+    tamper attempt, captures evidence at the threshold, and locks out).
+
+    Disabling tamper protection is the intended escape hatch on the rare box
+    where no dialog can render (non-macOS without tkinter) -- otherwise the gate
+    would fail closed and there'd be no way to quit."""
+    from core.config import load_config
+    if not load_config().tamper_require_password:
+        return True   # gate disabled -> action proceeds without a prompt
+    from dashboard.server import guard_protected_action
+    confirm = title.split()[0]                        # "Stop" / "Quit"
+    if sys.platform == "darwin":
+        import AppKit
+        pw = _prompt_password_macos(AppKit, title, informative, confirm)
+        notify = lambda t, m: _info_alert_macos(AppKit, t, m)
+    else:
+        try:
+            pw = _prompt_password_tk(title, informative)
+        except Exception:
+            logger.warning("No password dialog available (tkinter missing) -- "
+                           "use the dashboard to %s, or disable tamper protection.",
+                           action, exc_info=True)
+            return False
+        notify = _info_alert_tk
+    if pw is None:
+        return False   # cancelled
+    result = guard_protected_action(action, pw)
+    if result.get("error"):
+        note = result["error"]
+        if result.get("evidence_captured"):
+            note += f"\nEvidence captured (incident #{result.get('incident_id')})."
+        notify(f"{title} blocked", note)
+        return False
+    return True
+
+
+def _on_closing() -> bool | None:
+    """Window-close gate: red close button, Cmd-W, Cmd-Q, and (via cocoa's
+    applicationShouldTerminate) the app-menu Quit all route through pywebview's
+    'closing' event, which vetoes the close if a handler returns False. Quitting
+    Aegis is a protected action just like Stop Monitoring -- closing the window
+    must not be a free way to stop being monitored. Returns None to allow the
+    close (already authorized by a menu/tray Quit, or the correct password was
+    entered, or tamper protection is off) and False to VETO it (wrong/no
+    password -> window stays open, monitoring continues).
+
+    'closing' is a locking event (webview.Window builds it with should_lock=True)
+    so this runs synchronously on the GUI main thread before the OS closes the
+    window -- showing the native password dialog here is safe.
+
+    Not covered: a SIGKILL / force-quit of the process bypasses this entirely;
+    that path is caught after the fact by heartbeat-gap detection in
+    core/dispatcher, not prevented here."""
+    logger.warning("QUIT-GATE: window close intercepted -- prompting for password.")
+    if _quit_authorized:
+        return None   # a menu/tray Quit already authenticated this close
+    try:
+        allowed = _authorize_action("quit", "Quit Aegis",
+                                    "Enter the dashboard password to quit Aegis.")
+    except Exception:
+        # pywebview's Event dispatcher swallows a handler exception and then
+        # lets the window close -- i.e. any error here would be a SILENT quit
+        # bypass. A tamper gate must fail CLOSED: veto on error, keep monitoring.
+        logger.warning("Quit gate errored -- vetoing the close (fail closed).", exc_info=True)
+        return False
+    return None if allowed else False   # None = allow, False = veto
 
 
 def _info_alert_tk(title: str, message: str) -> None:
@@ -339,21 +418,8 @@ def _add_pystray_tray(window, pipeline, on_quit):
                 if not pipeline.running:
                     _info_alert_tk("Aegis", "Monitoring is already stopped.")
                     return
-                from dashboard.server import guard_protected_action
-                try:
-                    pw = _prompt_stop_password_tk()
-                except Exception:
-                    logger.warning("No password dialog available (tkinter missing) -- "
-                                   "use the dashboard's Stop button instead.", exc_info=True)
-                    return
-                if pw is None:
-                    return   # cancelled
-                result = guard_protected_action("stop_monitoring", pw)
-                if result.get("error"):
-                    note = result["error"]
-                    if result.get("evidence_captured"):
-                        note += f"\nEvidence captured (incident #{result.get('incident_id')})."
-                    _info_alert_tk("Stop blocked", note)
+                if not _authorize_action("stop_monitoring", "Stop Monitoring",
+                                         "Enter the dashboard password to stop monitoring."):
                     return
                 pipeline.stop()
                 _info_alert_tk("Aegis", "Monitoring stopped.")
@@ -361,6 +427,15 @@ def _add_pystray_tray(window, pipeline, on_quit):
                 logger.warning("Tray stop failed", exc_info=True)
 
         def _quit(icon, item):
+            # Quitting is password-gated too. window.destroy() closes the window
+            # directly (bypasses the 'closing' gate on some backends), so gate it
+            # here explicitly; the flag also stops the closing gate re-prompting
+            # if it does fire.
+            if not _authorize_action("quit", "Quit Aegis",
+                                     "Enter the dashboard password to quit Aegis."):
+                return   # blocked/cancelled -> Aegis keeps running
+            global _quit_authorized
+            _quit_authorized = True
             icon.stop()
             try:
                 window.destroy()   # fires the closed event -> normal cleanup
@@ -529,7 +604,14 @@ def main():
             f"http://{HOST}:{PORT}",
             width=1500, height=940, min_size=(1080, 680),
         )
+        window.events.closing += _on_closing   # password-gate closing the window
         window.events.closed += _on_closed
+        # Loud, unambiguous proof at startup that THIS running build has the quit
+        # gate -- a stale packaged .app (frozen before the gate existed) won't
+        # print this. If you don't see this line, you're not running the gated
+        # build. WARNING level so it shows even without verbose logging.
+        from core.version import __version__ as _ver
+        logger.warning("QUIT-GATE ARMED (v%s) -- closing this window will require the dashboard password.", _ver)
         window.events.shown += lambda: _darken_titlebar(window)
         window.events.shown += lambda: _add_macos_menubar(window, pipeline, config, _on_closed)
         window.events.shown += lambda: _add_pystray_tray(window, pipeline, _on_closed)

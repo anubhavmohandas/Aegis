@@ -792,10 +792,11 @@ def stop_monitor() -> dict:
 # counts are in-memory per action -- a restart resets them, which is fine:
 # this is a deterrent + evidence trail, not an account-lockout system.
 #
-# HONEST SCOPE: this gates the in-app Stop button. It cannot stop someone from
-# killing the OS process or force-quitting the window -- that path is covered
-# instead by heartbeat gap detection (core/dispatcher), which records that
-# monitoring went dark. Tamper *evidence*, not tamper *proof*.
+# HONEST SCOPE: this gates the in-app protected actions -- the Stop button, and
+# (via desktop_app's window-close/menu/tray gate, action "quit") quitting the
+# app. What it CANNOT stop is a SIGKILL / force-quit of the OS process; that
+# path is covered instead by heartbeat gap detection (core/dispatcher), which
+# records that monitoring went dark. Tamper *evidence*, not tamper *proof*.
 #
 # State is in-memory per action (a restart resets it): {"fails", "locked_until",
 # "captured"}. Two independent escalations on wrong passwords -- evidence

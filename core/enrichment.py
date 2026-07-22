@@ -37,10 +37,13 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import ssl
 import time
 import urllib.error
 import urllib.request
 from collections import deque
+
+import certifi
 
 from core.events import EventCategory, MonitorEvent
 from core.rule_engine import _sha256_of  # reuse: same size cap + locked-file handling
@@ -49,6 +52,13 @@ from core.severity_engine import _SUSPICIOUS_PATH_FRAGMENTS
 logger = logging.getLogger("aegis.enrichment")
 
 _VT_FILE_URL = "https://www.virustotal.com/api/v3/files/{}"
+# Same bug/fix as core/updater.py: urllib's default ssl context has an empty
+# trust store on packaged macOS builds (ssl.get_default_verify_paths() points
+# at a cert.pem that isn't there), so every VirusTotal HTTPS lookup dies with
+# CERTIFICATE_VERIFY_FAILED and silently returns nothing. The AI layer never
+# hit this because openai/anthropic go through httpx, which already uses
+# certifi. Pin the same certifi bundle here. certifi is a declared dependency.
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 _VT_TIMEOUT_SECONDS = 5          # a hung lookup stalls the single dispatcher thread -- keep it tight
 _VT_BUDGET_PER_MINUTE = 4        # VT free tier; occam: single flat budget, no daily counter --
                                  # the severity gate + cache keep daily volume far below 500
@@ -187,7 +197,7 @@ class ThreatEnricher:
             headers={"x-apikey": self.config.vt_api_key, "Accept": "application/json"},
         )
         try:
-            with urllib.request.urlopen(req, timeout=_VT_TIMEOUT_SECONDS) as resp:
+            with urllib.request.urlopen(req, timeout=_VT_TIMEOUT_SECONDS, context=_SSL_CONTEXT) as resp:
                 return _trim_vt_response(json.load(resp), sha256)
         except urllib.error.HTTPError as e:
             if e.code == 404:
