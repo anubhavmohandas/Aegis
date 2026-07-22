@@ -81,4 +81,4 @@ trusted_usb_ids: []           # e.g. ["usb\\vid_0781&pid_5581\\...\\"] (Windows 
 # Default OFF because querying a hash discloses that hash to VirusTotal.
 # The VT API key is not stored here: set the VT_API_KEY environment variable
 # (or a VT_API_KEY line in .env). Free-tier keys: https://www.virustotal.com
-enrich_enabled: true
+enrich_enabled: false
