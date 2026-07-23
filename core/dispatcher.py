@@ -7,7 +7,15 @@ survivors to the AI explainer, notifies the user, and persists everything
 PIPELINE ORDER (and why it's in this order, not the naive Event -> AI):
 
     Queue -> dedupe -> rule engine -> severity engine -> rate limit
-          -> enrichment -> AI -> notify -> persist
+          -> enrichment -> PERSIST -> [explainer pool: AI -> notify -> update row]
+
+PERSIST COMES BEFORE THE AI CALL, AND THE AI CALL IS OFF THIS THREAD: the
+dashboard shows persisted rows, and the AI is a 4-30 second network round-trip.
+Explaining inline meant an event didn't appear in the timeline until the model
+answered -- and, because this is the single thread draining every collector's
+queue, every event behind it waited too. A file you touched took over a minute
+to show up. Rows now land immediately with explanation=NULL and a small worker
+pool fills them in (see _stage_explain_and_notify).
 
 Enrichment (core/enrichment.py, opt-in) sits between rate limiting and the
 AI call: it only runs for events that are actually about to be explained
@@ -55,6 +63,7 @@ from .database import EventStore
 from .enrichment import ThreatEnricher
 from .events import EventCategory, MonitorEvent
 from .notifier import notify
+from .process_notes import describe
 from .rule_engine import RuleEngine
 from .severity_engine import SEVERITY_ORDER, SeverityEngine
 
@@ -175,6 +184,7 @@ class Dispatcher:
 
     def _handle(self, event: MonitorEvent):
         self._log_raw(event)
+        self._annotate_summary(event)
 
         if self._stage_dedupe(event):
             return
@@ -203,6 +213,21 @@ class Dispatcher:
     # --- individual stages ------------------------------------------------
     # Each returns True if it fully handled (persisted + stopped) the event,
     # False if the event should continue to the next stage.
+
+    def _annotate_summary(self, event: MonitorEvent) -> None:
+        """Append a plain-English note to the row text for recognised system
+        utilities. After _log_raw on purpose: the flat log keeps whatever the
+        collector actually reported, verbatim, and this only changes what a
+        human reads in the timeline. The suffix is deterministic, so the dedupe
+        key below is unaffected."""
+        if event.category != EventCategory.PROCESS_STARTED:
+            return
+        note = describe(
+            str(event.details.get("image_name") or event.details.get("name") or ""),
+            str(event.details.get("exe") or event.details.get("executable_path") or ""),
+        )
+        if note:
+            event.summary = f"{event.summary} -- {note}"
 
     def _stage_dedupe(self, event: MonitorEvent) -> bool:
         if not self._is_duplicate(event):

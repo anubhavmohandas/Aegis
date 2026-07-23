@@ -46,9 +46,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from core.events import EventCategory, MonitorEvent
@@ -79,6 +81,39 @@ _HASH_READ_LIMIT_BYTES = 200 * 1024 * 1024  # 200MB
 # helpers -- things a user or launchd starts, not things an attacker scripts
 # with) gets suppressed.
 _SIP_PLATFORM_PREFIX = "/System/"
+
+# The wider set, used for SEVERITY only (see is_system_binary below) -- never
+# for skipping the AI call. The distinction matters: "is this file genuine,
+# unmodifiable Apple software" and "is this invocation worth explaining" are
+# different questions. /usr/bin/curl is definitely the real curl AND is
+# definitely worth explaining, so it keeps its AI explanation but stops
+# claiming to be as alarming as an unsigned binary out of ~/Downloads.
+_SYSTEM_BINARY_PREFIXES = (
+    "/System/", "/usr/bin/", "/usr/sbin/", "/usr/libexec/", "/bin/", "/sbin/",
+)
+
+
+@lru_cache(maxsize=1)
+def _sip_ok() -> bool:
+    return _sip_enabled()
+
+
+def is_system_binary(exe_path: str) -> bool:
+    """True when `exe_path` resolves inside a SIP-protected system directory.
+
+    SIP-gated on purpose: with SIP off, /usr/bin/curl can be replaced by
+    anything, so the path stops being evidence of anything and this must
+    report False (fail toward treating the event as ordinary/unknown, never
+    toward reassurance). resolve() first so a symlink or ../ can't fake the
+    prefix -- same reasoning as the suppression branch in RuleEngine.evaluate.
+    """
+    if not exe_path or not _sip_ok():
+        return False
+    try:
+        resolved = str(Path(exe_path).resolve())
+    except OSError:
+        return False
+    return resolved.startswith(_SYSTEM_BINARY_PREFIXES)
 
 
 def _sip_enabled() -> bool:
@@ -139,6 +174,22 @@ class RuleEngine:
     def evaluate(self, event: MonitorEvent) -> RuleVerdict:
         if event.category == EventCategory.PROCESS_STARTED:
             name = str(event.details.get("image_name") or event.details.get("name") or "").lower()
+
+            # Aegis's own subprocesses -- osascript for every notification,
+            # csrutil, the webcam grab. Reporting them is a feedback loop:
+            # Aegis notifies about an event, the notification spawns osascript,
+            # osascript is a new process, Aegis notifies about that. Matched on
+            # parent PID, not name, so it can't be spoofed by naming a payload
+            # "osascript" -- an attacker would have to already be running as a
+            # child of this process. Still persisted to the timeline.
+            if str(event.details.get("parent_pid", "")) == str(os.getpid()):
+                return RuleVerdict(
+                    skip_ai=True,
+                    canned_explanation=f"{name or 'A helper process'} was started by Aegis itself "
+                                        f"(notifications, evidence capture, system checks). Logged "
+                                        f"for completeness; not sent to the AI explainer.",
+                    reason="aegis_own_child",
+                )
 
             if self.trusted_process_hashes:
                 exe_path = str(event.details.get("exe") or event.details.get("executable_path") or "")

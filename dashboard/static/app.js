@@ -235,6 +235,10 @@ function buildThemePicker() {
 /* ---------- stats band ---------- */
 
 function renderStats(stats) {
+  // Not dismissible on purpose: while this is true, the password that guards
+  // Stop Monitoring, Quit and Settings is still the documented default.
+  $("default-creds-banner").hidden = !stats.default_credentials;
+
   $("stat-24h").textContent = stats.last_24h;
   $("stat-total").textContent = stats.total;
   $("stat-sources").textContent = Object.keys(stats.by_source).length;
@@ -680,11 +684,15 @@ async function restartMonitoring() {
 
 let stopLockoutTimer = null;   // non-null while a lockout countdown is running
 
-/* The password modal is shared between the two protected actions: null means
-   Stop Monitoring, an array of incident ids means Delete Evidence. */
-let deleteIds = null;
+/* One password modal, three protected actions — they share the server's
+   guard_protected_action contract exactly (same 403 + tamper_blocked shape,
+   same lockout, same evidence capture), so they share the UI too. */
+let pwMode = "stop";           // "stop" | "delete" | "unlock"
+let deleteIds = null;          // "delete" mode: which incidents
+let afterUnlock = null;        // "unlock" mode: what to run once it succeeds
 
 function openStopModal() {
+  pwMode = "stop";
   deleteIds = null;
   $("stoppw-title").textContent = "STOP MONITORING";
   $("stoppw-desc").textContent = "Stopping monitoring is a protected action. Enter the dashboard password to confirm. Wrong attempts are logged, and repeated failures capture evidence.";
@@ -693,6 +701,7 @@ function openStopModal() {
 }
 
 function openDeleteModal(ids) {
+  pwMode = "delete";
   deleteIds = ids;
   const what = ids.length === 1 ? "this incident" : `these ${ids.length} incidents`;
   $("stoppw-title").textContent = "DELETE EVIDENCE";
@@ -701,7 +710,24 @@ function openDeleteModal(ids) {
   showPasswordModal();
 }
 
+/* Settings can turn tamper protection itself off, so it's gated like Stop
+   Monitoring. `next` is re-run after a successful unlock — the action the
+   user was actually trying to do. */
+function openUnlockModal(next) {
+  pwMode = "unlock";
+  afterUnlock = next || null;
+  $("stoppw-title").textContent = "UNLOCK SETTINGS";
+  $("stoppw-desc").textContent = "Settings control the monitors, the trust lists and tamper protection itself, so changing them is a protected action. Enter the dashboard password to unlock. Wrong attempts are logged, and repeated failures capture evidence.";
+  $("stoppw-confirm").textContent = "Unlock Settings";
+  showPasswordModal();
+}
+
 function showPasswordModal() {
+  // Stop/Delete are destructive; unlocking isn't -- don't dress it in the
+  // danger button just because it shares the modal.
+  const confirmBtn = $("stoppw-confirm");
+  confirmBtn.classList.toggle("btn-stop", pwMode !== "unlock");
+  confirmBtn.classList.toggle("btn-primary", pwMode === "unlock");
   $("stoppw-overlay").hidden = false;
   $("stoppw-modal").hidden = false;
   $("stoppw-note").textContent = "";
@@ -741,18 +767,25 @@ function startStopLockout(seconds) {
   stopLockoutTimer = setInterval(tick, 1000);
 }
 
-async function confirmStop() {
+const PW_ENDPOINT = {
+  stop:   () => ["/api/monitor/stop", {}],
+  delete: () => ["/api/incidents/delete", { ids: deleteIds }],
+  unlock: () => ["/api/settings/unlock", {}],
+};
+
+async function confirmPasswordAction() {
   if (stopLockoutTimer) return;   // locked out — ignore clicks/Enter
   const password = $("stoppw-input").value;
   const btn = $("stoppw-confirm");
-  const deleting = deleteIds !== null;
+  const mode = pwMode;
+  const [url, extra] = PW_ENDPOINT[mode]();
   btn.disabled = true;
-  if (!deleting) { state.monitorBusy = true; renderMonitorPill(); }
+  if (mode === "stop") { state.monitorBusy = true; renderMonitorPill(); }
   try {
-    const res = await fetch(deleting ? "/api/incidents/delete" : "/api/monitor/stop", {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(deleting ? { ids: deleteIds, password } : { password }),
+      body: JSON.stringify({ ...extra, password }),
     });
     if (res.status === 401) { location.replace("/login"); return; }
     const data = await res.json();
@@ -773,12 +806,20 @@ async function confirmStop() {
       $("stoppw-note").textContent = data.error;
       return;
     }
-    if (deleting) {
+    if (mode === "delete") {
       closeStopModal();
       closeIncidentDrawer();
       toast(`Deleted ${data.deleted} incident${data.deleted === 1 ? "" : "s"}`);
       if (data.file_errors) toast("Some evidence files could not be removed — see logs", true);
       loadIncidents();   // re-renders the list and refreshes the shield
+      return;
+    }
+    if (mode === "unlock") {
+      closeStopModal();
+      toast("Settings unlocked");
+      const next = afterUnlock;
+      afterUnlock = null;
+      if (next) next();
       return;
     }
     state.monitor = data;
@@ -788,7 +829,7 @@ async function confirmStop() {
     $("stoppw-note").textContent = "Request failed — is the dashboard server still running?";
   } finally {
     if (!stopLockoutTimer) btn.disabled = false;   // stay disabled while locked out
-    if (!deleting) {
+    if (mode === "stop") {
       state.monitorBusy = false;
       renderMonitorPill();
       refreshStatsOnly();
@@ -1012,7 +1053,7 @@ function openDrawer(id) {
   const trust = trustTargetFor(ev, details);
   const trustBtn = trust
     ? `<button class="btn" id="drawer-trust-btn" data-kind="${trust.kind}"
-               data-value="${escapeHtml(trust.value)}"
+               data-value="${escapeHtml(trust.value)}" data-label="${escapeHtml(trust.label)}"
                title="Skip the AI call for ${escapeHtml(trust.label)} from now on">
          Always Trust · ${escapeHtml(trust.label)}</button>`
     : "";
@@ -1229,13 +1270,25 @@ function bindFilters() {
 
 let settingsLoaded = false;
 
-function switchView(view) {
+/* Settings is password-gated (see openUnlockModal): the view only opens once
+   the server actually hands over the settings, so a locked tab can't be
+   walked into by editing the DOM. The server's own 403 is the gate — this
+   just reacts to it. */
+async function switchView(view) {
+  if (view === "settings" && !settingsLoaded) {
+    // Only a genuine "locked" answer opens the password prompt — a server
+    // that's simply unreachable must not look like a security challenge.
+    const result = await loadSettings();
+    if (result !== true) {
+      if (result === "locked") openUnlockModal(() => switchView("settings"));
+      return;
+    }
+  }
   $("view-console").hidden = view !== "console";
   $("view-incidents").hidden = view !== "incidents";
   $("view-settings").hidden = view !== "settings";
   document.querySelectorAll(".side-item[data-view]").forEach((t) =>
     t.classList.toggle("active", t.dataset.view === view));
-  if (view === "settings" && !settingsLoaded) loadSettings();
   if (view === "incidents") loadIncidents();
 }
 
@@ -1269,17 +1322,22 @@ function selectProvider(id, { applyPreset } = { applyPreset: true }) {
   }
 }
 
+/* true = loaded, "locked" = server wants the password, false = something else
+   went wrong (the caller must not turn that into a password prompt). */
 async function loadSettings() {
   try {
-    const s = await api("/api/settings");
+    const res = await fetch("/api/settings");
+    if (res.status === 401) { location.replace("/login"); return false; }
+    if (res.status === 403) return "locked";
+    if (!res.ok) throw new Error(`settings -> ${res.status}`);
+    const s = await res.json();
     settingsLoaded = true;
 
+    // The click handler lives in bindSettings(), bound once — this function
+    // can run more than once (it re-runs after "Always Trust" invalidates the
+    // cache), and binding here stacked a duplicate listener each time.
     $("provider-grid").innerHTML = PROVIDERS.map((p) =>
       `<button class="provider-card" data-provider="${p.id}">${p.label}</button>`).join("");
-    $("provider-grid").addEventListener("click", (e) => {
-      const card = e.target.closest(".provider-card");
-      if (card) selectProvider(card.dataset.provider);
-    });
 
     selectProvider(detectProvider(s.ai), { applyPreset: false });
     $("set-base-url").value = s.ai.base_url;
@@ -1309,11 +1367,49 @@ async function loadSettings() {
     $("set-evidence-dir").value = s.evidence_dir || "";
     $("set-evidence-dir").placeholder = s.evidence_dir_default || "";
 
+    startSettingsCountdown(s.unlock_expires_in);
     checkForUpdate();
-  } catch (err) {
-    if (String(err).includes("unauthenticated")) return;
+    return true;
+  } catch {
     toast("Could not load settings", true);
+    return false;
   }
+}
+
+/* The unlock expires on the server after SETTINGS_UNLOCK_TTL, but until now
+   nothing said so and nothing closed the tab — walk away mid-edit and the page
+   sat there looking open. Mirror the server clock here (it hands back the real
+   remaining seconds) and drop out of the view when it runs out, plus a manual
+   "Lock now" for stepping away deliberately. */
+let settingsLockTimer = null;
+
+function startSettingsCountdown(seconds) {
+  clearInterval(settingsLockTimer);
+  settingsLockTimer = null;
+  const el = $("settings-lock-timer");
+  // null/0 = the user turned tamper_require_password off: nothing to count down
+  // to, and nothing for "Lock now" to lock.
+  $("settings-lock").hidden = !(seconds > 0);
+  if (!(seconds > 0)) { el.textContent = ""; return; }
+  let remaining = Math.floor(seconds);
+  const tick = () => {
+    if (remaining <= 0) { lockSettings("Settings re-locked — unlock expired"); return; }
+    el.textContent = `Auto-locks in ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`;
+    remaining -= 1;
+  };
+  tick();
+  settingsLockTimer = setInterval(tick, 1000);
+}
+
+async function lockSettings(message = "Settings locked") {
+  clearInterval(settingsLockTimer);
+  settingsLockTimer = null;
+  $("settings-lock-timer").textContent = "";
+  settingsLoaded = false;      // next visit has to pass the password gate again
+  switchView("console");
+  toast(message);
+  // Best effort: the server's own TTL still closes it if this never lands.
+  try { await fetch("/api/settings/lock", { method: "POST" }); } catch { /* ignore */ }
 }
 
 /* ---------- self-update ---------- */
@@ -1367,6 +1463,12 @@ async function installUpdate() {
       }),
     });
     const data = await res.json().catch(() => ({}));
+    if (res.status === 403 && data.settings_locked) {
+      $("update-status").textContent = "";
+      btn.disabled = false;
+      openUnlockModal(installUpdate);
+      return;
+    }
     if (!res.ok) {
       $("update-status").textContent = data.error || "Update failed.";
       btn.disabled = false;
@@ -1462,6 +1564,12 @@ async function saveSettings() {
     });
     if (res.status === 401) { location.replace("/login"); return; }
     const data = await res.json();
+    // The unlock expires on its own (SETTINGS_UNLOCK_TTL) — re-prompt and
+    // then finish the save the user already asked for, rather than losing it.
+    if (res.status === 403 && data.settings_locked) {
+      openUnlockModal(saveSettings);
+      return;
+    }
     if (!res.ok) { toast(data.error || `Save failed (${res.status})`, true); return; }
     $("set-api-key").value = "";
     $("set-vt-key").value = "";
@@ -1501,8 +1609,15 @@ function bindSettings() {
     $("temp-val").textContent = Number(e.target.value).toFixed(2);
   });
 
+  $("settings-lock").addEventListener("click", () => lockSettings());
   $("settings-save").addEventListener("click", saveSettings);
   $("settings-restart").addEventListener("click", restartMonitoring);
+  // Bound once, on the container: loadSettings() rebuilds the cards inside it
+  // and can run more than once per page load.
+  $("provider-grid").addEventListener("click", (e) => {
+    const card = e.target.closest(".provider-card");
+    if (card) selectProvider(card.dataset.provider);
+  });
 
   $("vt-test-btn").addEventListener("click", async () => {
     const btn = $("vt-test-btn"), out = $("vt-test-result");
@@ -1513,6 +1628,11 @@ function bindSettings() {
       const res = await fetch("/api/enrich/test", { method: "POST" });
       if (res.status === 401) { location.replace("/login"); return; }
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.settings_locked) {
+        out.textContent = "";
+        openUnlockModal(() => $("vt-test-btn").click());
+        return;
+      }
       if (data.ok) {
         out.classList.add("ok");
         out.textContent = `✓ Working — test file flagged by ${data.detections}/${data.engines_total} engines`;
@@ -1758,6 +1878,12 @@ async function addTrust(kind, value, btn) {
     });
     if (res.status === 401) { location.replace("/login"); return; }
     const data = await res.json();
+    if (res.status === 403 && data.settings_locked) {
+      // Trust entries are a config change like any other -- same gate.
+      if (btn) { btn.disabled = false; btn.textContent = `Always Trust · ${btn.dataset.label || "this"}`; }
+      openUnlockModal(() => addTrust(kind, value, btn));
+      return;
+    }
     if (!res.ok) { toast(data.error || "Could not add trust", true); if (btn) { btn.disabled = false; } return; }
     toast("Added to Trust List — future matches skip the AI call");
     settingsLoaded = false;   // force settings reload so the new entry shows
@@ -1862,8 +1988,8 @@ function bind() {
   $("stoppw-close").addEventListener("click", closeStopModal);
   $("stoppw-cancel").addEventListener("click", closeStopModal);
   $("stoppw-overlay").addEventListener("click", closeStopModal);
-  $("stoppw-confirm").addEventListener("click", confirmStop);
-  $("stoppw-input").addEventListener("keydown", (e) => { if (e.key === "Enter") confirmStop(); });
+  $("stoppw-confirm").addEventListener("click", confirmPasswordAction);
+  $("stoppw-input").addEventListener("keydown", (e) => { if (e.key === "Enter") confirmPasswordAction(); });
 
   // daily brief (opened from the sidebar; see bindSettings SIDE_ACTIONS)
   $("daily-modal-close").addEventListener("click", closeDailyBrief);

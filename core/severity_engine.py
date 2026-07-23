@@ -29,9 +29,28 @@ don't block anything or make a decision for the user.
 from __future__ import annotations
 
 from core.events import EventCategory, MonitorEvent
-from core.rule_engine import RuleVerdict
+from core.rule_engine import RuleVerdict, is_system_binary
 
 SEVERITY_ORDER = ["low", "medium", "high", "critical"]
+
+# Binaries that live in a SIP-protected system directory but whose INVOCATION
+# is the interesting part -- the living-off-the-land set. Being genuine Apple
+# software says nothing about what someone is using them for, so these hold at
+# the category baseline while their neighbours (ioreg, pmset, system_profiler,
+# tail...) drop to low. This is an *un*safe-list, not a safe-list: an unknown
+# name is not on it and therefore does NOT get the downgrade-blocking
+# treatment... it gets the downgrade only by proving its path is SIP-protected.
+_LOLBIN_NAMES = {
+    "curl", "wget", "nc", "ncat", "netcat", "socat", "ssh", "scp", "sftp",
+    "osascript", "python", "python3", "perl", "ruby", "php", "tclsh",
+    "sudo", "security", "dscl", "launchctl", "openssl", "base64", "xattr",
+    "screencapture", "csrutil", "spctl",
+}
+# occam: shells (zsh/bash/sh) are deliberately NOT in that set -- they fire on
+# every terminal command and would keep the timeline at a wall of medium. The
+# signal that separates "user typed a command" from "browser spawned a shell"
+# is the PARENT process, not the shell itself; add parent-name lineage to
+# details and gate on that if shell abuse ever needs to surface here.
 
 _CATEGORY_BASELINE = {
     EventCategory.PROCESS_STARTED: "medium",
@@ -77,14 +96,28 @@ class SeverityEngine:
         level = _CATEGORY_BASELINE.get(event.category, "medium")
 
         if event.category == EventCategory.PROCESS_STARTED:
-            path = str(
+            raw_path = str(
                 event.details.get("exe")
                 or event.details.get("executable_path")
                 or event.details.get("image_name")
                 or ""
-            ).lower()
+            )
+            path = raw_path.lower()
             if any(frag in path for frag in _SUSPICIOUS_PATH_FRAGMENTS):
                 level = _bump(level)
+            elif is_system_binary(raw_path):
+                # The third thing that can push severity down, and the only one
+                # based on an integrity property rather than user configuration:
+                # the file is in a directory the kernel will not let anyone
+                # modify. Routine OS housekeeping (ioreg, pmset, biomesyncd,
+                # system_profiler) is what actually dominates the timeline, and
+                # scoring all of it identically to an unknown binary is what
+                # made every row read "medium" -- a severity that never varies
+                # carries no information at all. Note the elif: a suspicious
+                # path never gets quietly downgraded by this branch.
+                name = str(event.details.get("image_name") or event.details.get("name") or "").lower()
+                if name not in _LOLBIN_NAMES:
+                    level = "low"
 
         if event.category in (EventCategory.FILE_CREATED, EventCategory.FILE_MODIFIED):
             path = str(event.details.get("path", "")).lower()
@@ -103,3 +136,35 @@ class SeverityEngine:
                 level = _bump(level, steps=2)
 
         return level
+
+
+if __name__ == "__main__":
+    # Self-check for the system-binary downgrade -- the branch that decides
+    # whether the timeline says anything at all or just repeats "medium".
+    # Forces the SIP flag on so it runs the same on Linux CI or a SIP-off Mac.
+    import core.rule_engine as _re
+
+    _re._sip_ok = lambda: True  # type: ignore[assignment]
+
+    engine = SeverityEngine()
+    proc = lambda name, exe: MonitorEvent(category=EventCategory.PROCESS_STARTED,
+                                          summary="t", details={"name": name, "exe": exe},
+                                          source="process")
+
+    assert engine.evaluate(proc("ioreg", "/usr/sbin/ioreg")) == "low"
+    assert engine.evaluate(proc("biomesyncd", "/usr/libexec/biomesyncd")) == "low"
+    assert engine.evaluate(proc("zsh", "/bin/zsh")) == "low"
+    assert engine.evaluate(proc("curl", "/usr/bin/curl")) == "medium"       # LOLBin holds
+    assert engine.evaluate(proc("osascript", "/usr/bin/osascript")) == "medium"
+    assert engine.evaluate(proc("payload", "/Users/me/payload")) == "medium"  # unknown stays medium
+    # A system-tool NAME outside a system path must not earn the downgrade,
+    # and the suspicious-path bump must still win outright.
+    assert engine.evaluate(proc("ioreg", "/Users/me/Downloads/ioreg")) == "high"
+    assert engine.evaluate(proc("ioreg", "/tmp/ioreg")) == "high"
+    assert engine.evaluate(proc("ioreg", "")) == "medium"
+    # Downgrades and bumps for other categories are untouched.
+    assert engine.evaluate(MonitorEvent(category=EventCategory.STARTUP_ITEM_ADDED, summary="t",
+                                        details={}, source="startup")) == "high"
+    assert engine.evaluate(proc("anything", "/usr/bin/anything"),
+                           RuleVerdict(skip_ai=True)) == "low"
+    print("severity_engine self-check: OK")

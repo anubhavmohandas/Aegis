@@ -220,7 +220,7 @@ h2 .em{color:var(--primary)}
 .raw .k{color:var(--dim)}
 .raw .nil{color:var(--sev-low)}
 .raw .warn{color:var(--warning)}
-html.js .raw.swap{animation:swapIn .3s ease}
+html.js .raw.swap,html.js .mem-list.swap{animation:swapIn .3s ease}
 @keyframes swapIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .verdict{
   padding:17px 18px;border-top:1px solid var(--border-soft);
@@ -513,28 +513,9 @@ html.js .reveal.in{opacity:1;transform:none;transition:opacity .7s cubic-bezier(
         <div class="verdict" id="vs-verdict"></div>
       </div>
       <div class="panel">
-        <div class="panel-bar"><span class="t"><i class="g">◉</i>AEGIS — MEMORY</span></div>
-        <div class="mem-list">
-          <div class="mem-evt">
-            <span class="mk med">●</span><span class="tm">02:14</span>
-            <span class="what">USB device connected — SanDisk Ultra<span class="badge med">UNRECOGNIZED</span>
-              <span class="ai">A storage device you've never connected before was plugged in while your screen was locked. You were away.</span>
-            </span>
-          </div>
-          <div class="mem-evt">
-            <span class="mk high">●</span><span class="tm">02:14</span>
-            <span class="what">invoice.pdf.exe copied to ~/Downloads<span class="badge threat">T1036</span>
-              <span class="ai">An executable disguised with a document name. A copy and its hash were preserved before anyone could delete it.</span>
-            </span>
-          </div>
-          <div class="mem-evt">
-            <span class="mk ses">◉</span><span class="tm">07:02</span>
-            <span class="what">you unlocked — Away Session summary ready
-              <span class="ai">While you were away for 4h 51m, an unknown USB arrived and left one disguised executable behind. Evidence is attached.</span>
-            </span>
-          </div>
-        </div>
-        <div class="verdict"><b>You wake up knowing.</b> No query, no log diving, no security background required.</div>
+        <div class="panel-bar"><span class="t"><i class="g">◉</i><span id="vs-aegis-name">AEGIS — MEMORY</span></span></div>
+        <div class="mem-list" id="vs-mem" aria-live="polite"></div>
+        <div class="verdict" id="vs-aegis-verdict"></div>
       </div>
     </div>
 
@@ -678,36 +659,89 @@ if (reduced){
   vids.forEach(v => vio.observe(v));
 }
 
-/* vs. other tools — same 02:14 event, rendered by each tool */
+/* vs. other tools — the same 02:14 event, rendered by each tool.
+   Both panels swap: the left is what that tool actually shows you, the right
+   is the part of Aegis's memory that answers THAT tool's specific blind spot.
+   Same night, same incident, every time — only the framing moves. */
+const MEM = {
+  usb:   {mk:'med',  tm:'02:14', what:'USB device connected — SanDisk Ultra', badge:'med|UNRECOGNIZED',
+          ai:"A storage device you've never connected before was plugged in while your screen was locked. You were away."},
+  exe:   {mk:'high', tm:'02:14', what:'invoice.pdf.exe copied to ~/Downloads', badge:'threat|T1036',
+          ai:'An executable disguised with a document name. A copy and its hash were preserved before anyone could delete it.'},
+  wake:  {mk:'ses',  tm:'07:02', what:'you unlocked — Away Session summary ready',
+          ai:'While you were away for 4h 51m, an unknown USB arrived and left one disguised executable behind. Evidence is attached.'},
+  quiet: {mk:'low',  tm:'02:11', what:'12,478 routine events scored and set aside', badge:'ok|FILTERED',
+          ai:"Indexing, sync daemons, background helpers. Kept in the database, kept out of your way — you'll never scroll past them to find the two that matter."},
+  hash:  {mk:'high', tm:'02:14', what:'sha256 checked — 48 / 76 engines flag this file', badge:'threat|EVIDENCE HELD',
+          ai:'Only the hash left your machine, never the file. The copy Aegis kept survives the original being deleted.'},
+  gone:  {mk:'med',  tm:'02:19', what:'invoice.pdf.exe deleted from ~/Downloads', badge:'med|STILL ON RECORD',
+          ai:'Whoever it was cleaned up after themselves. The event, the hash, and the preserved copy are all still here.'},
+  local: {mk:'ses',  tm:'07:02', what:'0 bytes of content captured · 0 uploads', badge:'ok|LOCAL ONLY',
+          ai:'No screenshots, no keystrokes, no clipboard. Aegis records that a device connected and a file appeared — never what you were doing.'}
+};
 const VS = {
   edr: {name:'EDR / XDR CONSOLE',
     raw:'<span class="k">host</span>   DESKTOP-4A2   <span class="k">agent</span> 7.14.3\n<span class="k">time</span>   02:14:07\n\ndetection ......... <span class="nil">none</span>\nsignature match ... <span class="nil">none</span>\nseverity .......... <span class="nil">informational</span>\naction taken ...... <span class="nil">none</span>\n\n<span class="k">// no policy violation. nothing to isolate.</span>\n<span class="k">// visible only in your admin\'s console.</span>',
-    verdict:'Built to <b>stop attackers across a fleet</b> — and it does that well. But nobody attacked you. Someone just used your laptop, and that isn\'t a policy violation.'},
+    verdict:'Built to <b>stop attackers across a fleet</b> — and it does that well. But nobody attacked you. Someone just used your laptop, and that isn\'t a policy violation.',
+    memName:'AEGIS — MEMORY · YOUR MACHINE',
+    mem:['usb','exe','wake'],
+    memVerdict:'Aegis didn\'t block anything either — it never does. <b>The difference is that you can see it</b>, on your own machine, with no console and no admin above you.'},
   siem: {name:'SIEM — SEARCH',
     raw:'&gt; index=win host=DESKTOP-4A2 earliest=-8h\n  | stats count by EventCode\n\n<span class="k">EventCode  count</span>\n4663       8,214\n6416         137\n4624          52\n...\n\n<span class="warn">12,481 events matched. Refine your search.</span>',
-    verdict:'Powerful — <b>if you already know what you\'re looking for</b>, and have an analyst to write the query. The answer is in there. So is everything else.'},
+    verdict:'Powerful — <b>if you already know what you\'re looking for</b>, and have an analyst to write the query. The answer is in there. So is everything else.',
+    memName:'AEGIS — MEMORY · ALREADY FILTERED',
+    mem:['quiet','usb','exe'],
+    memVerdict:'Same 12,481 events. <b>Three of them were worth your morning</b> — and you didn\'t write a query to find out which.'},
   av: {name:'WINDOWS DEFENDER',
     raw:'  Quick scan complete.\n\n  <span class="k">Threats found:</span> 0\n  <span class="k">Last scan:</span>     today, 07:31\n\n  <span class="nil">Your device is being protected.</span>',
-    verdict:'It checked the file against signatures and found nothing to quarantine. <b>It has no opinion on who plugged in a USB at 2am</b> — that was never its job.'},
+    verdict:'It checked the file against signatures and found nothing to quarantine. <b>It has no opinion on who plugged in a USB at 2am</b> — that was never its job.',
+    memName:'AEGIS — MEMORY · THE OTHER QUESTION',
+    mem:['usb','hash','wake'],
+    memVerdict:'Defender answered "is this file known malware?" Aegis answers the question nobody asked it: <b>who was at your machine, and what did they leave behind?</b>'},
   taskmgr: {name:'ACTIVITY MONITOR — NOW',
     raw:'<span class="k">PROCESS          %CPU    MEMORY</span>\nFinder            0.4     182 MB\nSafari            2.1     1.02 GB\nSpotlight         0.1      64 MB\n\n<span class="nil">// live view only. no history.</span>\n<span class="warn">02:14 was 5 hours ago. It\'s gone.</span>',
-    verdict:'Perfect for <b>what\'s running right now</b>. Close the window and the past closes with it — there is no yesterday to scroll back to.'},
+    verdict:'Perfect for <b>what\'s running right now</b>. Close the window and the past closes with it — there is no yesterday to scroll back to.',
+    memName:'AEGIS — MEMORY · FIVE HOURS AGO',
+    mem:['usb','exe','gone'],
+    memVerdict:'02:14 is still here at 07:02 — and next week. <b>The file was deleted; the record of it wasn\'t.</b>'},
   evtx: {name:'EVENT VIEWER',
     raw:'<span class="k">Event 6416, Kernel-PnP</span>\nA new external device was recognized by the\nsystem. DeviceInstanceId: USBSTOR\\DISK&amp;VEN_\nSANDISK&amp;PROD_ULTRA&amp;REV_1.00\\4C5300012308...\n\n<span class="k">Event 4663, Security-Auditing</span>\nAn attempt was made to access an object.\nAccesses: WriteData (or AddFile)\nObject Name: C:\\Users\\...\\Downloads\\invoice.pdf.exe',
-    verdict:'Every fact you need is <b>technically already there</b> — buried in 12,000 siblings, unsorted, unscored, and written for the kernel, not for you.'},
+    verdict:'Every fact you need is <b>technically already there</b> — buried in 12,000 siblings, unsorted, unscored, and written for the kernel, not for you.',
+    memName:'AEGIS — MEMORY · SAME TWO EVENTS',
+    mem:['usb','exe','wake'],
+    memVerdict:'Event 6416 and Event 4663 — <b>the exact same two records</b>, scored, connected to each other, and written in a sentence instead of a device instance ID.'},
   spy: {name:'MONITORING APP',
     raw:'<span class="k">02:14</span>  screenshot_0241.png  <span class="warn">uploaded</span>\n<span class="k">02:14</span>  keystrokes.log       <span class="warn">uploaded</span>\n<span class="k">02:15</span>  clipboard.txt        <span class="warn">uploaded</span>\n\n<span class="warn">// your content left the machine.</span>\n<span class="nil">// someone else decides what it meant.</span>',
-    verdict:'It saw everything, including <b>your private content</b> — then shipped it to somebody else\'s server. Aegis records system events, never content, and never uploads.'}
+    verdict:'It saw everything, including <b>your private content</b> — then shipped it to somebody else\'s server. Aegis records system events, never content, and never uploads.',
+    memName:'AEGIS — MEMORY · NOTHING LEFT THE DISK',
+    mem:['usb','exe','local'],
+    memVerdict:'It knows a USB arrived and an executable appeared. <b>It has no idea what you were typing</b> — and the database is a file on your own disk.'}
 };
 const vsRaw = document.getElementById('vs-raw');
 const vsName = document.getElementById('vs-name');
 const vsVerdict = document.getElementById('vs-verdict');
+const vsMem = document.getElementById('vs-mem');
+const vsMemName = document.getElementById('vs-aegis-name');
+const vsMemVerdict = document.getElementById('vs-aegis-verdict');
+function memRow(key){
+  const e = MEM[key];
+  const [cls, label] = e.badge ? e.badge.split('|') : [];
+  return '<div class="mem-evt"><span class="mk ' + e.mk + '">' + (e.mk === 'ses' ? '◉' : '●') + '</span>' +
+    '<span class="tm">' + e.tm + '</span><span class="what">' + e.what +
+    (label ? '<span class="badge ' + cls + '">' + label + '</span>' : '') +
+    '<span class="ai">' + e.ai + '</span></span></div>';
+}
 function showVs(key){
   const d = VS[key];
   vsName.textContent = d.name;
   vsRaw.innerHTML = d.raw;
   vsVerdict.innerHTML = d.verdict;
-  vsRaw.classList.remove('swap'); void vsRaw.offsetWidth; vsRaw.classList.add('swap');
+  vsMemName.textContent = d.memName;
+  vsMem.innerHTML = d.mem.map(memRow).join('');
+  vsMemVerdict.innerHTML = d.memVerdict;
+  for (const el of [vsRaw, vsMem]){
+    el.classList.remove('swap'); void el.offsetWidth; el.classList.add('swap');
+  }
 }
 document.querySelectorAll('.chip').forEach(chip => {
   chip.addEventListener('click', () => {

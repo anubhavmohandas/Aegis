@@ -145,10 +145,28 @@ def load_config(path: Path | None = None) -> AppConfig:
     path = path or DEFAULT_CONFIG_PATH
     if not path.exists():
         print(f"[config] no config.yaml found at {path}, using defaults", file=sys.stderr)
-        return _with_default_folders(AppConfig())
+        return _defaults()
 
-    with open(path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
+    # Every individual field below already degrades to its default on a bad
+    # value (see _parse_int's note) -- but the top-level parse itself didn't,
+    # so ONE stray character in config.yaml raised straight out of here. That
+    # takes down every caller: the app at startup, and (worse) the dashboard's
+    # tamper gate, which calls load_config() to decide whether a password is
+    # required -- leaving Stop Monitoring and Settings wedged behind a 500,
+    # with no way to fix the file from the UI. Same failure shape as the
+    # per-field typos, one level up, so treat it the same way.
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    except (yaml.YAMLError, OSError) as e:
+        print(f"[config] WARNING: could not read {path} ({e}) -- using defaults for "
+              f"everything. Fix the file and restart to pick your settings back up.",
+              file=sys.stderr)
+        return _defaults()
+    if not isinstance(raw, dict):
+        print(f"[config] WARNING: {path} is not a mapping of settings "
+              f"({type(raw).__name__}) -- using defaults.", file=sys.stderr)
+        return _defaults()
 
     ai = _parse_ai_block(raw)
     cfg = AppConfig(
@@ -192,6 +210,19 @@ def load_config(path: Path | None = None) -> AppConfig:
             "VirusTotal lookups are disabled until it is; local MITRE annotations still run.",
             file=sys.stderr,
         )
+    return cfg
+
+
+def _defaults() -> AppConfig:
+    """The all-defaults config, for the paths that never get to read a file.
+
+    Goes through _anchor_runtime_paths like the normal path does: without it, a
+    frozen build with no (or unreadable) config.yaml kept the RELATIVE default
+    log/db paths, and a Finder-launched .app has CWD `/` -- so the event store
+    and log silently went nowhere writable, which is the exact failure
+    _anchor_runtime_paths exists to prevent."""
+    cfg = _with_default_folders(AppConfig())
+    _anchor_runtime_paths(cfg)
     return cfg
 
 

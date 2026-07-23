@@ -371,6 +371,25 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 .layout { max-width: 1180px; margin: 0 auto; padding: 22px 24px 40px; position: relative; z-index: 1; }
 
+/* Default-password warning. Deliberately loud and not dismissible: while it's
+   showing, every password gate in the app opens to "admin". */
+.warn-banner {
+  /* line up with .layout's content box (1180px max, 24px side padding) */
+  width: calc(100% - 48px); max-width: 1132px; margin: 18px auto -4px; padding: 11px 14px;
+  display: flex; gap: 10px; align-items: flex-start;
+  position: relative; z-index: 1;
+  border: 1px solid color-mix(in srgb, var(--sev-critical) 45%, transparent);
+  border-left: 3px solid var(--sev-critical);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sev-critical) 10%, var(--bg-raised));
+  color: var(--ink); font-size: 12.5px; line-height: 1.5;
+}
+.warn-banner svg { width: 16px; height: 16px; flex: 0 0 16px; margin-top: 1px; color: var(--sev-critical); }
+.warn-banner code {
+  font-family: var(--font-mono); font-size: 11.5px; padding: 1px 5px; border-radius: 4px;
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
 /* ---------- stats band ---------- */
 
 .stats-band {
@@ -1022,6 +1041,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   padding: 4px 2px 0;
 }
 .settings-note { font-family: var(--font-mono); font-size: 11px; color: var(--ink-3); }
+.settings-note:empty { display: none; }   /* the lock countdown, before it starts */
 
 .btn-primary {
   background: var(--accent);

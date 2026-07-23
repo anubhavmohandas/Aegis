@@ -12,7 +12,12 @@ bundle and on a bare python install alike.
 
 Access requires signing in -- admin/admin on first run, changeable from the
 Settings page (see change_password() below); sessions are HttpOnly cookies
-that expire after 12h or on restart.
+that expire after 12h or on restart. Failed sign-ins escalate exactly like a
+failed Stop Monitoring attempt (logged, evidence captured, lockout).
+
+The Settings page needs that password a SECOND time (see unlock_settings): it
+can switch tamper protection off entirely, so leaving it behind nothing but a
+live session would have made every other gate in the app decorative.
 
 Run with:
     python dashboard/server.py [--db aegis_events.db] [--port 8787]
@@ -35,6 +40,7 @@ import secrets
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -102,13 +108,20 @@ def _hash_password(password: str, salt: bytes, iterations: int = PBKDF2_ITERATIO
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations).hex()
 
 
-def _new_credentials(username: str, password: str) -> dict:
+def _new_credentials(username: str, password: str, is_default: bool = False) -> dict:
     salt = secrets.token_bytes(16)
     return {
         "username": username,
         "salt": salt.hex(),
-        "hash": _hash_password(password, salt),
+        # iterations passed explicitly, not left to _hash_password's default:
+        # the default binds at import time, so the recorded count and the count
+        # actually used could disagree if PBKDF2_ITERATIONS is ever rebound.
+        "hash": _hash_password(password, salt, PBKDF2_ITERATIONS),
         "iterations": PBKDF2_ITERATIONS,
+        # Recorded once, at write time, rather than re-derived by verifying
+        # the default password on every call -- that's 200k PBKDF2 rounds,
+        # and _using_default_credentials() is read on every /api/stats poll.
+        "is_default": is_default,
     }
 
 
@@ -117,12 +130,32 @@ def _load_credentials() -> dict:
         try:
             creds = json.loads(CREDENTIALS_PATH.read_text(encoding="utf-8"))
             if {"username", "salt", "hash"} <= creds.keys():
+                if "is_default" not in creds:
+                    # Credentials file written before the flag existed: resolve
+                    # it once (this IS the expensive path) and persist, so the
+                    # "you're still on admin/admin" warning is honest for
+                    # installs that predate it too.
+                    creds["is_default"] = (
+                        creds["username"] == DEFAULT_USERNAME
+                        and hmac.compare_digest(
+                            _hash_password(DEFAULT_PASSWORD, bytes.fromhex(creds["salt"]),
+                                           creds.get("iterations", PBKDF2_ITERATIONS)),
+                            creds["hash"]))
+                    _save_credentials(creds)
                 return creds
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, ValueError):
             pass
-    creds = _new_credentials(DEFAULT_USERNAME, DEFAULT_PASSWORD)
+    creds = _new_credentials(DEFAULT_USERNAME, DEFAULT_PASSWORD, is_default=True)
     _save_credentials(creds)
     return creds
+
+
+def _using_default_credentials() -> bool:
+    """True while the seeded admin/admin login is still in place. Worth a loud
+    banner rather than a footnote: this same password is what the tamper gate
+    checks for Stop Monitoring, Quit, and Settings, so an unchanged default
+    means every one of those gates is open to anyone who read the README."""
+    return bool(_load_credentials().get("is_default"))
 
 
 def _save_credentials(creds: dict) -> None:
@@ -152,11 +185,27 @@ def _verify_password(username: str, password: str) -> bool:
 
 
 def change_password(current_password: str, new_password: str) -> dict:
+    """Throttled like every other password prompt (see _throttle_failed_password).
+
+    This endpoint checks the SAME password that guards Stop Monitoring, Quit and
+    Settings, and it used to answer "is this the password?" as fast as the
+    request could be made -- no delay, no lockout, no timeline entry. A live
+    session could brute-force it silently at ~36 guesses/second while the
+    Settings unlock next door locked out after 5. Same secret, same escalation.
+
+    The current-password check is NOT routed through guard_protected_action: that
+    returns "allowed" outright when tamper_require_password is off, which would
+    let anyone with a session set a new password without knowing the old one."""
     if len(new_password) < 8:
         return {"error": "new password must be at least 8 characters"}
+    locked = _lockout_check("change_password")
+    if locked:
+        return locked
     creds = _load_credentials()
     if not _verify_password(creds["username"], current_password):
-        return {"error": "current password is incorrect"}
+        return {**_throttle_failed_password("change_password"),
+                "error": "current password is incorrect"}
+    _tamper_state.pop("change_password", None)   # clean slate on success
     _save_credentials(_new_credentials(creds["username"], new_password))
     return {"ok": True}
 
@@ -315,6 +364,7 @@ def query_stats(db_path: str) -> dict:
             "categories": categories,
             "latest": dict(latest) if latest else None,
             "server_time": time.time(),
+            "default_credentials": _using_default_credentials(),
         }
     finally:
         conn.close()
@@ -834,6 +884,8 @@ def stop_monitor() -> dict:
 # correct password. The lockout is enforced HERE (server-side), so it holds
 # even if someone bypasses the frontend.
 _tamper_state: dict[str, dict] = {}
+# Serializes wrong-password handling -- see _register_failed_attempt.
+_tamper_lock = threading.Lock()
 # occam: fixed 5-attempts / 60s per the product decision; promote to config
 # fields (like tamper_attempts_before_capture) only if someone needs to tune it.
 LOCKOUT_THRESHOLD = 5
@@ -845,6 +897,122 @@ def _writable_store():
     return EventStore(DashboardHandler.db_path)
 
 
+def _safe_config():
+    """load_config() that never raises. The tamper gates have to keep working
+    when config.yaml is unreadable, and they must fail CLOSED when it is --
+    AppConfig()'s defaults have tamper_require_password on, so that's what an
+    unreadable config degrades to."""
+    from core.config import AppConfig, load_config
+    try:
+        return load_config()
+    except Exception:
+        logger_srv.warning("Could not load config -- assuming tamper protection is ON",
+                           exc_info=True)
+        return AppConfig()
+
+
+def _lockout_check(action: str) -> dict:
+    """Non-empty while `action` is locked out. Checked BEFORE the password, so
+    a correct password inside the lockout window still waits it out."""
+    st = _tamper_state.get(action)
+    if not st:
+        return {}
+    remaining = st["locked_until"] - time.time()
+    if remaining <= 0:
+        return {}
+    seconds = int(remaining) + 1
+    return {"error": f"too many attempts -- locked for {seconds}s",
+            "locked": True, "retry_after": seconds}
+
+
+def _register_failed_attempt(action: str, cfg=None) -> dict:
+    """One wrong password on `action`: log it to the timeline, capture evidence
+    at the configured threshold, lock out at LOCKOUT_THRESHOLD. Returns the
+    error dict to send back.
+
+    Shared by every gated path -- Stop Monitoring, Delete Evidence, Settings,
+    AND the sign-in form. Sign-in was the hole: it had a 0.4s sleep and nothing
+    else, so someone could sit at the login page guessing the password
+    indefinitely, silently, and never trip the gate that the Stop button they
+    were ultimately after is protected by. Guessing the password IS the tamper
+    attempt; where it's typed doesn't change that."""
+    # cfg may legitimately be None (the caller's own load_config() raised, which
+    # is exactly why it passed None) -- so re-deriving it here has to go through
+    # the never-raises path, or this re-raises the error the caller handled.
+    cfg = cfg or _safe_config()
+    # The whole body runs under one lock. Without it, a burst of parallel wrong
+    # passwords each read st["fails"]/st["captured"] before any of them wrote,
+    # so N threads all saw "not captured yet" and all fired capture_incident():
+    # 20 concurrent attempts produced 18 incident folders -- 18 screenshots and
+    # 18 contending grabs of a single webcam -- and left the fails counter at 0.
+    # A brute-force burst is precisely when this path must stay accurate, and
+    # serializing wrong-password handling is a feature here, not a cost.
+    # occam: one global lock over all actions; per-action locks only if a real
+    # workload ever has two different gates being attacked at the same time.
+    with _tamper_lock:
+        # Re-check the lockout now that we hold the lock. The caller's
+        # _lockout_check ran before it, so an entire burst can stream past that
+        # check while the first attempt is still being processed, and every one
+        # of them would then be counted and escalated. Serialized, 20 parallel
+        # guesses used to roll through four full 5-strike cycles and capture
+        # evidence four times; re-checking here stops the burst at the first
+        # lockout, which is what a lockout is for.
+        locked = _lockout_check(action)
+        if locked:
+            return locked
+        st = _tamper_state.setdefault(action, {"fails": 0, "locked_until": 0.0, "captured": False})
+        time.sleep(0.4)  # blunt guessing damper
+        st["fails"] += 1
+        n = st["fails"]
+        locked_now = n >= LOCKOUT_THRESHOLD
+        store = None
+        try:
+            store = _writable_store()
+            try:
+                store.insert(
+                    source="tamper", category="tamper_attempt",
+                    summary=(f"Failed password on protected action: {action} (attempt {n}"
+                             + (f" -- locked out for {LOCKOUT_SECONDS}s)" if locked_now else ")")),
+                    details={"action": action, "attempt": n, "locked_out": locked_now},
+                    confidence="certain", severity="critical" if locked_now else "high")
+            except Exception as e:
+                logger_srv.error("Could not log tamper attempt: %s", e)
+            result = {"error": "incorrect password", "attempts": n}
+            # Evidence capture: once, at the configured threshold.
+            if n >= cfg.tamper_attempts_before_capture and not st["captured"]:
+                from core.evidence import capture_incident
+                inc = capture_incident(reason=f"unauthorized attempt: {action}", attempts=n,
+                                       store=store, config=cfg, extra_context={"action": action})
+                st["captured"] = True
+                result["incident_id"] = inc.get("id")
+                result["evidence_captured"] = True
+            # Lockout: block the action for a fixed window, then start fresh.
+            if locked_now:
+                st["locked_until"] = time.time() + LOCKOUT_SECONDS
+                st["fails"] = 0
+                st["captured"] = False
+                result["locked"] = True
+                result["retry_after"] = LOCKOUT_SECONDS
+                result["error"] = f"too many attempts -- locked for {LOCKOUT_SECONDS}s"
+            return result
+        finally:
+            if store is not None:
+                store.close()
+
+
+def _throttle_failed_password(action: str) -> dict:
+    """Record a wrong password typed at a prompt that checks the password
+    ITSELF (sign-in, change-password) rather than delegating to
+    guard_protected_action. Escalates exactly like a gated action when tamper
+    protection is on; falls back to the blunt damper alone when the user has
+    turned it off. The caller supplies the user-facing wording."""
+    cfg = _safe_config()
+    if cfg.tamper_require_password:
+        return _register_failed_attempt(action, cfg)
+    time.sleep(0.4)   # tamper gate off: damper only, no incident trail
+    return {}
+
+
 def guard_protected_action(action: str, password: str) -> dict:
     """Returns {} when the action may proceed, else an error dict. Wrong
     passwords escalate: evidence capture at the configured threshold, then a
@@ -853,77 +1021,76 @@ def guard_protected_action(action: str, password: str) -> dict:
     cfg = load_config()
     if not cfg.tamper_require_password:
         return {}
-    st = _tamper_state.setdefault(action, {"fails": 0, "locked_until": 0.0, "captured": False})
-    now = time.time()
-
-    # Locked out? Reject before even looking at the password -- a correct
-    # password during the lockout window still waits it out.
-    if st["locked_until"] > now:
-        remaining = int(st["locked_until"] - now) + 1
-        return {"error": f"too many attempts -- locked for {remaining}s",
-                "locked": True, "retry_after": remaining}
-
+    locked = _lockout_check(action)
+    if locked:
+        return locked
     creds = _load_credentials()
     if _verify_password(creds["username"], password):
         _tamper_state.pop(action, None)   # clean slate on success
         return {}
+    return _register_failed_attempt(action, cfg)
 
-    time.sleep(0.4)  # same blunt guessing damper as the login path
-    st["fails"] += 1
-    n = st["fails"]
-    locked_now = n >= LOCKOUT_THRESHOLD
-    store = None
+
+# --- settings lock -----------------------------------------------------------
+# The Settings page is the master key to every other protection in this app: it
+# can switch tamper_require_password OFF (which disables the password gate on
+# Stop Monitoring AND on quitting), turn off evidence capture, repoint the
+# evidence folder somewhere the attacker controls, and empty the trust lists.
+# A live session alone was enough to do all of that -- so anyone who walked up
+# to an unlocked machine with the dashboard already signed in could disable the
+# tamper protocol in two clicks, without ever tripping it.
+#
+# Reading and writing settings therefore needs the dashboard password again,
+# through the SAME guard as Stop Monitoring: wrong attempts are logged as
+# timeline events, evidence is captured at the threshold, and five failures
+# lock the action out. The unlock is per-session-token, expires on its own, and
+# is dropped on sign-out. Like every other gate here, it's disabled when the
+# user has explicitly turned tamper_require_password off.
+SETTINGS_UNLOCK_TTL = 10 * 60
+_settings_unlock_until: dict[str, float] = {}   # session token -> expiry (unix seconds)
+
+
+def unlock_settings(token: str, password: str) -> dict:
+    guard = guard_protected_action("settings", password)
+    if guard.get("error"):
+        return guard
+    _settings_unlock_until[token] = time.time() + SETTINGS_UNLOCK_TTL
+    return {"ok": True, "expires_in": SETTINGS_UNLOCK_TTL}
+
+
+def _read_incidents(sql: str, args: tuple = ()) -> list[dict]:
+    """Read-only incident query. These two endpoints used to go through
+    _writable_store(), i.e. a fresh WRITABLE sqlite connection plus a full
+    CREATE-TABLE-IF-NOT-EXISTS schema script -- and the dashboard polls
+    /api/incidents every 4 seconds to keep the shield badge current. That's a
+    write connection opened, schema-scripted and closed every 4s, forever,
+    against the same file the dispatcher is appending events to. Reads belong
+    on the read-only connection the rest of this file already uses.
+
+    An OperationalError here means the incidents table doesn't exist yet (a DB
+    file created before tamper evidence existed, only migrated when an
+    EventStore opens it) -- that's "no incidents", not an error page."""
     try:
-        store = _writable_store()
-        try:
-            store.insert(
-                source="tamper", category="tamper_attempt",
-                summary=(f"Failed password on protected action: {action} (attempt {n}"
-                         + (f" -- locked out for {LOCKOUT_SECONDS}s)" if locked_now else ")")),
-                details={"action": action, "attempt": n, "locked_out": locked_now},
-                confidence="certain", severity="critical" if locked_now else "high")
-        except Exception as e:
-            logger_srv.error("Could not log tamper attempt: %s", e)
-        result = {"error": "incorrect password", "attempts": n}
-        # Evidence capture: once, at the configured threshold.
-        if n >= cfg.tamper_attempts_before_capture and not st["captured"]:
-            from core.evidence import capture_incident
-            inc = capture_incident(reason=f"unauthorized attempt: {action}", attempts=n,
-                                   store=store, config=cfg, extra_context={"action": action})
-            st["captured"] = True
-            result["incident_id"] = inc.get("id")
-            result["evidence_captured"] = True
-        # Lockout: block the action for a fixed window, then start fresh.
-        if locked_now:
-            st["locked_until"] = time.time() + LOCKOUT_SECONDS
-            st["fails"] = 0
-            st["captured"] = False
-            result["locked"] = True
-            result["retry_after"] = LOCKOUT_SECONDS
-            result["error"] = f"too many attempts -- locked for {LOCKOUT_SECONDS}s"
-        return result
+        conn = _connect_ro(DashboardHandler.db_path)
+    except sqlite3.Error:
+        return []
+    try:
+        return [dict(r) for r in conn.execute(sql, args).fetchall()]
+    except sqlite3.OperationalError:
+        return []
     finally:
-        if store is not None:
-            store.close()
+        conn.close()
 
 
 def list_incidents() -> dict:
-    store = _writable_store()
-    try:
-        rows = store.list_incidents(limit=200)
-    finally:
-        store.close()
+    rows = _read_incidents("SELECT * FROM incidents ORDER BY timestamp DESC LIMIT 200")
     unreviewed = sum(1 for r in rows if not r["reviewed"])
     return {"incidents": rows, "unreviewed": unreviewed, "total": len(rows)}
 
 
 def get_incident(incident_id: int) -> dict:
-    store = _writable_store()
-    try:
-        row = store.get_incident(incident_id)
-    finally:
-        store.close()
-    return row or {"error": "incident not found"}
+    rows = _read_incidents("SELECT * FROM incidents WHERE id = ?", (incident_id,))
+    return rows[0] if rows else {"error": "incident not found"}
 
 
 def delete_incidents_action(ids: list[int]) -> dict:
@@ -1141,6 +1308,7 @@ def install_update(download_url: str, asset_name: str) -> dict:
 
 class DashboardHandler(BaseHTTPRequestHandler):
     db_path: str = "aegis_events.db"  # overridden in main()
+    bind_host: str = "127.0.0.1"      # set in build_server -- see _host_ok
     # Set True by desktop_app.py: the monitor pipeline there runs in THIS
     # same process, not as a separate main.py subprocess the old start/stop
     # buttons were built to spawn/kill -- see monitor_status()/start_monitor()
@@ -1198,16 +1366,106 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _settings_open(self) -> bool:
+        """Has this session unlocked Settings (see unlock_settings)?"""
+        from core.config import load_config
+        try:
+            if not load_config().tamper_require_password:
+                return True     # user turned the whole tamper gate off
+        except Exception:
+            logger_srv.warning("Could not read tamper settings -- keeping Settings locked",
+                               exc_info=True)
+            return False        # fail closed: unreadable config must not open the gate
+        token = self._session_token()
+        expiry = _settings_unlock_until.get(token) if token else None
+        if expiry is None:
+            return False
+        if expiry < time.time():
+            _settings_unlock_until.pop(token, None)
+            return False
+        return True
+
+    def _unlock_remaining(self):
+        """Seconds left on this session's Settings unlock, for the countdown in
+        the UI. None means "no countdown": either the tamper gate is off
+        entirely, or nothing was unlocked (the caller is already past the gate
+        because _settings_open() said so)."""
+        expiry = _settings_unlock_until.get(self._session_token() or "")
+        return max(0, int(expiry - time.time())) if expiry else None
+
+    def _require_settings_unlock(self) -> bool:
+        """True if the caller may touch settings; otherwise sends the 403 that
+        tells the frontend to open the unlock prompt."""
+        if self._settings_open():
+            return True
+        self._send_json({"error": "Settings are locked -- enter the dashboard password to unlock.",
+                         "settings_locked": True}, status=403)
+        return False
+
+    # A browser page on any other origin can be made to resolve its own
+    # hostname to 127.0.0.1 (DNS rebinding) and then talk to this server. The
+    # session cookie wouldn't come along, but the login endpoint would still be
+    # reachable -- and the seeded admin/admin is a guessable first try. This
+    # server only ever exists to be reached as localhost, so anything else is
+    # refused outright.
+    _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
+
+    def _host_ok(self) -> bool:
+        # Hostnames are case-insensitive, so compare casefolded -- "LOCALHOST:8787"
+        # is the same host as "localhost:8787" and was being refused.
+        host = (self.headers.get("Host") or "").strip().casefold()
+        if host.startswith("["):                      # [::1]:8787
+            host = host[1:].partition("]")[0]
+        elif host.count(":") == 1:                    # 127.0.0.1:8787
+            head, _, port = host.rpartition(":")
+            # Only strip a genuine numeric port. Splitting on the colon
+            # unconditionally accepted "127.0.0.1:8787.evil.com" as "127.0.0.1".
+            if port.isdigit():
+                host = head
+        # bind_host covers someone who deliberately passed --host <lan-ip>:
+        # that address is then a legitimate way to reach this server, and a
+        # rebinding attacker still can't make a browser send a different one.
+        return host in self._ALLOWED_HOSTS or host == self.bind_host
+
     # --- request handling ---
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if not self._host_ok():
+            self._send(403, b"forbidden host", "text/plain")
+            return
         try:
             if parsed.path == "/api/login":
                 self._handle_login()
+            elif parsed.path == "/api/settings/unlock":
+                if not self._authed():
+                    self._send_json({"error": "authentication required"}, status=401)
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                except (json.JSONDecodeError, ValueError):
+                    body = {}
+                result = unlock_settings(self._session_token() or "",
+                                         str(body.get("password", "")))
+                if result.get("error"):
+                    self._send_json({**result, "tamper_blocked": True}, status=403)
+                else:
+                    self._send_json(result)
+            elif parsed.path == "/api/settings/lock":
+                # No password needed to re-lock -- locking can only reduce
+                # access, and a "Lock now" that itself needs the password is
+                # useless to someone stepping away from the machine.
+                if not self._authed():
+                    self._send_json({"error": "authentication required"}, status=401)
+                    return
+                _settings_unlock_until.pop(self._session_token() or "", None)
+                self._send_json({"ok": True})
             elif parsed.path == "/api/settings":
                 if not self._authed():
                     self._send_json({"error": "authentication required"}, status=401)
+                    return
+                if not self._require_settings_unlock():
                     return
                 try:
                     length = int(self.headers.get("Content-Length") or 0)
@@ -1232,7 +1490,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     return
                 result = change_password(str(body.get("current_password", "")),
                                           str(body.get("new_password", "")))
-                self._send_json(result, status=400 if result.get("error") else 200)
+                if result.get("locked"):
+                    status = 429      # lockout, not a malformed request
+                else:
+                    status = 400 if result.get("error") else 200
+                self._send_json(result, status=status)
             elif parsed.path == "/api/monitor/start":
                 if not self._authed():
                     self._send_json({"error": "authentication required"}, status=401)
@@ -1336,12 +1598,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/enrich/test":
                 if not self._authed():
                     self._send_json({"error": "authentication required"}, status=401)
-                else:
+                elif self._require_settings_unlock():
                     result = test_enrichment()
                     self._send_json(result, status=400 if result.get("error") else 200)
             elif parsed.path == "/api/trust/add":
+                # Adding a trust entry rewrites config.yaml (write_settings) and
+                # permanently silences a binary or device -- same class of change
+                # as the Settings page itself, so the same gate applies.
                 if not self._authed():
                     self._send_json({"error": "authentication required"}, status=401)
+                    return
+                if not self._require_settings_unlock():
                     return
                 try:
                     length = int(self.headers.get("Content-Length") or 0)
@@ -1351,8 +1618,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 result = add_trusted(str(body.get("kind", "")), str(body.get("value", "")))
                 self._send_json(result, status=400 if result.get("error") else 200)
             elif parsed.path == "/api/update/install":
+                # Replaces this application's own files on disk -- gated with
+                # the rest of Settings, where the button lives.
                 if not self._authed():
                     self._send_json({"error": "authentication required"}, status=401)
+                    return
+                if not self._require_settings_unlock():
                     return
                 try:
                     length = int(self.headers.get("Content-Length") or 0)
@@ -1370,6 +1641,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 token = self._session_token()
                 if token:
                     _sessions.pop(token, None)
+                    _settings_unlock_until.pop(token, None)  # signing out re-locks Settings
                 self._send_json({"ok": True},
                                 extra={"Set-Cookie": f"{SESSION_COOKIE}=; Path=/; Max-Age=0"})
             else:
@@ -1383,11 +1655,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
         except (json.JSONDecodeError, ValueError):
             body = {}
+        # Sign-in is a protected action too: it hands out a session that can
+        # stop monitoring, and it was the one password prompt in the app with
+        # no lockout and no tamper trail (see _register_failed_attempt).
+        locked = _lockout_check("login")
+        if locked:
+            self._send_json({"ok": False, **locked}, status=429)
+            return
         ok = _verify_password(str(body.get("username", "")), str(body.get("password", "")))
         if not ok:
-            time.sleep(0.4)  # blunt damper on credential guessing
-            self._send_json({"ok": False, "error": "invalid credentials"}, status=401)
+            # never confirm which half was wrong
+            result = {**_throttle_failed_password("login"), "error": "invalid credentials"}
+            self._send_json({"ok": False, **result}, status=401)
             return
+        _tamper_state.pop("login", None)   # clean slate on a successful sign-in
         token = secrets.token_urlsafe(32)
         _sessions[token] = time.time() + SESSION_TTL
         self._send_json({"ok": True}, extra={
@@ -1396,6 +1677,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if not self._host_ok():
+            self._send(403, b"forbidden host", "text/plain")
+            return
         params = parse_qs(parsed.query)
         authed = self._authed()
         try:
@@ -1430,7 +1714,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 elif parsed.path == "/api/daily":
                     self._send_json(daily_brief(self.db_path))
                 elif parsed.path == "/api/settings":
-                    self._send_json(read_settings())
+                    # Reading is gated too, not just writing: this response
+                    # carries the trust lists, the evidence folder path and
+                    # which API keys exist. The frontend uses the 403 as its
+                    # cue to prompt for the password.
+                    if self._require_settings_unlock():
+                        self._send_json({**read_settings(),
+                                         "unlock_expires_in": self._unlock_remaining()})
                 elif parsed.path == "/api/monitor/status":
                     self._send_json(monitor_status())
                 elif parsed.path == "/api/update/check":
@@ -1537,6 +1827,7 @@ def build_server(db_path: str, host: str = "127.0.0.1", port: int = 8787,
     quit_callback, if given, is what /api/update/install calls to shut the
     monitor pipeline down before an installer replaces this process's files."""
     DashboardHandler.db_path = db_path
+    DashboardHandler.bind_host = host
     DashboardHandler.in_process_monitor = in_process_monitor
     DashboardHandler.quit_callback = quit_callback
     DashboardHandler.monitor_status_callback = monitor_status_callback
@@ -1550,7 +1841,8 @@ def main():
     parser.add_argument("--db", default="aegis_events.db", help="Path to the SQLite event store")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--host", default="127.0.0.1",
-                        help="Bind address (keep the localhost default; the API has no auth)")
+                        help="Bind address (keep the localhost default -- this is a personal "
+                             "console behind a single password, not a network service)")
     parser.add_argument("--no-browser", action="store_true", help="Don't auto-open the dashboard")
     args = parser.parse_args()
 
