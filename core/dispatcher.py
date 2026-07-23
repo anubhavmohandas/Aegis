@@ -69,8 +69,14 @@ from .severity_engine import SEVERITY_ORDER, SeverityEngine
 
 logger = logging.getLogger("aegis.dispatcher")
 
-# Hard ceiling independent of poll_interval_seconds -- protects against a
-# misconfigured or malicious flood regardless of other settings.
+# Ceiling on AI-explained events per minute, independent of
+# poll_interval_seconds -- protects against a misconfigured or malicious flood
+# regardless of other settings. NOT a ceiling on events overall: high/critical
+# events are exempt (see RATE_LIMIT_EXEMPT_SEVERITIES and _stage_rate_limit,
+# which short-circuits before _under_rate_limit's bucket append), so they
+# neither consume this budget nor get dropped by it. That exemption is the
+# point -- a burst of installer noise should hit the cap, a single critical
+# event should never be silently dropped for landing in a noisy window.
 MAX_EVENTS_PER_MINUTE = 20
 DEDUPE_WINDOW_SECONDS = 30
 RATE_LIMIT_EXEMPT_SEVERITIES = {"high", "critical"}

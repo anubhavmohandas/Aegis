@@ -74,17 +74,49 @@ class MonitorPipeline:
         self.config = load_config()
         event_queue: Queue = Queue()
         system = platform.system()
-        platform_monitors = build_platform_monitors(system, event_queue, self.config.poll_interval_seconds)
-        folder_monitor = FolderMonitor(self.config.watched_folders, event_queue)
-        session_monitor = SessionMonitor(event_queue, self.config.poll_interval_seconds)
-        self._monitors = platform_monitors + [folder_monitor, session_monitor]
-        self._dispatcher = Dispatcher(event_queue, self.config)
 
-        for m in self._monitors:
-            m.start()
-        self._thread = threading.Thread(target=self._dispatcher.run_forever, daemon=True)
-        self._thread.start()
+        # Confirmed bug: this used to assign self._monitors and then start them
+        # with no failure path, setting self.running=True only at the very end.
+        # Any raise mid-loop (watchdog's Observer.start() on a folder deleted
+        # since config load, or EventStore() on an unwritable db_path) left the
+        # worst possible state: the collectors that DID start kept running and
+        # kept pushing into an event_queue no dispatcher was draining (unbounded
+        # growth), while self.running stayed False -- so stop() returned
+        # immediately at its own `if not self.running` guard and the next
+        # start() sailed past its guard and built a SECOND complete set of
+        # collectors, orphaning the first set for the life of the process.
+        # Build into locals, publish to self only once everything is up, and
+        # unwind whatever actually started if it isn't.
+        started: list = []
+        dispatcher = None
+        try:
+            platform_monitors = build_platform_monitors(system, event_queue,
+                                                         self.config.poll_interval_seconds)
+            folder_monitor = FolderMonitor(self.config.watched_folders, event_queue)
+            session_monitor = SessionMonitor(event_queue, self.config.poll_interval_seconds)
+            monitors = platform_monitors + [folder_monitor, session_monitor]
+            dispatcher = Dispatcher(event_queue, self.config)
 
+            for m in monitors:
+                m.start()
+                started.append(m)
+            thread = threading.Thread(target=dispatcher.run_forever, daemon=True)
+            thread.start()
+        except Exception:
+            logger.exception("Monitor pipeline failed to start -- rolling back %d "
+                              "collector(s) that had already started", len(started))
+            for m in started:
+                try:
+                    m.stop()
+                except Exception:
+                    logger.warning("Error rolling back %s", m.__class__.__name__, exc_info=True)
+            if dispatcher is not None:
+                dispatcher.stop()   # shuts the explainer pool; the queue is dropped with us
+            raise
+
+        self._monitors = monitors
+        self._dispatcher = dispatcher
+        self._thread = thread
         self.running = True
         self.started_at = time.time()
         logger.info("Monitor pipeline started")
@@ -242,7 +274,7 @@ def _info_alert_macos(AppKit, title: str, message: str) -> None:
     alert.runModal()
 
 
-def _add_macos_menubar(window, pipeline, config, on_quit):
+def _add_macos_menubar(window, pipeline, on_quit):
     """Add a native macOS menu-bar (status bar) item so Aegis has a persistent
     presence even when the window is closed/behind others -- this is the 'tray'
     for the desktop app. pywebview owns the Cocoa main run loop, so a separate
@@ -640,7 +672,15 @@ def main():
     config = load_config()
 
     pipeline = MonitorPipeline(config)
-    pipeline.start()
+    try:
+        pipeline.start()
+    except Exception:
+        # Don't take the whole app down with the pipeline. start() rolls itself
+        # back cleanly now, so the window and dashboard still come up, the
+        # status pill honestly reads "not running", and the user can fix the
+        # offending setting and hit Start -- instead of a traceback and no UI.
+        logger.exception("Monitoring could not start at launch -- opening the window anyway "
+                          "so the problem is visible and fixable from Settings.")
 
     http_server = None
     if _server_already_running(HOST, PORT):
@@ -722,7 +762,7 @@ def main():
         from core.version import __version__ as _ver
         logger.warning("QUIT-GATE ARMED (v%s) -- closing this window will require the dashboard password.", _ver)
         window.events.shown += lambda: _darken_titlebar(window)
-        window.events.shown += lambda: _add_macos_menubar(window, pipeline, config, _on_closed)
+        window.events.shown += lambda: _add_macos_menubar(window, pipeline, _on_closed)
         window.events.shown += lambda: _add_pystray_tray(window, pipeline, _on_closed)
         webview.start(icon=str(APP_ICON) if APP_ICON.is_file() else None)
     except Exception:

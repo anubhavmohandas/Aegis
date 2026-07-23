@@ -6,7 +6,8 @@ Only ever runs from an explicit user click ("Check for Updates" /
 "Download & Install" in the dashboard's Settings page) -- never automatically
 or silently, since this replaces the running application's own files.
 
-This is an UNSIGNED alpha build (see packaging/PACKAGING.md). A freshly
+These are UNSIGNED builds (see packaging/PACKAGING.md and the note in
+CHANGELOG.md about where v2.0.x actually sits). A freshly
 installed update is exactly as unsigned as a freshly downloaded one, so
 macOS Gatekeeper may still require right-click -> Open on first launch after
 an update, same as a first-ever install.

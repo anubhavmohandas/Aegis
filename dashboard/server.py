@@ -84,6 +84,7 @@ MIME = {
     ".svg": "image/svg+xml",
     ".png": "image/png",
     ".ico": "image/x-icon",
+    ".woff2": "font/woff2",   # self-hosted webfonts -- see the header of static/style.css
 }
 
 VALID_SEVERITIES = {"low", "medium", "high", "critical"}
@@ -223,7 +224,11 @@ def change_password(current_password: str, new_password: str) -> dict:
 
 # Static files that must be reachable without a session: the login page and
 # the stylesheet it uses. Everything else (index, app.js, the API) is gated.
+# The `fonts/` prefix is public for the same reason style.css is -- the login
+# page references those woff2 files, and gating them would just redirect the
+# font requests to /login and render the sign-in screen in fallback type.
 PUBLIC_FILES = {"login.html", "style.css", "favicon.png"}
+PUBLIC_PREFIXES = ("assets/", "fonts/")
 
 # Columns exposed to the UI -- everything in the events table. details_json is
 # passed through as-is; the frontend parses it (it already carries its own
@@ -818,7 +823,17 @@ def start_monitor() -> dict:
         # sys.executable IS the Aegis binary itself -- a second whole copy of
         # the app, second window included, which is exactly what used to
         # happen and looked like "the app restarts itself."
-        DashboardHandler.monitor_start_callback()
+        #
+        # A raise here (bad db_path, a watched folder that vanished) used to
+        # escape do_POST, which only catches BrokenPipeError -- the browser got
+        # a dropped connection and the user got no idea why monitoring was off.
+        # MonitorPipeline.start() now leaves itself cleanly stopped on failure,
+        # so reporting the reason is both safe and the whole point.
+        try:
+            DashboardHandler.monitor_start_callback()
+        except Exception as e:
+            logger_srv.exception("In-process monitor start failed")
+            return {**monitor_status(), "error": f"could not start monitoring: {e}"}
         return monitor_status()
     status = monitor_status()
     if status["running"]:
@@ -1028,9 +1043,16 @@ def _throttle_failed_password(action: str) -> dict:
 def guard_protected_action(action: str, password: str) -> dict:
     """Returns {} when the action may proceed, else an error dict. Wrong
     passwords escalate: evidence capture at the configured threshold, then a
-    time-boxed lockout at LOCKOUT_THRESHOLD. Never raises."""
-    from core.config import load_config
-    cfg = load_config()
+    time-boxed lockout at LOCKOUT_THRESHOLD. Never raises.
+
+    Config comes from _safe_config(), not a bare load_config(): this is the
+    primary gate for Stop Monitoring, Quit, Delete Evidence and the Settings
+    unlock, and a raise here escaped do_POST (which only catches
+    BrokenPipeError) as a dropped connection rather than the honest error the
+    fail-closed path is supposed to produce. _settings_open() and
+    _throttle_failed_password() already went through the safe loader; this was
+    the one gate that didn't."""
+    cfg = _safe_config()
     if not cfg.tamper_require_password:
         return {}
     locked = _lockout_check(action)
@@ -1758,7 +1780,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._redirect("/login")
             else:
                 name = parsed.path.lstrip("/")
-                if authed or name in PUBLIC_FILES or name.startswith("assets/"):
+                if authed or name in PUBLIC_FILES or name.startswith(PUBLIC_PREFIXES):
                     self._serve_static(parsed.path)
                 else:
                     self._redirect("/login")

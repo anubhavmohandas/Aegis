@@ -229,10 +229,16 @@ done
 
 echo "CI conclusion: $CONCLUSION"
 echo "--- per-job status ---"
+# Also name the failing STEP. Downloading the actual log needs repo-admin
+# credentials, but this jobs endpoint is public, and "which step died" is
+# usually the whole diagnosis -- without it a failure just says "go look".
 curl -s "https://api.github.com/repos/$GITHUB_REPO/actions/runs/$RUN_ID/jobs" | python3 -c "
 import json, sys
 for j in json.load(sys.stdin).get('jobs', []):
     print(f\"  {j['name']:10s} -> {j['status']} / {j['conclusion']}\")
+    for s in j.get('steps', []):
+        if s.get('conclusion') == 'failure':
+            print(f\"       FAILED STEP: {s['name']}\")
 "
 [ "$CONCLUSION" == "success" ] \
     || fail "CI did not succeed for $TAG ($CONCLUSION) -- https://github.com/$GITHUB_REPO/actions/runs/$RUN_ID"

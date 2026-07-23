@@ -34,7 +34,11 @@ dist/
 .secrets.key
 secrets.enc
 secrets.enc.tmp
-credentials.json
+# Glob, not the bare name: the dashboard operator credential record (salt +
+# PBKDF2 hash) gets hand-copied to sidecar names like
+# credentials.json.bak-admin-default during testing, and those slipped straight
+# past a literal `credentials.json` entry into `git add .`.
+credentials.json*
 
 # --- Aegis runtime artifacts (regenerated on every run, not source) ---
 # Tamper-evidence captures (screenshots + incident.json) -- from-source runs

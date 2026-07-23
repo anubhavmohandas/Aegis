@@ -9,11 +9,21 @@ All notable changes to Aegis are recorded here. Versioning tracks
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com).
 
-## [Unreleased] — targeting `v2.0.0-beta`
+> **Where `v2.0.3` actually sits.** The shipped tag carries no pre-release
+> suffix, but it does **not** yet meet the "public release" bar above: builds
+> are unsigned (`packaging/aegis.spec` falls back to unsigned without the local
+> `Aegis Dev` identity; Gatekeeper still needs right-click → Open) and the
+> Windows hardware validation below is still open. The suffix is not being
+> retrofitted, because `is_newer("v2.0.3", "2.0.3-alpha")` is true — renaming a
+> published version downward makes every installed copy see the release it is
+> already running as an update, which is the self-update loop that `v2.0.1`
+> hit. The bar moves at the next version bump instead.
 
-> **Beta is gated on Windows hardware validation, not on the items below.**
+## [Unreleased] — remaining gate for a signed public release
+
+> **This is gated on Windows hardware validation, not on the items below.**
 > Everything here is code-complete and running on macOS. Per ADR-008
-> (`docs/DECISIONS.md`), the `beta` tag is not applied until the Windows
+> (`docs/DECISIONS.md`), that gate is not cleared until the Windows
 > packaged build, installer (`packaging/windows-installer.iss`), and
 > self-update path are run and confirmed on real Windows hardware. Track that
 > run with `TEST_REPORT_TEMPLATE.md`.

@@ -24,6 +24,7 @@
 # (ui/timeline_app.py) is still not bundled -- fully superseded by the
 # dashboard now, PySide6 would triple the bundle size for nothing.
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,6 +35,26 @@ from core.version import __version__  # single source of truth -- see core/versi
 
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
+
+# "Aegis Dev" is a SELF-SIGNED identity that only exists in a local login
+# keychain (see the codesign_identity note in EXE below). A machine without it
+# -- a CI runner, or a fresh checkout on someone else's Mac -- cannot sign, and
+# PyInstaller treats a codesign failure as a fatal build error, which is
+# exactly how the macOS job broke while Windows kept passing. Probe for it and
+# fall back to an unsigned build instead of hard-failing: a locally-built app
+# still gets the stable signature that keeps its TCC grants, and CI still
+# produces a DMG. Signing for public distribution is a Developer ID job, not
+# this one's.
+CODESIGN_IDENTITY = None
+if IS_MAC:
+    _identities = subprocess.run(
+        ["security", "find-identity", "-v", "-p", "codesigning"],
+        capture_output=True, text=True,
+    ).stdout
+    if '"Aegis Dev"' in _identities:
+        CODESIGN_IDENTITY = "Aegis Dev"
+    else:
+        print("aegis.spec: no 'Aegis Dev' signing identity in the keychain -- building UNSIGNED")
 
 # Bundled at the same repo-relative destinations the code resolves against
 # (core/config.py does Path(__file__).parent.parent / "config", and
@@ -101,8 +122,10 @@ exe = EXE(
     # across rebuilds and self-updates -- ad-hoc signatures change every
     # build and silently invalidate them. Swap for a Developer ID before
     # public beta (also fixes Gatekeeper for downloaded DMGs).
-    codesign_identity="Aegis Dev" if IS_MAC else None,
-    entitlements_file=str(ROOT / "packaging" / "entitlements.plist") if IS_MAC else None,
+    codesign_identity=CODESIGN_IDENTITY,
+    # Entitlements only mean anything attached to a signature; passing them
+    # without an identity is a no-op at best.
+    entitlements_file=str(ROOT / "packaging" / "entitlements.plist") if CODESIGN_IDENTITY else None,
 )
 
 coll = COLLECT(

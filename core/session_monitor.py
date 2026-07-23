@@ -5,7 +5,7 @@ Aegis's core promise is "know what happened while you were away", and the
 lock/unlock pair is what turns a flat event stream into an *away session*:
 everything between SESSION_LOCKED and SESSION_UNLOCKED is what happened
 while the owner wasn't looking. The unlock event carries lock/unlock
-timestamps; the dispatcher (see dispatcher._attach_away_recap) then pulls
+timestamps; the dispatcher (see dispatcher._away_recap) then pulls
 the events inside that window out of the store and has the AI brief the
 user on their return.
 

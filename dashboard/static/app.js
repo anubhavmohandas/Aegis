@@ -799,6 +799,8 @@ async function confirmPasswordAction() {
       const captured = data.evidence_captured
         ? ` Evidence captured (incident #${data.incident_id}).` : "";
       $("stoppw-note").textContent = `Incorrect password — attempt ${data.attempts}.${captured}`;
+      $("stoppw-input").value = "";      // don't make them clear the wrong one by hand
+      $("stoppw-input").focus();
       if (data.evidence_captured) { refreshShield(); toast("Tamper evidence captured", true); }
       return;
     }

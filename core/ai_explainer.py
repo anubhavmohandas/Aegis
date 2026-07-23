@@ -256,7 +256,7 @@ class AIExplainer:
 
     def summarize_away(self, away_block: str) -> str:
         """Plain-English recap of what happened while the screen was locked
-        (see core/dispatcher._attach_away_recap)."""
+        (see core/dispatcher._away_recap)."""
         return self._summarize(AWAY_SYSTEM_PROMPT, away_block,
                                "See the timeline for what happened while you were away.", max_tokens=350)
 
