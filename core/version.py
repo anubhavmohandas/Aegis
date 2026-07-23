@@ -22,4 +22,4 @@ copy (Inno Setup can't import Python; keep them in sync by hand, and the
 packaging docs call that out).
 """
 
-__version__ = "2.0.3"
+__version__ = "2.0.4"
