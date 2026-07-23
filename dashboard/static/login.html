@@ -65,9 +65,13 @@
         location.replace("/");
         return;
       }
+      // 401 keeps the generic wording on purpose — the server never says which
+      // half was wrong. Anything else (notably the 429 lockout) carries a
+      // message worth reading: "locked for 60s" beats "Sign-in failed (429)."
+      const data = await res.json().catch(() => ({}));
       errorBox.textContent = res.status === 401
         ? "Invalid credentials — access denied."
-        : `Sign-in failed (${res.status}).`;
+        : (data.error || `Sign-in failed (${res.status}).`);
     } catch {
       errorBox.textContent = "Aegis unreachable — is the server running?";
     }

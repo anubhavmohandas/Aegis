@@ -104,6 +104,18 @@ SESSION_TTL = 12 * 3600
 _sessions: dict[str, float] = {}  # token -> expiry (unix seconds)
 
 
+def _prune_expired(d: dict) -> None:
+    """Drop expired entries from a token -> expiry map.
+
+    Both maps are otherwise only pruned when a token is looked up again, so a
+    session that was never reused -- signed in, tab closed, never returned --
+    left its entry behind for the life of the process. Called when a new token
+    is added, which is the only moment either map grows."""
+    now = time.time()
+    for token in [t for t, expiry in d.items() if expiry <= now]:
+        d.pop(token, None)
+
+
 def _hash_password(password: str, salt: bytes, iterations: int = PBKDF2_ITERATIONS) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations).hex()
 
@@ -1054,6 +1066,7 @@ def unlock_settings(token: str, password: str) -> dict:
     guard = guard_protected_action("settings", password)
     if guard.get("error"):
         return guard
+    _prune_expired(_settings_unlock_until)
     _settings_unlock_until[token] = time.time() + SETTINGS_UNLOCK_TTL
     return {"ok": True, "expires_in": SETTINGS_UNLOCK_TTL}
 
@@ -1670,6 +1683,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         _tamper_state.pop("login", None)   # clean slate on a successful sign-in
         token = secrets.token_urlsafe(32)
+        _prune_expired(_sessions)
         _sessions[token] = time.time() + SESSION_TTL
         self._send_json({"ok": True}, extra={
             "Set-Cookie": f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "

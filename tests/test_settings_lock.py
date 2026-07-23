@@ -204,6 +204,22 @@ assert counted == srv.LOCKOUT_THRESHOLD, \
     f"a burst must stop at the first lockout, not roll through cycles: {counted} counted"
 assert srv._tamper_state["settings"]["locked_until"] > time.time(), "burst must leave it locked"
 
+# --- expired tokens don't accumulate ------------------------------------
+# Both maps used to be pruned only when a token was looked up again, so a
+# session that was signed in and never returned to sat there for the life of
+# the process.
+# (not clearing _sessions -- `fresh` is still needed by the host checks below)
+srv._sessions["stale-token"] = time.time() - 1     # expired a second ago
+sign_in()
+assert "stale-token" not in srv._sessions, "a new sign-in must sweep expired sessions"
+
+srv._settings_unlock_until.clear()
+srv._settings_unlock_until["stale-token"] = time.time() - 1
+srv._tamper_state.clear()
+status, _, _ = call("/api/settings/unlock", {"password": "admin"}, cookie=sign_in())
+assert status == 200
+assert "stale-token" not in srv._settings_unlock_until, "a new unlock must sweep expired ones"
+
 # --- DNS-rebinding guard: only localhost Host headers are served --------
 status, body, _ = call("/api/stats", cookie=None, host="evil.example.com")
 assert status == 403 and "forbidden host" in str(body), (status, body)
