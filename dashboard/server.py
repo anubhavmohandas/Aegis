@@ -755,7 +755,7 @@ def _heartbeat_age() -> float | None:
     still 'running' means the loop stalled -- process-alive is not loop-alive,
     and only the heartbeat can tell those two apart."""
     try:
-        conn = _connect_ro(DashboardHandler.db_path)
+        conn = _connect_ro(DashboardHandler.db_path or _safe_config().db_path)
         try:
             row = conn.execute(
                 "SELECT value FROM meta WHERE key = 'last_heartbeat'").fetchone()
@@ -932,7 +932,9 @@ LOCKOUT_SECONDS = 60
 
 def _writable_store():
     from core.database import EventStore
-    return EventStore(DashboardHandler.db_path)
+    # Falls back to the configured store when no server was ever built --
+    # the tray-only quit gate (main.py) reaches here without build_server().
+    return EventStore(DashboardHandler.db_path or _safe_config().db_path)
 
 
 def _safe_config():
@@ -1367,7 +1369,13 @@ def install_update(download_url: str, asset_name: str) -> dict:
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
-    db_path: str = "aegis_events.db"  # overridden in main()
+    # Set by build_server(). Empty until then -- and the tamper-gate helpers
+    # (_writable_store/_heartbeat_age) CAN run before/without build_server:
+    # main.py's tray-only mode routes its quit gate through
+    # guard_protected_action with no dashboard server at all. Those helpers
+    # fall back to config.db_path, so a custom db_path in config.yaml doesn't
+    # send tamper events to a second, wrong "aegis_events.db" in the cwd.
+    db_path: str = ""
     bind_host: str = "127.0.0.1"      # set in build_server -- see _host_ok
     # Set True by desktop_app.py: the monitor pipeline there runs in THIS
     # same process, not as a separate main.py subprocess the old start/stop

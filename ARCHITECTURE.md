@@ -214,7 +214,7 @@ patterns. Windows now has source-run validation on real hardware (with the
 WMI fallback), while Windows packaged-build/installer/self-update validation
 is still pending.
 
-## Validation status — v2.0.2-alpha
+## Validation status — v2.0.5
 
 Be precise about what "done" means: everything below was run via
 `python3 main.py` from source unless explicitly called out otherwise.
