@@ -482,11 +482,44 @@ async function poll() {
         showPill();
       }
     }
+    await refreshPendingExplanations();
   } catch {
     setConsoleReachable(false);
   }
   refreshMonitorStatus();
   refreshShield();
+}
+
+/* Events are written to the DB the instant they happen and explained a few
+   seconds later (see core/dispatcher.py). The live fetch above only asks for
+   rows newer than maxId, so an explanation that lands after we've already
+   cached the row would never reach us. Re-fetch the still-pending rows -- one
+   query from the oldest pending id, which is all that can have changed. */
+async function refreshPendingExplanations() {
+  let oldest = null;
+  for (const ev of state.byId.values()) {
+    if (ev.explanation || ev.ai_skipped) continue;
+    if (oldest === null || ev.id < oldest) oldest = ev.id;
+  }
+  if (oldest === null) return;
+  const data = await api(`/api/events?${filterQuery({ limit: 200, after_id: oldest - 1 })}`);
+  let changed = false;
+  for (const fresh of data.events) {
+    const cached = state.byId.get(fresh.id);
+    if (!cached || cached.explanation === fresh.explanation) continue;
+    Object.assign(cached, fresh);
+    const inList = state.events.find((e) => e.id === fresh.id);
+    if (inList) Object.assign(inList, fresh);
+    changed = true;
+  }
+  // The timeline row shows the summary, which never changes -- only the open
+  // drawer displays an explanation. Patch just that block rather than calling
+  // openDrawer again, which would rebuild the drawer and snap the user back to
+  // the Summary tab while they're sitting on the AI tab waiting for this.
+  const aiBody = changed ? document.getElementById("drawer-ai-body") : null;
+  if (aiBody && state.selectedId && state.byId.has(state.selectedId)) {
+    aiBody.innerHTML = explanationHtml(state.byId.get(state.selectedId));
+  }
 }
 
 /* ---------- monitor status pill + start/stop control ----------
@@ -805,6 +838,22 @@ function reportRangeBounds() {
   return { since, until, label: `${startVal} - ${endVal}` };
 }
 
+/* Every file the dashboard hands the user goes through here. Never navigate the
+   window to a download URL: in the desktop app that REPLACES the dashboard with
+   the file (WKWebView renders PDF/CSV/JSON inline and pywebview blocks going
+   back), leaving quitting as the only way out. A blob + download attribute keeps
+   the page where it is. */
+async function saveResponseAsFile(res, filename) {
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 /* Shared by the report modal and the drawer's "this window" button. Throws
    on failure so each caller can surface the error in its own UI. */
 async function downloadReportPdf(since, until, label) {
@@ -815,15 +864,7 @@ async function downloadReportPdf(since, until, label) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `report failed (${res.status})`);
   }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `aegis-report-${new Date().toISOString().slice(0, 10)}.pdf`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  await saveResponseAsFile(res, `aegis-report-${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
 async function generateReport() {
@@ -940,6 +981,19 @@ function threatIntelHtml(details) {
     </div>`;
 }
 
+/* An event is stored the moment it happens and explained a few seconds later,
+   so "not explained yet" is a normal, temporary state -- distinct from
+   ai_skipped (deliberately never explained) and from a stored failure. */
+function explanationHtml(ev) {
+  if (ev.explanation) return `<div class="explanation">${renderMarkdownLite(ev.explanation)}</div>`;
+  if (ev.ai_skipped) {
+    return '<div class="ai-skipped-note">AI explanation was skipped for this event ' +
+           '(trusted/ignored by config, or the explainer was unavailable).</div>';
+  }
+  return '<div class="ai-skipped-note">Explaining this event… the timeline never waits ' +
+         'on the AI, so this arrives a few seconds after the event itself.</div>';
+}
+
 function openDrawer(id) {
   const ev = state.byId.get(id);
   if (!ev) return;
@@ -991,11 +1045,7 @@ function openDrawer(id) {
 
     <div class="tab-panel" data-panel="ai" hidden>
       <div class="drawer-section-label">${ev.ai_skipped ? "Explanation" : "AI Explanation"}</div>
-      ${ev.explanation
-        ? `<div class="explanation">${renderMarkdownLite(ev.explanation)}</div>`
-        : ev.ai_skipped
-          ? '<div class="ai-skipped-note">AI explanation was skipped for this event (trusted/ignored by config, or the explainer was unavailable).</div>'
-          : '<div class="ai-skipped-note">No explanation stored.</div>'}
+      <div id="drawer-ai-body">${explanationHtml(ev)}</div>
       ${ev.risk_hint ? `
         <div class="drawer-section-label">Risk Hint</div>
         <div class="risk-hint">${renderMarkdownLite(ev.risk_hint)}</div>` : ""}
@@ -1777,12 +1827,19 @@ function bind() {
   });
   window.addEventListener("scroll", () => { if (window.scrollY < 100) hidePill(); }, { passive: true });
 
-  $("export-json").addEventListener("click", () => {
-    window.location.href = `/api/export?${filterQuery({ format: "json" })}`;
-  });
-  $("export-csv").addEventListener("click", () => {
-    window.location.href = `/api/export?${filterQuery({ format: "csv" })}`;
-  });
+  const exportEvents = async (format) => {
+    try {
+      const res = await fetch(`/api/export?${filterQuery({ format })}`);
+      if (res.status === 401) { location.replace("/login"); return; }
+      if (!res.ok) throw new Error(`export failed (${res.status})`);
+      const stamp = new Date().toISOString().slice(0, 10);
+      await saveResponseAsFile(res, `aegis-events-${stamp}.${format}`);
+    } catch (err) {
+      toast(String(err.message || err), true);
+    }
+  };
+  $("export-json").addEventListener("click", () => exportEvents("json"));
+  $("export-csv").addEventListener("click", () => exportEvents("csv"));
 
   $("logout-btn").addEventListener("click", async () => {
     try { await fetch("/api/logout", { method: "POST" }); } catch { /* redirect regardless */ }
@@ -1791,6 +1848,15 @@ function bind() {
 
   $("monitor-toggle").addEventListener("click", toggleMonitor);
   $("monitor-log-btn").addEventListener("click", openLogModal);
+
+  // Hide Window is desktop-app only (there's nothing to hide in a browser tab).
+  // pywebview injects window.pywebview.api asynchronously, hence the ready
+  // event as well as the immediate check in case it already fired.
+  const hideBtn = $("hide-window-btn");
+  const showHideBtn = () => { hideBtn.hidden = false; };
+  if (window.pywebview && window.pywebview.api) showHideBtn();
+  window.addEventListener("pywebviewready", showHideBtn);
+  hideBtn.addEventListener("click", () => window.pywebview.api.hide_window());
 
   // stop-monitoring password modal
   $("stoppw-close").addEventListener("click", closeStopModal);

@@ -99,6 +99,17 @@ class EventStore:
             self._conn.commit()
             return cur.lastrowid
 
+    def update_explanation(self, event_id: int, explanation: str | None) -> None:
+        """Fill in an explanation for an already-persisted row.
+
+        The dispatcher writes the row the moment an event arrives and asks the
+        AI afterwards, so the timeline shows activity immediately instead of
+        waiting on a network round-trip. This is how the answer gets back."""
+        with self._lock:
+            self._conn.execute("UPDATE events SET explanation = ? WHERE id = ?",
+                               (explanation, event_id))
+            self._conn.commit()
+
     def recent(self, limit: int = 200, source: str | None = None) -> list[dict]:
         with self._lock:
             if source:

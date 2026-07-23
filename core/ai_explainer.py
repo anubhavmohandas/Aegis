@@ -23,6 +23,11 @@ from .events import MonitorEvent
 
 logger = logging.getLogger("aegis.ai_explainer")
 
+# Both SDKs default to a 600-second timeout. An endpoint that stalls should
+# cost one event its explanation, not tie up an explainer thread for ten
+# minutes -- the event itself is already in the timeline either way.
+AI_TIMEOUT_SECONDS = 30
+
 SYSTEM_PROMPT = """You are a plain-English security explainer for a personal desktop \
 monitoring tool. You will be given a single system event (a new process starting, a USB \
 device being connected, a startup program being added, or a file change in a watched folder).
@@ -113,7 +118,8 @@ class AIExplainer:
             return self._client
         if self.config.ai_provider == "anthropic":
             import anthropic
-            self._client = anthropic.Anthropic(api_key=self.config.api_key)
+            self._client = anthropic.Anthropic(api_key=self.config.api_key,
+                                               timeout=AI_TIMEOUT_SECONDS)
         else:
             # Everything that isn't Anthropic speaks the OpenAI wire format;
             # base_url alone decides who actually answers.
@@ -121,6 +127,7 @@ class AIExplainer:
             self._client = openai.OpenAI(
                 base_url=self.config.ai_base_url,
                 api_key=self.config.api_key,
+                timeout=AI_TIMEOUT_SECONDS,
             )
         return self._client
 

@@ -41,6 +41,33 @@ placeholders, not a brand"). Overwritten with real values, see history below.
    interactive "Simulate an incident" demo added to the hero. This supersedes
    everything below.
 
+5. **Restructured as a "movie trailer" page, 2026-07-23, on request:** palette
+   and typography unchanged — this was a *structure and medium* change, not a
+   rebrand. The 14-section story flow collapsed to 11 beats, each one built
+   around footage instead of prose: hero (full-bleed looping dashboard video,
+   two lines, two buttons) → Memory → AI explanation → Daily Brief → Reports →
+   one full-width dashboard screenshot with no text at all → the "where Aegis
+   fits" comparison (kept verbatim — it is the section that explains why this
+   isn't an EDR/SIEM/Event Viewer) → six feature cards → privacy → open source
+   → footer. The hero's interactive "Simulate an incident" demo was dropped;
+   real footage of the product does that job better. Motion budget: fade +
+   8px rise on reveal, 2px lift on hover, a 34s hero ken-burns drift. Nothing
+   spins or bounces.
+
+   Media pipeline (`website/media/`): the source recordings are HEVC/BT.2020
+   PQ 10-bit `.mov`, which **no non-Safari browser will play** — they are
+   transcoded to H.264 MP4. A naive convert greys out the emerald and amber
+   (verified side by side), so the encode must carry the zscale→tonemap→bt709
+   chain. Section videos are `preload="none"` + poster and play only while on
+   screen via IntersectionObserver; under `prefers-reduced-motion` nothing
+   autoplays and every video gets native controls instead.
+
+   `--dim` changed `#6B7684` → `#8A94A3`. The old value was 4.13:1 on `--bg`,
+   under WCAG AA, and it carries most of the small mono labels on the page.
+   Fixed at the token rather than per-rule. This token file is website-only —
+   the dashboard defines its own independent set in
+   `dashboard/static/style.css` — so the change does not reach the app.
+
 ## What was live before the 2026-07-17 rebrand (historical)
 
 The original palette: `--bg: #04070e`, `--panel: #0a1120`, `--chrome:

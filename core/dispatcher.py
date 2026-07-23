@@ -45,6 +45,7 @@ import subprocess
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from queue import Empty, Queue
 
@@ -64,6 +65,9 @@ logger = logging.getLogger("aegis.dispatcher")
 MAX_EVENTS_PER_MINUTE = 20
 DEDUPE_WINDOW_SECONDS = 30
 RATE_LIMIT_EXEMPT_SEVERITIES = {"high", "critical"}
+# Threads that turn persisted events into explanations. See
+# _stage_explain_and_notify for why this work is off the queue-draining thread.
+EXPLAIN_WORKERS = 3
 
 # Heartbeat: the dispatcher stamps "I am alive" into the DB meta table every
 # HEARTBEAT_INTERVAL. On the next startup, a last-heartbeat older than
@@ -126,6 +130,12 @@ class Dispatcher:
         self._stop = threading.Event()
         self._log_lock = threading.Lock()
         self._last_heartbeat = 0.0
+        # Explanations run here, not on the queue-draining thread. Small on
+        # purpose: this is concurrency to keep one slow response from blocking
+        # the next event, not throughput -- more parallel calls into a free-tier
+        # endpoint just earns rate limiting.
+        self._explain_pool = ThreadPoolExecutor(max_workers=EXPLAIN_WORKERS,
+                                                thread_name_prefix="aegis-explain")
 
     def run_forever(self):
         self._check_monitoring_gap()
@@ -151,6 +161,10 @@ class Dispatcher:
 
     def stop(self):
         self._stop.set()
+        # Don't wait: an in-flight AI call can hang for the client timeout, and
+        # "Stop monitoring" must feel instant. Pending explanations are lost,
+        # their events are not -- every row is already persisted.
+        self._explain_pool.shutdown(wait=False, cancel_futures=True)
 
     # --- pipeline entry point -------------------------------------------
     # Decomposed into one method per stage (v2 cleanup -- this was previously
@@ -176,6 +190,12 @@ class Dispatcher:
         if self.enricher:
             # Non-terminal: attaches details["threat_intel"] when there's
             # evidence, attaches nothing on any failure, never raises.
+            # occam: still inline, because its result goes into details_json,
+            # which is written by the _persist below. Opt-in and gated to
+            # high/critical, so it costs nothing by default -- but a slow
+            # VirusTotal lookup does still hold the queue. Move it into the
+            # explainer pool (updating details_json alongside the explanation)
+            # if enrichment ever becomes the bottleneck.
             self.enricher.annotate(event, severity)
 
         self._stage_explain_and_notify(event, severity)
@@ -230,13 +250,46 @@ class Dispatcher:
         return True
 
     def _stage_explain_and_notify(self, event: MonitorEvent, severity: str) -> None:
-        if event.category == EventCategory.SESSION_UNLOCKED:
-            # The "what happened while you were away" briefing IS this event's
-            # explanation -- built from the events inside the lock..unlock
-            # window, not from the unlock event alone.
-            explanation = self._away_recap(event)
-        else:
-            explanation = self.explainer.explain(event, severity)
+        """Persist NOW, explain after.
+
+        The AI call is a network round-trip that routinely takes 4-30 seconds.
+        It used to run here, inline, before _persist -- on the single thread
+        that drains every collector's queue. That meant an event's row didn't
+        exist in the DB until its explanation came back, AND every event behind
+        it in the queue waited too, so a file you touched showed up in the
+        dashboard a minute or more later. The explanation was never the thing
+        the user was waiting for; the row was.
+
+        So the row lands immediately with explanation=NULL, and a small worker
+        pool fills it in (and fires the popup) whenever the model answers.
+        Nothing is lost on failure: _explain_async always writes something back,
+        and the flat log already has the event regardless."""
+        event_id = self._persist(event, severity=severity, explanation=None, ai_skipped=False)
+        self._explain_pool.submit(self._explain_async, event, severity, event_id)
+
+    def _explain_async(self, event: MonitorEvent, severity: str, event_id: int | None) -> None:
+        try:
+            if event.category == EventCategory.SESSION_UNLOCKED:
+                # The "what happened while you were away" briefing IS this
+                # event's explanation -- built from the events inside the
+                # lock..unlock window, not from the unlock event alone.
+                explanation = self._away_recap(event)
+            else:
+                explanation = self.explainer.explain(event, severity)
+        except Exception:
+            # explain()/summarize_away() already swallow their own errors and
+            # return a placeholder string, so reaching here means something
+            # genuinely unexpected. The row must not be left pending forever.
+            logger.exception("Explanation failed for: %s", event.summary)
+            explanation = "[Explanation unavailable -- see logs.]"
+        if event_id is not None:
+            try:
+                self.store.update_explanation(event_id, explanation)
+            except Exception as e:
+                logger.error("Failed to store explanation for event %s: %s", event_id, e)
+        self._notify_for(event, severity, explanation)
+
+    def _notify_for(self, event: MonitorEvent, severity: str, explanation: str) -> None:
         if not self.config.notify_enabled:
             logger.debug("notify_enabled=false -- no popup for [%s] %s", severity, event.summary)
         elif self._severity_meets_notify_floor(severity):
@@ -244,7 +297,6 @@ class Dispatcher:
         else:
             logger.info("Below notify_min_severity=%s -- no popup for [%s] %s",
                         self.config.notify_min_severity, severity, event.summary)
-        self._persist(event, severity=severity, explanation=explanation, ai_skipped=False)
 
     def _severity_meets_notify_floor(self, severity: str) -> bool:
         # Gates ONLY the popup. The AI explanation above still ran and is
@@ -403,9 +455,11 @@ class Dispatcher:
             logger.error("Failed to append to the flat event log %s: %s", self.config.log_path, e)
 
     def _persist(self, event: MonitorEvent, severity: str, explanation: str | None, ai_skipped: bool,
-                 risk_hint: str | None = None):
+                 risk_hint: str | None = None) -> int | None:
+        """Returns the new row's id, or None if the write failed (the caller
+        uses it to fill in the explanation later; None just means no update)."""
         try:
-            self.store.insert(
+            return self.store.insert(
                 source=event.source,
                 category=event.category.value,
                 summary=event.summary,
@@ -421,3 +475,4 @@ class Dispatcher:
             # DB failure must never crash the monitor loop -- the flat log
             # (_log_raw, above) already has this event regardless.
             logger.error("Failed to persist event to SQLite: %s", e)
+            return None

@@ -112,6 +112,92 @@ class MonitorPipeline:
         logger.info("Monitor pipeline stopped")
 
 
+def _run_on_main_thread(fn) -> None:
+    """Schedule `fn` on the Cocoa main thread, swallowing anything it raises.
+
+    Both halves matter, and getting either wrong kills the whole app:
+
+    * A Python exception escaping a block passed to addOperationWithBlock_ is
+      converted by PyObjC into an OBJ-C exception, which nothing catches ->
+      SIGABRT. Confirmed: Hide Window aborted the process (crash report
+      Aegis-2026-07-23-064101.ips, abort inside PyObjCErr_ToObjCWithGILState),
+      taking monitoring down silently with it. An outer try/except around the
+      *scheduling* call does not help -- the block runs later, on another
+      thread. The try/except has to be INSIDE.
+    * PyObjC types these blocks as `void`, so `fn` MUST return None. Returning
+      a value (e.g. the BOOL from setActivationPolicy_) raises while
+      depythonifying the result -- which is exactly the abort above. Hence the
+      bare `fn()` call with no return, never `lambda: obj.something_()`."""
+    import AppKit
+
+    def _block():
+        try:
+            fn()
+        except Exception:
+            logger.warning("Main-thread block failed", exc_info=True)
+
+    AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(_block)
+
+
+def _set_macos_dock_visible(visible: bool) -> None:
+    """Show/hide the Dock icon + app-switcher entry (Cmd-Tab) by flipping the
+    activation policy. Accessory = menu-bar-only app, which is what "hidden from
+    the desktop" means on macOS -- orderOut_ alone still leaves the Dock icon.
+    The NSStatusItem is unaffected, so the menu bar stays the way back in."""
+    if sys.platform != "darwin":
+        return
+    try:
+        import AppKit
+        app = AppKit.NSApplication.sharedApplication()
+        policy = (AppKit.NSApplicationActivationPolicyRegular if visible
+                  else AppKit.NSApplicationActivationPolicyAccessory)
+        _run_on_main_thread(lambda: _set_policy(app, policy))
+    except Exception:
+        logger.debug("Could not change macOS activation policy", exc_info=True)
+
+
+def _set_policy(app, policy) -> None:
+    app.setActivationPolicy_(policy)   # discard the BOOL: the block must return None
+
+
+def _hide_window(window) -> None:
+    """Hide Aegis from the desktop: window off-screen, no Dock/taskbar entry.
+    Monitoring keeps running -- this only removes the UI, so it is deliberately
+    NOT password-gated (a weaker action than Stop, not an escape from it).
+
+    Every step is individually guarded: hiding must never be able to take the
+    process down, because a dead process is a monitoring outage that looks like
+    a working hide."""
+    try:
+        window.hide()
+    except Exception:
+        logger.warning("Could not hide the window", exc_info=True)
+        return
+    _set_macos_dock_visible(False)
+    logger.info("Window hidden -- monitoring continues; reopen from the menu bar/tray.")
+
+
+def _show_window(window) -> None:
+    _set_macos_dock_visible(True)
+    try:
+        window.show()
+    except Exception:
+        logger.warning("Could not show the window", exc_info=True)
+
+
+class _JsApi:
+    """Exposed to the dashboard page as window.pywebview.api. One method: the
+    Hide Window button in the More menu. `window` is filled in right after
+    create_window() (pywebview needs the api object at construction time)."""
+
+    def __init__(self):
+        self.window = None
+
+    def hide_window(self) -> bool:
+        _hide_window(self.window)
+        return True
+
+
 def _server_already_running(host: str, port: int) -> bool:
     import socket
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -176,12 +262,19 @@ def _add_macos_menubar(window, pipeline, config, on_quit):
 
         class _AegisMenuTarget(AppKit.NSObject):
             def openAegis_(self, _sender):
+                # _show_window restores the Dock icon too, so this also un-does
+                # a previous Hide, not just an un-focused window.
                 try:
+                    _show_window(window)
                     AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-                    if window.native is not None:
-                        window.native.makeKeyAndOrderFront_(None)
                 except Exception:
                     logger.debug("menu-bar Open failed", exc_info=True)
+
+            def hideAegis_(self, _sender):
+                try:
+                    _hide_window(window)
+                except Exception:
+                    logger.debug("menu-bar Hide failed", exc_info=True)
 
             def startMonitoring_(self, _sender):
                 try:
@@ -251,6 +344,7 @@ def _add_macos_menubar(window, pipeline, config, on_quit):
                 menu = AppKit.NSMenu.alloc().init()
                 items = [
                     ("Open Aegis", "openAegis:"),
+                    ("Hide Aegis", "hideAegis:"),
                     (None, None),                       # separator
                     ("Start Monitoring", "startMonitoring:"),
                     ("Stop Monitoring", "stopMonitoring:"),
@@ -401,9 +495,15 @@ def _add_pystray_tray(window, pipeline, on_quit):
         def _open(icon, item):
             try:
                 window.restore()
-                window.show()
+                _show_window(window)
             except Exception:
                 logger.debug("tray Open failed", exc_info=True)
+
+        def _hide(icon, item):
+            try:
+                _hide_window(window)
+            except Exception:
+                logger.debug("tray Hide failed", exc_info=True)
 
         def _start(icon, item):
             try:
@@ -445,6 +545,7 @@ def _add_pystray_tray(window, pipeline, on_quit):
 
         menu = pystray.Menu(
             pystray.MenuItem("Open Aegis", _open, default=True),
+            pystray.MenuItem("Hide Aegis", _hide),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Start Monitoring", _start,
                              enabled=lambda item: not pipeline.running),
@@ -599,11 +700,19 @@ def main():
     # the second monitor pipeline this process just started (still writing
     # to the shared DB) was never stopped either.
     try:
+        # Without this, WKWebView treats a download click as ordinary navigation:
+        # the window LOADS the PDF/CSV in place, back-navigation is disabled by
+        # pywebview, and the dashboard is unreachable until you quit. With it, the
+        # native Save panel opens and the page stays put. Must be set before start().
+        webview.settings['ALLOW_DOWNLOADS'] = True
+        js_api = _JsApi()
         window = webview.create_window(
             WINDOW_TITLE,
             f"http://{HOST}:{PORT}",
             width=1500, height=940, min_size=(1080, 680),
+            js_api=js_api,
         )
+        js_api.window = window                 # backs the page's Hide Window button
         window.events.closing += _on_closing   # password-gate closing the window
         window.events.closed += _on_closed
         # Loud, unambiguous proof at startup that THIS running build has the quit

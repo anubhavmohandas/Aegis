@@ -3,12 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Aegis — Know what happened while you weren't looking</title>
-<meta name="description" content="Aegis continuously monitors your computer, remembers important activity, enriches it with threat intelligence, and explains everything in plain English — so you always know what happened.">
+<title>Aegis — Remember everything. Understand anything.</title>
+<meta name="description" content="Aegis continuously monitors your computer, builds an endpoint memory, and explains what happened in plain English.">
 <link rel="icon" href="assets/aegis.ico">
-<meta property="og:title" content="Aegis — know what happened while you weren't looking">
-<meta property="og:description" content="Continuous monitoring, threat intelligence, and plain-English explanations for Windows, macOS, and Linux. Not antivirus — a personal awareness tool.">
-<meta property="og:image" content="assets/logo.png">
+<meta property="og:title" content="Aegis — Remember everything. Understand anything.">
+<meta property="og:description" content="Aegis continuously monitors your computer, builds an endpoint memory, and explains what happened in plain English.">
+<meta property="og:image" content="media/dashboard-full.jpg">
+<meta name="theme-color" content="#0E1116">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -18,78 +19,81 @@
 *{margin:0;padding:0;box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{
-  background:var(--bg);
-  color:var(--secondary);
-  font-family:var(--font-body);
-  font-size:16.5px;
-  line-height:1.7;
-  overflow-x:hidden;
+  background:var(--bg);color:var(--secondary);
+  font-family:var(--font-body);font-size:17px;line-height:1.7;
+  overflow-x:hidden;-webkit-font-smoothing:antialiased;
 }
 ::selection{background:rgba(60,177,121,.3);color:#fff}
+img,video{display:block;max-width:100%}
+a{color:inherit}
 
-.wrap{max-width:1040px;margin:0 auto;padding:0 32px}
+.wrap{max-width:1140px;margin:0 auto;padding:0 32px}
+.wrap-wide{max-width:1440px;margin:0 auto;padding:0 32px}
 
-/* ================= design language =================
-   ● event marker (severity-colored)
-   ◆ explanation marker (gold — the AI voice)
-   ◉ memory marker (emerald — where events come to rest)
-   one radius: var(--radius). badges: one pill shape.
-   emerald = product · gold = intelligence · red = threat
-==================================================== */
+/* ============ design language ============
+   ● event marker (severity-colored) · ◆ AI voice (gold) · ◉ memory (emerald)
+   one radius · one pill · emerald = product · gold = intelligence · red = threat
+   motion: fade + 8px rise. hover: 2px lift. nothing spins, nothing bounces.
+========================================== */
 
-/* ---- nav (the only glass on the page) ---- */
+/* ---- nav ---- */
 nav{
-  position:sticky;top:0;z-index:50;
-  backdrop-filter:blur(12px);
-  background:rgba(14,17,22,.8);
-  border-bottom:1px solid var(--border-soft);
+  position:fixed;top:0;left:0;right:0;z-index:60;
+  transition:background .3s, border-color .3s, backdrop-filter .3s;
+  border-bottom:1px solid transparent;
 }
-.nav-inner{display:flex;align-items:center;gap:26px;height:64px}
+nav.stuck{
+  background:rgba(14,17,22,.82);backdrop-filter:blur(14px);
+  border-bottom-color:var(--border-soft);
+}
+.nav-inner{display:flex;align-items:center;gap:24px;height:68px;max-width:1440px;margin:0 auto;padding:0 32px}
 .brand{display:flex;align-items:center;gap:10px;text-decoration:none;margin-right:auto}
-.brand img{width:30px;height:30px;border-radius:8px}
-.brand span{
-  font-family:var(--font-display);font-weight:700;font-size:17px;letter-spacing:.18em;
-  color:var(--text);
-}
-.nav-links{display:flex;gap:26px;align-items:center}
-.nav-links a{
-  color:var(--secondary);text-decoration:none;font-size:14px;font-weight:500;
-  transition:color .2s;
-}
-.nav-links a:hover{color:var(--text)}
+.brand img{width:28px;height:28px;border-radius:7px}
+.brand span{font-family:var(--font-display);font-weight:700;font-size:16px;letter-spacing:.2em;color:var(--text)}
+.nav-links{display:flex;gap:24px;align-items:center}
+/* :not(.btn) — otherwise this out-specifies .btn-primary and greys out the button label */
+.nav-links a:not(.btn){color:var(--secondary);text-decoration:none;font-size:14px;font-weight:500;transition:color .2s}
+.nav-links a:not(.btn):hover{color:var(--text)}
+
 .btn{
   display:inline-flex;align-items:center;gap:8px;
-  font-family:var(--font-display);font-weight:600;font-size:14.5px;letter-spacing:.01em;
-  padding:11px 22px;border-radius:var(--radius);text-decoration:none;
-  transition:background .18s, border-color .18s, color .18s;
+  font-family:var(--font-display);font-weight:600;font-size:14.5px;
+  padding:12px 24px;border-radius:var(--radius);text-decoration:none;
+  transition:background .18s, border-color .18s, transform .18s;
 }
+.btn:hover{transform:translateY(-2px)}
 .btn-primary{background:var(--primary);color:#0A130E}
 .btn-primary:hover{background:#46C287}
-.btn-ghost{color:var(--text);border:1px solid var(--border);background:transparent}
-.btn-ghost:hover{border-color:#3A4452;background:rgba(163,175,191,.05)}
-.nav-links .btn{padding:8px 16px;font-size:13.5px}
+.btn-ghost{color:var(--text);border:1px solid var(--border);background:rgba(23,27,34,.5)}
+.btn-ghost:hover{border-color:#3A4452;background:rgba(163,175,191,.07)}
+.nav-links .btn{padding:9px 18px;font-size:13.5px}
 
-/* ---- hero ---- */
-.hero{padding:130px 0 90px;position:relative}
-.hero::after{
-  content:"";position:absolute;top:0;right:-16%;width:760px;height:760px;
-  border-radius:50%;pointer-events:none;
-  background:radial-gradient(circle, rgba(60,177,121,.13), transparent 66%);
-  animation:breathe 9s ease-in-out infinite alternate;
+/* ---- hero: full-bleed video, two lines, two buttons ---- */
+.hero{
+  position:relative;min-height:100svh;
+  display:flex;align-items:center;
+  overflow:hidden;isolation:isolate;
 }
-@keyframes breathe{from{opacity:.5;transform:scale(.92)}to{opacity:1;transform:scale(1.05)}}
-.hero-grid{display:grid;grid-template-columns:1.04fr .96fr;gap:72px;align-items:center}
+.hero-video{
+  position:absolute;inset:0;width:100%;height:100%;
+  object-fit:cover;z-index:-2;
+  animation:drift 34s ease-in-out infinite alternate;
+}
+@keyframes drift{from{transform:scale(1.02)}to{transform:scale(1.09)}}
+.hero-scrim{
+  position:absolute;inset:0;z-index:-1;
+  background:
+    radial-gradient(120% 90% at 28% 45%, rgba(14,17,22,.5), rgba(14,17,22,.84) 72%),
+    linear-gradient(to bottom, rgba(14,17,22,.86) 0%, rgba(14,17,22,.4) 34%, rgba(14,17,22,.76) 74%, var(--bg) 100%);
+}
+.hero-inner{padding:140px 0 120px;max-width:900px}
 .status-pill{
   display:inline-flex;align-items:center;gap:9px;
-  font-family:var(--font-mono);font-size:12px;letter-spacing:.08em;
-  color:var(--primary);
-  border:1px solid rgba(60,177,121,.35);
-  padding:6px 14px;border-radius:999px;margin-bottom:30px;
+  font-family:var(--font-mono);font-size:12px;letter-spacing:.08em;color:var(--primary);
+  border:1px solid rgba(60,177,121,.35);background:rgba(14,17,22,.5);
+  padding:6px 15px;border-radius:999px;margin-bottom:34px;
 }
-.status-pill .dot{
-  width:6px;height:6px;border-radius:50%;background:var(--primary);
-  animation:ping 2.4s infinite;
-}
+.status-pill .dot{width:6px;height:6px;border-radius:50%;background:var(--primary);animation:ping 2.4s infinite}
 @keyframes ping{
   0%{box-shadow:0 0 0 0 rgba(60,177,121,.5)}
   70%{box-shadow:0 0 0 8px rgba(60,177,121,0)}
@@ -97,1317 +101,621 @@ nav{
 }
 h1{
   font-family:var(--font-display);font-weight:700;
-  font-size:clamp(38px,4.6vw,56px);
-  line-height:1.1;letter-spacing:-.015em;
-  color:var(--text);
-  margin-bottom:24px;
+  font-size:clamp(44px,7vw,86px);line-height:1.03;letter-spacing:-.03em;
+  color:var(--text);margin-bottom:28px;
 }
-h1 .em{color:var(--primary)}
-.hero p.lede{font-size:18px;max-width:30em;line-height:1.75;margin-bottom:22px}
-.hero .different{
-  font-size:15px;color:var(--secondary);max-width:32em;line-height:1.75;margin-bottom:36px;
+h1 .two{color:var(--primary);display:block}
+.hero p.lede{
+  font-size:clamp(17px,1.5vw,20px);max-width:34em;line-height:1.7;
+  color:#C3CDD9;margin-bottom:44px;
 }
-.hero .different b{color:var(--text);font-weight:600}
 .cta-row{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
-.trust-strip{
-  margin-top:40px;display:flex;gap:10px 26px;flex-wrap:wrap;
-  font-family:var(--font-mono);font-size:12px;letter-spacing:.06em;color:var(--dim);
+.scroll-cue{
+  position:absolute;bottom:34px;left:50%;transform:translateX(-50%);
+  font-family:var(--font-mono);font-size:10.5px;letter-spacing:.24em;color:var(--dim);
+  display:flex;flex-direction:column;align-items:center;gap:10px;
 }
-.trust-strip span{display:flex;align-items:center;gap:8px}
-.trust-strip i{color:var(--primary);font-style:normal;font-size:9px}
+.scroll-cue i{display:block;width:1px;height:34px;background:linear-gradient(var(--dim),transparent);animation:cue 2.6s ease-in-out infinite}
+@keyframes cue{0%,100%{opacity:.25}50%{opacity:.9}}
 
-/* ---- memory panel (hero demo) ---- */
-.panel{
-  background:var(--surface);
-  border:1px solid var(--border);
-  border-radius:var(--radius);
-  overflow:hidden;
-  font-family:var(--font-mono);font-size:12.5px;
-  box-shadow:0 30px 70px -35px rgba(0,0,0,.8);
-}
-.panel-bar{
-  display:flex;align-items:center;gap:10px;
-  padding:12px 18px;border-bottom:1px solid var(--border-soft);
-  background:var(--surface-2);
-}
-.panel-bar .t{
-  font-size:11px;letter-spacing:.14em;color:var(--dim);
-  display:flex;align-items:center;gap:8px;
-}
-.panel-bar .t i{color:var(--primary);font-style:normal;font-size:9px}
-.panel-bar .t i.g,.stop .n i.g{font-size:12px}
-.panel-bar .demo-btn{
-  margin-left:auto;
-  font-family:var(--font-mono);font-size:11.5px;letter-spacing:.04em;
-  color:#0A130E;background:var(--primary);
-  border:none;border-radius:999px;padding:6px 14px;cursor:pointer;
-  transition:background .18s, opacity .18s;
-}
-.panel-bar .demo-btn:hover{background:#46C287}
-.panel-bar .demo-btn:disabled{opacity:.45;cursor:default}
-.mem{padding:6px 0 12px;min-height:328px}
-.mem .mk{animation:memPulse 7s infinite}
-.mem-evt:nth-child(even) .mk{animation-delay:3.5s}
-@keyframes memPulse{0%,88%,100%{text-shadow:0 0 0 rgba(0,0,0,0)}93%{text-shadow:0 0 10px currentColor}}
-.mem-day{
-  padding:10px 18px 4px;font-size:10.5px;letter-spacing:.16em;color:var(--dim);
-}
-.mem-evt{
-  display:grid;grid-template-columns:16px 52px 1fr;gap:12px;align-items:baseline;
-  padding:11px 18px;
-}
-.mem-evt + .mem-evt{border-top:1px solid var(--border-soft)}
-.mem-evt .mk{font-size:9px;line-height:1;transform:translateY(-1px)}
-.mem-evt .mk.low{color:var(--sev-low)}
-.mem-evt .mk.med{color:var(--sev-med)}
-.mem-evt .mk.high{color:var(--sev-high)}
-.mem-evt .mk.crit{color:var(--sev-crit)}
-.mem-evt .mk.ses{color:var(--primary)}
-.mem-evt .tm{color:var(--dim);font-size:11px}
-.mem-evt .what{color:#D6DEE8;line-height:1.6}
-.badge{
-  display:inline-block;font-size:10px;letter-spacing:.1em;
-  padding:2.5px 9px;border-radius:999px;margin-left:8px;vertical-align:1px;
-}
-.badge.threat{color:#FF9B9B;background:rgba(214,69,69,.12);border:1px solid rgba(214,69,69,.4)}
-.badge.intel{color:#E8C77E;background:rgba(214,169,79,.1);border:1px solid rgba(214,169,79,.35)}
-.badge.ok{color:#7FD6A4;background:rgba(60,177,121,.1);border:1px solid rgba(60,177,121,.35)}
-.badge.med{color:#EFC97E;background:rgba(232,176,75,.1);border:1px solid rgba(232,176,75,.35)}
-.badge.high{color:#E99A6C;background:rgba(217,119,66,.12);border:1px solid rgba(217,119,66,.4)}
-.mem-evt .ai{
-  display:block;color:var(--secondary);margin-top:7px;font-size:11.5px;line-height:1.65;
-  border-left:2px solid var(--accent);padding-left:11px;
-  font-family:var(--font-body);
-}
-.mem-evt .ai::before{content:"◆ ";color:var(--accent);font-size:9px}
-html.js .mem-evt.enter{opacity:0;transform:translateY(6px);animation:evtIn .45s ease forwards}
-@keyframes evtIn{to{opacity:1;transform:none}}
-.panel-foot{
-  padding:11px 18px;border-top:1px solid var(--border-soft);
-  color:var(--dim);font-size:11px;letter-spacing:.04em;
-  display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;
-}
-
-/* ---- sections: linear-style whitespace ---- */
-section{padding:150px 0}
+/* ---- sections: let it breathe ---- */
+section{padding:clamp(110px,15vh,190px) 0}
+section[id]{scroll-margin-top:88px}   /* the nav is fixed — don't let anchors land under it */
 .sec-tag{
-  font-family:var(--font-mono);font-size:12px;letter-spacing:.22em;color:var(--primary);
-  margin-bottom:20px;
+  font-family:var(--font-mono);font-size:11.5px;letter-spacing:.24em;color:var(--primary);
+  margin-bottom:22px;
 }
 .sec-tag.gold{color:var(--accent)}
 h2{
   font-family:var(--font-display);font-weight:700;
-  font-size:clamp(28px,3.2vw,40px);color:var(--text);
-  line-height:1.15;letter-spacing:-.01em;margin-bottom:22px;max-width:22em;
+  font-size:clamp(32px,4.6vw,58px);color:var(--text);
+  line-height:1.08;letter-spacing:-.025em;max-width:16em;
 }
-.sec-lede{max-width:38em;font-size:17px;line-height:1.8}
+h2 .dim{color:var(--dim)}
+h2 .em{color:var(--primary)}
+.one-line{font-size:clamp(17px,1.4vw,19px);max-width:32em;line-height:1.7;margin-top:24px}
 .center{text-align:center}
-.center h2,.center .sec-lede{margin-inline:auto}
+.center h2,.center .one-line{margin-inline:auto}
 
-/* ---- the rail: the recurring timeline motif ---- */
-.rail{max-width:640px;margin:64px auto 0;position:relative;padding-left:36px}
-.rail::before{
-  content:"";position:absolute;left:9px;top:10px;bottom:10px;width:1px;
-  background:var(--border);
+/* ---- the frame every video/screenshot sits in ---- */
+.frame{
+  position:relative;border-radius:14px;overflow:hidden;
+  border:1px solid var(--border);background:var(--surface-2);
+  box-shadow:0 50px 110px -50px rgba(0,0,0,.95), 0 0 0 1px rgba(255,255,255,.02) inset;
 }
-.rail-item{position:relative;padding:0 0 42px}
-.rail-item:last-child{padding-bottom:0}
-.rail-item::before{
-  content:"●";position:absolute;left:-32px;top:5px;font-size:10px;
-  color:var(--primary);background:var(--bg);line-height:1;padding:4px 0;
+.frame video,.frame img{width:100%;height:auto;display:block}
+.frame::after{
+  content:"";position:absolute;inset:0;pointer-events:none;border-radius:14px;
+  box-shadow:0 0 90px -20px rgba(60,177,121,.16) inset;
 }
-.rail-item.bad::before{color:var(--sev-crit)}
-.rail-item.warn::before{color:var(--sev-med)}
-.rail-item.mute::before{color:var(--sev-low)}
-.rail-item .when{
-  font-family:var(--font-mono);font-size:11.5px;letter-spacing:.1em;color:var(--dim);
-  margin-bottom:6px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;
-}
-.rail-item h4,.rail-item h3{
-  font-family:var(--font-display);font-weight:600;font-size:18px;color:var(--text);
-  margin-bottom:7px;letter-spacing:-.005em;
-}
-.rail-item p{font-size:14.5px;line-height:1.75;max-width:34em}
-.rail-item .mono{
-  font-family:var(--font-mono);font-size:12.5px;color:#D6DEE8;
-  background:var(--surface);border:1px solid var(--border-soft);
-  border-radius:6px;padding:1.5px 7px;
-}
-.rail-item .ai-note{
-  margin-top:10px;font-size:14px;line-height:1.7;color:var(--secondary);
-  border-left:2px solid var(--accent);padding-left:13px;max-width:34em;
-}
-.rail-item .ai-note::before{content:"◆ ";color:var(--accent);font-size:10px}
+.frame.tall video{aspect-ratio:2300/1230;object-fit:cover}
 
-/* ---- problem ---- */
-.problem .beats{max-width:420px}
-.problem .ask{
-  margin-top:70px;
+/* full-width cinematic beat */
+.beat{margin-top:clamp(50px,7vh,86px)}
+.beat-wide{margin-top:clamp(50px,7vh,86px)}
+
+/* ---- memory: video left, timeline right ---- */
+.split{
+  display:grid;grid-template-columns:1.15fr .85fr;gap:clamp(40px,5vw,76px);
+  align-items:center;margin-top:clamp(50px,7vh,80px);
+}
+.tl{position:relative;padding-left:34px}
+.tl::before{content:"";position:absolute;left:5px;top:12px;bottom:12px;width:1px;background:var(--border)}
+.tl-row{position:relative;padding:0 0 30px}
+.tl-row:last-child{padding-bottom:0}
+.tl-row::before{
+  content:"●";position:absolute;left:-34px;top:1px;font-size:9px;line-height:1.9;
+  color:var(--primary);background:var(--bg);padding:2px 0;width:12px;text-align:center;
+}
+.tl-row.warn::before{color:var(--sev-med)}
+.tl-row.bad::before{color:var(--sev-crit)}
+.tl-row.mem::before{content:"◉";font-size:11px;color:var(--primary)}
+.tl-row .tm{font-family:var(--font-mono);font-size:11.5px;letter-spacing:.1em;color:var(--dim);display:block;margin-bottom:4px}
+.tl-row .what{display:block;font-family:var(--font-display);font-weight:600;font-size:16.5px;color:var(--text);letter-spacing:-.005em}
+.tl-row .note{display:block;font-size:14px;color:var(--secondary);margin-top:4px;line-height:1.6}
+.tl-row .note.ai{border-left:2px solid var(--accent);padding-left:11px;margin-top:8px}
+.tl-row .note.ai::before{content:"◆ ";color:var(--accent);font-size:9px}
+
+/* ---- pull quote after a video ---- */
+.pull{
+  margin-top:clamp(44px,6vh,72px);text-align:center;
   font-family:var(--font-display);font-weight:700;
-  font-size:clamp(30px,4vw,44px);letter-spacing:-.01em;color:var(--text);
-  text-align:center;
+  font-size:clamp(22px,2.6vw,32px);line-height:1.35;letter-spacing:-.015em;color:var(--text);
 }
-.problem .answer{
-  margin-top:14px;text-align:center;
-  font-family:var(--font-mono);font-size:15px;letter-spacing:.18em;
-  color:var(--primary);
-}
+.pull .q{color:var(--accent)}
 
-/* ---- why exists ---- */
-.why blockquote{
-  font-size:clamp(19px,2.2vw,24px);line-height:1.9;color:#D6DEE8;
-  max-width:34em;border:none;font-weight:400;
-}
-.why blockquote b{color:var(--text);font-weight:600}
-.why .mark{color:var(--accent);font-size:14px;display:block;margin-bottom:26px}
-
-/* ---- how it works: full-width stops ---- */
-.stops{margin-top:70px;border-top:1px solid var(--border-soft)}
-.stop{
-  display:grid;grid-template-columns:170px 1fr 1fr;gap:40px;align-items:baseline;
-  padding:36px 0;border-bottom:1px solid var(--border-soft);
-}
-.stop .n{
-  font-family:var(--font-mono);font-size:12px;letter-spacing:.14em;color:var(--dim);
-  display:flex;gap:14px;align-items:baseline;
-}
-.stop .n i{color:var(--primary);font-style:normal;font-size:9px}
-.stop h3{
-  font-family:var(--font-display);font-weight:600;font-size:21px;color:var(--text);
-  letter-spacing:-.005em;
-}
-.stop .d p{font-size:15px;line-height:1.75}
-.stop .d .note{
-  margin-top:8px;font-family:var(--font-mono);font-size:11.5px;color:var(--dim);
-  letter-spacing:.05em;line-height:1.9;
-}
-.stop .d .note em{color:var(--accent);font-style:normal}
-
-/* ---- memory / dashboard ---- */
-.shots{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:70px}
-.shot .body{padding:16px 20px 18px}
-.shot .kv{display:flex;justify-content:space-between;gap:14px;padding:8px 0;color:#D6DEE8}
-.shot .kv + .kv{border-top:1px solid var(--border-soft)}
-.shot .kv .k{color:var(--dim)}
-.shot .vt-bar{
-  height:7px;border-radius:999px;margin:14px 0 6px;overflow:hidden;
-  background:rgba(127,142,163,.15);display:flex;
-}
-.shot .vt-bar i{display:block;background:var(--danger);width:63%;border-radius:999px}
-.shot .mitre{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-.shot p.summary{
-  color:var(--secondary);font-size:12.5px;line-height:1.7;margin-top:14px;
-  border-left:2px solid var(--accent);padding-left:11px;font-family:var(--font-body);
-}
-.shot p.summary::before{content:"◆ ";color:var(--accent);font-size:10px}
-.shots-note{
-  margin-top:26px;font-family:var(--font-mono);font-size:12px;color:var(--dim);
-  letter-spacing:.04em;
-}
-
-/* ---- scenario verdict ---- */
-.verdict{
-  max-width:640px;margin:26px auto 0;padding:28px 32px;
-  border:1px solid rgba(214,169,79,.3);border-radius:var(--radius);
-  background:rgba(214,169,79,.04);
-}
-.verdict .k{
-  font-family:var(--font-mono);font-size:11px;letter-spacing:.16em;color:var(--accent);
-  display:block;margin-bottom:12px;
-}
-.verdict .k::before{content:"◆ "}
-.verdict p{font-size:15px;line-height:1.8;color:#D6DEE8}
-.closer{
-  text-align:center;margin-top:64px;
-  font-family:var(--font-display);font-weight:700;
-  font-size:clamp(21px,2.4vw,27px);letter-spacing:-.01em;color:var(--text);line-height:1.4;
-}
+/* ---- the big screenshot: no text, just the product ---- */
+.shot-section{padding:clamp(60px,9vh,120px) 0}
 
 /* ---- comparison ---- */
-.compare{margin-top:64px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
-.compare table{width:100%;border-collapse:collapse}
-.compare th{
-  font-family:var(--font-display);font-weight:600;font-size:15.5px;
-  padding:20px 32px;text-align:left;border-bottom:1px solid var(--border);
-  background:var(--surface-2);
+.chips{display:flex;gap:9px;flex-wrap:wrap;margin-top:44px}
+.chip{
+  font-family:var(--font-mono);font-size:11.5px;letter-spacing:.1em;
+  color:var(--secondary);background:transparent;
+  border:1px solid var(--border);border-radius:999px;padding:8px 16px;cursor:pointer;
+  transition:border-color .18s, color .18s, background .18s;
 }
-.compare th:first-child{color:var(--dim)}
-.compare th:last-child{color:var(--primary);border-left:1px solid var(--border-soft)}
-.compare td{
-  padding:17px 32px;font-size:14.5px;border-bottom:1px solid var(--border-soft);
-  color:var(--dim);
-}
-.compare tr:last-child td{border-bottom:none}
-.compare td:last-child{color:#D6DEE8;border-left:1px solid var(--border-soft);background:rgba(60,177,121,.025)}
-/* three-column variant: tool · what it does · what aegis does */
-.compare.trio{overflow-x:auto}
-.compare.trio th:nth-child(2),.compare.trio td:nth-child(2){border-left:1px solid var(--border-soft)}
-.compare.trio td:first-child{
-  color:var(--text);font-family:var(--font-display);font-weight:600;white-space:nowrap;
-}
-.compare.trio td:first-child em{
-  display:block;font-family:var(--font-mono);font-style:normal;font-weight:400;
-  font-size:11px;letter-spacing:.04em;color:var(--dim);margin-top:4px;
-}
-.not-list{
-  display:grid;grid-template-columns:repeat(3,1fr);gap:0 48px;margin-top:56px;
-}
-.not-list div{border-top:1px solid var(--border-soft);padding:24px 0 6px}
-.not-list b{
-  display:block;font-family:var(--font-display);font-weight:600;font-size:15.5px;
-  color:var(--text);margin-bottom:7px;
-}
-.not-list p{font-size:14px;line-height:1.75}
+.chip:hover{color:var(--text);border-color:#3A4452}
+.chip[aria-pressed="true"]{color:#0A130E;background:var(--primary);border-color:var(--primary)}
+.chip:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 
-/* ---- features: stories, not cards ---- */
-.feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0 48px;margin-top:64px}
-.feat{border-top:1px solid var(--border-soft);padding:30px 0 34px}
-.feat .mk{font-size:10px;color:var(--primary);display:block;margin-bottom:14px}
-.feat.gold .mk{color:var(--accent)}
-.feat h3{
-  font-family:var(--font-display);font-weight:600;font-size:17.5px;
-  color:var(--text);margin-bottom:9px;letter-spacing:-.005em;
-}
-.feat p{font-size:14px;line-height:1.75}
-
-/* ---- architecture ---- */
-.arch{max-width:460px;margin:70px auto 0;position:relative;padding-left:36px}
-.arch::before{
-  content:"";position:absolute;left:9px;top:14px;bottom:14px;width:1px;background:var(--border);
-}
-.arch .node{position:relative;padding:0 0 40px}
-.arch .node:last-child{padding-bottom:0}
-.arch .node::before{
-  content:"●";position:absolute;left:-32px;top:6px;font-size:10px;
-  color:var(--primary);background:var(--bg);line-height:1;padding:4px 0;
-}
-.arch .node.gold::before{color:var(--accent)}
-.arch .node h4{
-  font-family:var(--font-display);font-weight:600;font-size:18px;color:var(--text);
-  margin-bottom:4px;letter-spacing:-.005em;
-}
-.arch .node p{font-family:var(--font-mono);font-size:12px;color:var(--dim);letter-spacing:.05em;line-height:1.9}
-.arch .node.mem::before{content:"◉";font-size:13px;top:4px}
-html.js .arch .node{opacity:0;transform:translateY(14px);transition:opacity .55s ease,transform .55s ease}
-html.js .arch.in .node{opacity:1;transform:none}
-html.js .arch .node:nth-child(2){transition-delay:.12s}
-html.js .arch .node:nth-child(3){transition-delay:.24s}
-html.js .arch .node:nth-child(4){transition-delay:.36s}
-html.js .arch .node:nth-child(5){transition-delay:.48s}
-html.js .arch .node:nth-child(6){transition-delay:.6s}
-
-/* ---- meet the engine ---- */
-#engine .doc h4{font-family:var(--font-mono);font-weight:500;font-size:14px;letter-spacing:.01em}
-
-/* ---- download status ---- */
-.status-box{
-  margin-top:34px;border:1px solid var(--border);border-radius:var(--radius);
-  background:var(--surface-2);padding:4px 20px;
+.vs{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:30px}
+.panel{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  overflow:hidden;display:flex;flex-direction:column;
   font-family:var(--font-mono);font-size:12.5px;
 }
-.status-box .kv{display:flex;justify-content:space-between;gap:14px;padding:10px 0;color:#D6DEE8}
-.status-box .kv + .kv{border-top:1px solid var(--border-soft)}
-.status-box .k{color:var(--dim)}
+.panel-bar{
+  display:flex;align-items:center;gap:10px;padding:13px 18px;
+  border-bottom:1px solid var(--border-soft);background:var(--surface-2);
+}
+.panel-bar .t{font-size:10.5px;letter-spacing:.16em;color:var(--dim);display:flex;align-items:center;gap:8px}
+.panel-bar .t i{font-style:normal;font-size:9px}
+.panel-bar .t i.r{color:var(--sev-low)}
+.panel-bar .t i.g{color:var(--primary);font-size:11px}
+.raw{
+  padding:20px 18px;color:#B8C2CE;line-height:1.85;white-space:pre-wrap;
+  flex:1;min-height:250px;font-size:12px;
+}
+.raw .k{color:var(--dim)}
+.raw .nil{color:var(--sev-low)}
+.raw .warn{color:var(--warning)}
+html.js .raw.swap{animation:swapIn .3s ease}
+@keyframes swapIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.verdict{
+  padding:17px 18px;border-top:1px solid var(--border-soft);
+  font-family:var(--font-body);font-size:14px;line-height:1.7;color:var(--secondary);
+}
+.verdict b{color:var(--text);font-weight:600}
+.mem-list{padding:4px 0;flex:1}
+.mem-evt{display:grid;grid-template-columns:14px 46px 1fr;gap:11px;align-items:baseline;padding:12px 18px}
+.mem-evt + .mem-evt{border-top:1px solid var(--border-soft)}
+.mem-evt .mk{font-size:9px;line-height:1;transform:translateY(-1px)}
+.mem-evt .mk.med{color:var(--sev-med)}
+.mem-evt .mk.high{color:var(--sev-high)}
+.mem-evt .mk.ses{color:var(--primary);font-size:11px}
+.mem-evt .tm{color:var(--dim);font-size:11px}
+.mem-evt .what{color:#D6DEE8;line-height:1.6}
+.badge{display:inline-block;font-size:9.5px;letter-spacing:.1em;padding:2.5px 9px;border-radius:999px;margin-left:8px;vertical-align:1px}
+.badge.threat{color:#FF9B9B;background:rgba(214,69,69,.12);border:1px solid rgba(214,69,69,.4)}
+.badge.med{color:#EFC97E;background:rgba(232,176,75,.1);border:1px solid rgba(232,176,75,.35)}
+.mem-evt .ai{
+  display:block;color:var(--secondary);margin-top:7px;font-size:12px;line-height:1.65;
+  border-left:2px solid var(--accent);padding-left:11px;font-family:var(--font-body);
+}
+.mem-evt .ai::before{content:"◆ ";color:var(--accent);font-size:9px}
+.trust-strip{
+  margin-top:34px;display:flex;gap:10px 28px;flex-wrap:wrap;
+  font-family:var(--font-mono);font-size:11.5px;letter-spacing:.08em;color:var(--dim);
+}
+.trust-strip span{display:flex;align-items:center;gap:8px}
+.trust-strip i{color:var(--primary);font-style:normal;font-size:9px}
 
-/* ---- keyboard shortcuts overlay ---- */
-.kbd-overlay{
-  position:fixed;inset:0;z-index:100;
-  display:flex;align-items:center;justify-content:center;
-  background:rgba(8,11,15,.72);backdrop-filter:blur(4px);
+/* ---- features: six, one sentence each ---- */
+.grid6{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:clamp(50px,7vh,76px)}
+.f{
+  border:1px solid var(--border-soft);border-radius:var(--radius);
+  background:var(--surface-2);padding:30px 28px 32px;
+  transition:transform .2s, border-color .2s, background .2s;
 }
-.kbd-overlay[hidden]{display:none}
-.kbd-card{
-  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-  padding:26px 32px;min-width:280px;
-  font-family:var(--font-mono);font-size:13px;
-  box-shadow:0 30px 70px -35px rgba(0,0,0,.8);
-}
-.kbd-card .kt{font-size:11px;letter-spacing:.18em;color:var(--dim);margin-bottom:14px}
-.kbd-row{display:flex;justify-content:space-between;gap:24px;padding:8px 0;color:var(--secondary)}
-.kbd-row + .kbd-row{border-top:1px solid var(--border-soft)}
-.kbd-row kbd{
-  font-family:inherit;color:var(--text);background:var(--surface-2);
-  border:1px solid var(--border);border-radius:6px;padding:1px 8px;font-size:12px;
-}
+.f:hover{transform:translateY(-2px);border-color:var(--border);background:var(--surface)}
+.f .ico{font-size:22px;line-height:1;display:block;margin-bottom:18px}
+.f h3{font-family:var(--font-display);font-weight:600;font-size:17.5px;color:var(--text);margin-bottom:9px;letter-spacing:-.005em}
+.f p{font-size:14.5px;line-height:1.65}
 
-
-/* ---- privacy ---- */
-.priv-list{display:grid;grid-template-columns:repeat(3,1fr);gap:0 48px;margin-top:64px}
-.priv-item{border-top:1px solid var(--border-soft);padding:28px 0 34px}
-.priv-item .x{
-  font-family:var(--font-mono);font-size:11px;color:var(--primary);letter-spacing:.14em;
-  margin-bottom:12px;display:block;
+/* ---- privacy: one statement ---- */
+.privacy{text-align:center}
+.privacy .big{
+  font-family:var(--font-display);font-weight:700;
+  font-size:clamp(28px,4.2vw,52px);line-height:1.2;letter-spacing:-.025em;color:var(--text);
+  max-width:16em;margin:0 auto;
 }
-.priv-item h4{font-family:var(--font-display);font-weight:600;font-size:16.5px;color:var(--text);margin-bottom:8px}
-.priv-item p{font-size:14px;line-height:1.75}
-
-/* ---- stack ---- */
-.stack{display:flex;flex-wrap:wrap;gap:12px;margin-top:56px}
-.stack span{
-  font-family:var(--font-mono);font-size:13px;letter-spacing:.03em;color:#D6DEE8;
-  border:1px solid var(--border);border-radius:999px;padding:8px 18px;
-  transition:border-color .2s;
+.privacy .big em{font-style:normal;color:var(--primary)}
+.privacy .fine{
+  margin:38px auto 0;max-width:44em;font-size:14.5px;line-height:1.8;color:var(--dim);
 }
-.stack span:hover{border-color:#3A4452}
+.privacy .fine b{color:var(--secondary);font-weight:500}
 
-/* ---- roadmap ---- */
-.road{display:grid;grid-template-columns:1fr 1fr;gap:64px;margin-top:64px}
-.road-col .ver{
-  font-family:var(--font-mono);font-size:12px;letter-spacing:.16em;margin-bottom:10px;display:block;
-}
-.road-col.now .ver{color:var(--primary)}
-.road-col.next .ver{color:var(--accent)}
-.road-col h3{font-family:var(--font-display);font-weight:600;font-size:21px;color:var(--text);margin-bottom:22px;letter-spacing:-.005em}
-.road-col li{
-  list-style:none;font-size:15px;line-height:1.7;padding:12px 0 12px 28px;position:relative;
-  border-top:1px solid var(--border-soft);
-}
-.road-col.now li::before{content:"●";position:absolute;left:0;top:16px;color:var(--primary);font-size:9px}
-.road-col.next li::before{content:"●";position:absolute;left:0;top:16px;color:var(--dim);font-size:9px}
-
-/* ---- docs ---- */
-.docs-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:0 40px;margin-top:64px}
-.doc{
-  display:block;text-decoration:none;border-top:1px solid var(--border-soft);
-  padding:28px 0 30px;transition:border-color .25s;
-}
-.doc:hover{border-top-color:var(--primary)}
-.doc .k{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.16em;color:var(--primary);display:block;margin-bottom:12px}
-.doc h4{font-family:var(--font-display);font-weight:600;font-size:16.5px;color:var(--text);margin-bottom:8px}
-.doc p{font-size:13.5px;color:var(--secondary);line-height:1.7}
-
-/* ---- faq ---- */
-.faq{max-width:720px;margin:56px auto 0}
-.faq details{border-top:1px solid var(--border-soft)}
-.faq details:last-child{border-bottom:1px solid var(--border-soft)}
-.faq summary{
-  cursor:pointer;list-style:none;
-  font-family:var(--font-display);font-weight:600;font-size:16.5px;color:var(--text);
-  padding:22px 4px;display:flex;justify-content:space-between;gap:16px;align-items:center;
-}
-.faq summary::-webkit-details-marker{display:none}
-.faq summary::after{content:"+";font-family:var(--font-mono);color:var(--primary);font-size:18px;flex-shrink:0}
-.faq details[open] summary::after{content:"−"}
-.faq .a{padding:0 4px 26px;font-size:14.5px;line-height:1.8}
-.faq .a b{color:var(--text);font-weight:600}
-
-/* ---- download ---- */
-.qs-grid{display:grid;grid-template-columns:.9fr 1.1fr;gap:72px;align-items:start;margin-top:30px}
-.qs-grid>*{min-width:0}
+/* ---- open source ---- */
+.os-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border-soft);
+  border:1px solid var(--border-soft);border-radius:var(--radius);overflow:hidden;margin-top:clamp(46px,6vh,72px)}
+.os-cell{background:var(--surface-2);padding:26px 24px}
+.os-cell .k{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.18em;color:var(--dim);display:block;margin-bottom:10px}
+.os-cell .v{font-family:var(--font-display);font-weight:700;font-size:23px;color:var(--text);letter-spacing:-.01em}
+.os-cell .v.em{color:var(--primary)}
 .codebox{
-  background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;
+  margin-top:22px;background:var(--surface-2);border:1px solid var(--border-soft);
+  border-radius:var(--radius);overflow:hidden;
 }
-.codebox .cb-bar{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:10px 16px;border-bottom:1px solid var(--border-soft);
-  font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;color:var(--dim);
+.cb-bar{
+  display:flex;justify-content:space-between;padding:11px 18px;
+  border-bottom:1px solid var(--border-soft);
+  font-family:var(--font-mono);font-size:10.5px;letter-spacing:.16em;color:var(--dim);
 }
 .codebox pre{
-  padding:20px 22px;overflow-x:auto;
-  font-family:var(--font-mono);font-size:13px;line-height:1.9;color:#C8D2DE;
+  padding:20px 18px;font-family:var(--font-mono);font-size:13px;line-height:2;
+  color:#D6DEE8;overflow-x:auto;
 }
-.codebox .c{color:var(--dim)}
 .codebox .p{color:var(--primary)}
-.qs-notes{margin-top:32px;display:grid;gap:16px}
-.qs-notes li{
-  list-style:none;font-size:14.5px;line-height:1.75;padding-left:22px;position:relative;
-}
-.qs-notes li::before{
-  content:"●";position:absolute;left:0;top:2px;color:var(--primary);font-size:9px;
-}
-.qs-notes b{color:var(--text);font-weight:600}
+.codebox .c{color:var(--dim)}
 
 /* ---- creator ---- */
-.creator{padding-top:0}
 .creator .card{
-  border:1px solid var(--border);border-radius:var(--radius);
-  padding:52px 56px;display:grid;grid-template-columns:auto 1fr auto;gap:38px;align-items:center;
-  background:var(--surface-2);
+  display:grid;grid-template-columns:auto 1fr auto;gap:30px;align-items:center;
+  border:1px solid var(--border-soft);border-radius:var(--radius);
+  background:var(--surface-2);padding:34px 36px;
 }
-.creator .sigil{
-  width:70px;height:70px;border-radius:var(--radius);
-  border:1px solid var(--border);background:var(--surface);
-  display:flex;align-items:center;justify-content:center;
-}
-.creator .sigil img{width:48px;height:48px}
-.creator .who .tag{
-  font-family:var(--font-mono);font-size:11px;letter-spacing:.22em;color:var(--primary);
-  display:block;margin-bottom:8px;
-}
-.creator .who h3{
-  font-family:var(--font-display);font-weight:700;font-size:22px;color:var(--text);
-  letter-spacing:-.005em;margin-bottom:10px;
-}
-.creator .who p{font-size:14.5px;max-width:42em;line-height:1.8}
-.creator .who p b{color:var(--text);font-weight:600}
+.creator .sigil img{width:52px;height:52px;border-radius:12px}
+.creator .tag{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.2em;color:var(--primary)}
+.creator h3{font-family:var(--font-display);font-weight:700;font-size:21px;color:var(--text);margin:8px 0 8px;letter-spacing:-.01em}
+.creator p{font-size:14.5px;line-height:1.7;max-width:46em}
+.creator p b{color:var(--text);font-weight:600}
 .creator .links{display:flex;flex-direction:column;gap:10px}
-.creator .links .btn{justify-content:center;white-space:nowrap}
-@media (max-width:820px){
-  .creator .card{grid-template-columns:1fr;gap:24px;padding:36px 28px}
-  .creator .links{flex-direction:row;flex-wrap:wrap}
-}
 
 /* ---- footer ---- */
-footer{border-top:1px solid var(--border-soft);padding:52px 0 60px}
-.foot-inner{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
-.foot-inner img{width:28px;height:28px;border-radius:7px}
-.foot-inner .fbrand{font-family:var(--font-display);font-weight:700;letter-spacing:.18em;color:var(--text);font-size:14px}
-.foot-inner .sep{color:var(--border)}
-.foot-inner a{color:var(--dim);text-decoration:none;font-family:var(--font-mono);font-size:12.5px;letter-spacing:.04em}
+footer{border-top:1px solid var(--border-soft);padding:52px 0 64px}
+.foot-inner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:14px}
+.foot-inner img{width:22px;height:22px;border-radius:6px}
+.fbrand{font-family:var(--font-display);font-weight:700;letter-spacing:.2em;color:var(--text);font-size:14px}
+.foot-inner a{color:var(--secondary);text-decoration:none;transition:color .2s}
 .foot-inner a:hover{color:var(--text)}
+.sep{color:#39424F}
 .foot-disclaimer{
-  margin-top:24px;font-family:var(--font-mono);font-size:11.5px;color:#4A5462;
-  letter-spacing:.03em;line-height:1.9;max-width:62em;
+  margin-top:26px;font-family:var(--font-mono);font-size:10.5px;line-height:2;
+  letter-spacing:.06em;color:var(--dim);max-width:70em;   /* legal text — must stay readable */
 }
 
-/* reveal on scroll (only when JS is available) */
-html.js .reveal{opacity:0;transform:translateY(24px);transition:opacity .7s ease,transform .7s ease}
-html.js .reveal.in{opacity:1;transform:none}
+/* ---- motion: fade + rise, nothing else ---- */
+html.js .reveal{opacity:0;transform:translateY(8px)}
+html.js .reveal.in{opacity:1;transform:none;transition:opacity .7s cubic-bezier(.2,.6,.2,1), transform .7s cubic-bezier(.2,.6,.2,1)}
 
-@media (prefers-reduced-motion:reduce){
-  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
-  .reveal,.mem-evt.enter,html.js .arch .node{opacity:1;transform:none}
-  html{scroll-behavior:auto}
-}
-
+/* ---- responsive ---- */
 @media (max-width:960px){
-  .hero{padding:90px 0 70px}
-  .hero-grid{grid-template-columns:1fr;gap:60px}
-  section{padding:110px 0}
-  .stop{grid-template-columns:1fr;gap:10px;padding:30px 0}
-  .shots{grid-template-columns:1fr}
-  .feat-grid,.priv-list,.not-list{grid-template-columns:1fr 1fr;gap:0 36px}
-  .road{grid-template-columns:1fr;gap:48px}
-  .docs-grid{grid-template-columns:1fr 1fr}
-  .qs-grid{grid-template-columns:1fr;gap:44px}
-  .nav-links a:not(.btn){display:none}
+  .split{grid-template-columns:1fr;gap:40px}
+  .vs{grid-template-columns:1fr}
+  .grid6{grid-template-columns:repeat(2,1fr)}
+  .os-grid{grid-template-columns:repeat(2,1fr)}
+  .creator .card{grid-template-columns:1fr;gap:22px}
+  .creator .links{flex-direction:row}
 }
-@media (max-width:560px){
-  .feat-grid,.priv-list,.docs-grid,.not-list{grid-template-columns:1fr}
-  .compare th,.compare td{padding:14px 18px;font-size:13px}
-  .compare.trio table{min-width:620px}
-  section{padding:88px 0}
-  .mem-evt{grid-template-columns:14px 46px 1fr;gap:9px;padding:11px 14px}
+@media (max-width:620px){
+  body{font-size:16px}
+  .wrap,.wrap-wide,.nav-inner{padding:0 20px}
+  .nav-links a:not(.btn){display:none}
+  .grid6{grid-template-columns:1fr}
+  .os-grid{grid-template-columns:1fr}
+  .hero-inner{padding:120px 0 100px}
+  .status-pill .plat{display:none}   /* the platform list wraps the pill to two lines */
+  .cta-row .btn{flex:1;justify-content:center}
+  .raw{min-height:0}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation:none!important;transition:none!important}
+  html.js .reveal{opacity:1;transform:none}
+  .btn:hover,.f:hover{transform:none}
 }
 </style>
 </head>
 <body>
 
-<nav>
-  <div class="wrap nav-inner">
-    <a class="brand" href="#top">
-      <img src="assets/tray_icon.png" alt="Aegis shield logo">
-      <span>AEGIS</span>
-    </a>
+<nav id="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#top"><img src="assets/tray_icon.png" alt=""><span>AEGIS</span></a>
     <div class="nav-links">
-      <a href="#how">how it works</a>
-      <a href="#memory">memory</a>
-      <a href="#compare">vs. other tools</a>
-      <a href="#features">features</a>
-      <a href="#privacy">privacy</a>
-      <a href="#docs">docs</a>
-      <a href="#roadmap">roadmap</a>
-      <a class="btn btn-ghost" href="https://github.com/anubhavmohandas/Aegis" target="_blank" rel="noopener">GitHub ↗</a>
-      <a class="btn btn-primary" href="#download">Download</a>
+      <a href="#memory">Memory</a>
+      <a href="#compare">Compare</a>
+      <a href="#features">Features</a>
+      <a href="#open">Open source</a>
+      <a class="btn btn-primary" href="https://github.com/anubhavmohandas/Aegis/releases" target="_blank" rel="noopener">Download</a>
     </div>
   </div>
 </nav>
 
-<!-- ============ 1 · HERO ============ -->
+<!-- ============ HERO ============ -->
 <header class="hero" id="top">
-  <div class="wrap hero-grid">
-    <div>
-      <div class="status-pill"><span class="dot"></span>v2.0.2-alpha · watching</div>
-      <h1>Know what happened while you <span class="em">weren't looking</span>.</h1>
+  <video class="hero-video" src="media/hero.mp4" poster="media/hero.jpg"
+         autoplay muted loop playsinline preload="auto" aria-hidden="true" tabindex="-1"></video>
+  <div class="hero-scrim"></div>
+  <div class="wrap-wide">
+    <div class="hero-inner">
+      <span class="status-pill"><span class="dot"></span>v2.0.2-alpha<span class="plat"> · WINDOWS · MACOS · LINUX</span></span>
+      <h1>Remember everything.<span class="two">Understand anything.</span></h1>
       <p class="lede">
-        Aegis continuously monitors your computer, remembers important activity,
-        enriches it with threat intelligence, and explains everything in plain
-        English — so you always know what happened.
-      </p>
-      <p class="different">
-        It's not antivirus and it's not Event Viewer. <b>It's memory</b> — with
-        no verdicts, no blocking, and no guarantees. Awareness stays the product;
-        judgment stays with you.
+        Aegis continuously monitors your system, builds an endpoint memory,
+        and explains what happened in plain English.
       </p>
       <div class="cta-row">
-        <a class="btn btn-primary" href="#download">Download</a>
-        <a class="btn btn-ghost" href="https://github.com/anubhavmohandas/Aegis" target="_blank" rel="noopener">GitHub ↗</a>
-        <a class="btn btn-ghost" href="#docs">Documentation</a>
-      </div>
-      <div class="trust-strip">
-        <span><i>●</i>LOCAL SQLITE</span>
-        <span><i>●</i>NO FILE UPLOADS</span>
-        <span><i>●</i>OPEN SOURCE</span>
-        <span><i>●</i>WIN · MAC · LINUX</span>
-      </div>
-    </div>
-
-    <div>
-      <div class="panel" aria-label="Interactive demo of the Aegis Memory feed. Press the simulate button to watch an incident unfold.">
-        <div class="panel-bar">
-          <span class="t"><i class="g">◉</i>MEMORY — TODAY</span>
-          <button class="demo-btn" id="demo-btn" type="button">▶ Simulate an incident</button>
-        </div>
-        <div class="mem" id="mem" aria-live="polite">
-          <div class="mem-evt">
-            <span class="mk low">●</span><span class="tm">13:42</span>
-            <span class="what">python3 spawned by Terminal
-              <span class="ai">A Python interpreter started from your terminal. Typical for development work; nothing unusual about its parent or path.</span>
-            </span>
-          </div>
-          <div class="mem-evt">
-            <span class="mk low">●</span><span class="tm">13:58</span>
-            <span class="what">report_final.pdf created in ~/Downloads
-              <span class="ai">Matches your active browser session — expected.</span>
-            </span>
-          </div>
-        </div>
-        <div class="panel-foot">
-          <span>severity scored locally, before any AI call</span>
-          <span>aegis_events.db</span>
-        </div>
+        <a class="btn btn-primary" href="https://github.com/anubhavmohandas/Aegis/releases" target="_blank" rel="noopener">Download Beta</a>
+        <a class="btn btn-ghost" href="https://github.com/anubhavmohandas/Aegis" target="_blank" rel="noopener">View on GitHub</a>
       </div>
     </div>
   </div>
+  <span class="scroll-cue"><i></i>SCROLL</span>
 </header>
 
-<!-- ============ 2 · THE PROBLEM ============ -->
-<section id="problem">
-  <div class="wrap problem">
-    <div class="center">
-      <div class="sec-tag reveal">THE PROBLEM</div>
-      <h2 class="reveal">Your computer doesn't keep secrets.<br>It just doesn't tell you.</h2>
-    </div>
-    <div class="rail beats reveal" aria-label="A sequence: you leave your laptop, someone uses it, downloads software, deletes the installer, and leaves.">
-      <div class="rail-item mute"><h4>You leave your laptop.</h4></div>
-      <div class="rail-item warn"><h4>Someone uses it.</h4></div>
-      <div class="rail-item warn"><h4>Downloads software.</h4></div>
-      <div class="rail-item bad"><h4>Deletes the installer.</h4></div>
-      <div class="rail-item mute"><h4>Leaves.</h4></div>
-    </div>
-    <p class="ask reveal">Would you know?</p>
-    <p class="answer reveal">AEGIS REMEMBERS</p>
-  </div>
-</section>
-
-<!-- ============ 3 · WHY AEGIS EXISTS ============ -->
-<section id="why" class="why">
-  <div class="wrap">
-    <div class="sec-tag gold reveal">WHY AEGIS EXISTS</div>
-    <blockquote class="reveal">
-      <span class="mark">◆</span>
-      Modern operating systems generate thousands of events every day, but most
-      people never see the story behind them. Aegis was built to bridge that gap —
-      <b>collecting meaningful activity, enriching it with trusted context, and
-      explaining it in language people can understand.</b>
-    </blockquote>
-  </div>
-</section>
-
-<!-- ============ 4 · HOW IT WORKS ============ -->
-<section id="how">
-  <div class="wrap">
-    <div class="sec-tag reveal">HOW IT WORKS</div>
-    <h2 class="reveal">Five things, in order.<br>Every event, every time.</h2>
-    <p class="sec-lede reveal">Not a pile of features — one pipeline. Severity is scored on your machine before any network call is made.</p>
-    <div class="stops reveal">
-      <div class="stop">
-        <span class="n"><i>●</i>01</span>
-        <h3>Observe</h3>
-        <div class="d">
-          <p>Aegis watches where change shows up first.</p>
-          <div class="note">processes · usb · files · startup · sessions</div>
-        </div>
-      </div>
-      <div class="stop">
-        <span class="n"><i>●</i>02</span>
-        <h3>Understand</h3>
-        <div class="d">
-          <p>A local rule engine scores every event, low to critical.</p>
-          <div class="note">no API call needed to score</div>
-        </div>
-      </div>
-      <div class="stop">
-        <span class="n"><i>●</i>03</span>
-        <h3>Enrich</h3>
-        <div class="d">
-          <p>File hashes are checked against VirusTotal and mapped to MITRE ATT&amp;CK techniques.</p>
-          <div class="note">opt-in · hashes only, never files</div>
-        </div>
-      </div>
-      <div class="stop">
-        <span class="n"><i class="g">◉</i>04</span>
-        <h3>Remember</h3>
-        <div class="d">
-          <p>Everything lands in Memory — searchable, grouped into Away Sessions, condensed into a Daily Brief.</p>
-          <div class="note">local SQLite · yours forever</div>
-        </div>
-      </div>
-      <div class="stop">
-        <span class="n"><i>●</i>05</span>
-        <h3>Explain</h3>
-        <div class="d">
-          <p>AI turns raw events into sentences a human can act on.</p>
-          <div class="note"><em>◆</em> openai · claude · nvidia · ollama</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============ 5 · MEMORY (dashboard) ============ -->
+<!-- ============ MEMORY ============ -->
 <section id="memory">
-  <div class="wrap">
-    <div class="sec-tag reveal">THE DASHBOARD</div>
-    <h2 class="reveal">Not logs. Memory.</h2>
-    <p class="sec-lede reveal">Open Aegis and read your machine like a diary — today, yesterday, last week. Incidents, threat intelligence, and a daily brief live in the same window.</p>
-
-    <div class="shots">
-      <div class="shot panel reveal" role="img" aria-label="Mock of the Memory view grouped by day">
-        <div class="panel-bar"><span class="t"><i class="g">◉</i>MEMORY</span></div>
-        <div class="body" style="padding:6px 0 12px">
-          <div class="mem-day">TODAY</div>
-          <div class="mem-evt"><span class="mk med">●</span><span class="tm">09:31</span><span class="what">USB device connected — Kingston DataTraveler</span></div>
-          <div class="mem-evt"><span class="mk high">●</span><span class="tm">10:47</span><span class="what">new autostart entry: SysHelper.exe</span></div>
-          <div class="mem-day">YESTERDAY</div>
-          <div class="mem-evt"><span class="mk low">●</span><span class="tm">18:03</span><span class="what">slides_final.pdf created in ~/Downloads</span></div>
-          <div class="mem-evt"><span class="mk ses">●</span><span class="tm">14:21</span><span class="what">Away Session — 31 min, 5 events<span class="badge intel">SUMMARY</span></span></div>
+  <div class="wrap-wide">
+    <div class="reveal">
+      <div class="sec-tag">ENDPOINT MEMORY</div>
+      <h2>Your computer remembers everything.<br><span class="dim">You should too.</span></h2>
+    </div>
+    <div class="split">
+      <div class="frame tall reveal">
+        <video src="media/memory.mp4" poster="media/memory.jpg"
+               muted loop playsinline preload="none" data-io
+               aria-label="The Aegis event stream, scrolling through recorded system activity"></video>
+      </div>
+      <div class="tl reveal">
+        <div class="tl-row warn">
+          <span class="tm">10:42</span>
+          <span class="what">USB connected</span>
+          <span class="note">First time this device has been seen.</span>
+        </div>
+        <div class="tl-row">
+          <span class="tm">10:42</span>
+          <span class="what">Chrome launched</span>
+        </div>
+        <div class="tl-row bad">
+          <span class="tm">10:43</span>
+          <span class="what">PowerShell executed</span>
+        </div>
+        <div class="tl-row mem">
+          <span class="tm">08:00</span>
+          <span class="what">Daily Brief updated</span>
+          <span class="note ai">Nothing you did was unusual. One device was new.</span>
         </div>
       </div>
+    </div>
+  </div>
+</section>
 
-      <div class="shot panel reveal" role="img" aria-label="Mock of the Daily Brief panel summarizing the last 24 hours">
-        <div class="panel-bar"><span class="t"><i>●</i>DAILY BRIEF — LAST 24H</span></div>
-        <div class="body">
-          <div class="kv"><span class="k">events captured</span><span>412</span></div>
-          <div class="kv"><span class="k">high / critical</span><span style="color:var(--sev-high)">3</span></div>
-          <div class="kv"><span class="k">away sessions</span><span>2 · 41 min total</span></div>
-          <div class="kv"><span class="k">new startup entries</span><span>1</span></div>
-          <p class="summary">A quiet day overall. One new login item appeared after you installed Figma — it checks out. Both away sessions were uneventful.</p>
-        </div>
+<!-- ============ INCIDENT · AI ============ -->
+<section id="explain">
+  <div class="wrap-wide">
+    <div class="center reveal">
+      <div class="sec-tag gold">AI EXPLANATIONS</div>
+      <h2>Not logs.<br><span class="em">Understanding.</span></h2>
+    </div>
+    <div class="frame beat-wide reveal">
+      <video src="media/incident.mp4" poster="media/incident.jpg"
+             muted loop playsinline preload="none" data-io
+             aria-label="Clicking an event in Aegis opens a detail drawer where the AI explains, in plain English, what the event was and whether it is normal"></video>
+    </div>
+    <p class="pull reveal">Click any event. Aegis tells you what it was —<br>and whether you should care.</p>
+  </div>
+</section>
+
+<!-- ============ DAILY BRIEF ============ -->
+<section id="brief">
+  <div class="wrap-wide">
+    <div class="center reveal">
+      <div class="sec-tag gold">DAILY BRIEF</div>
+      <h2>Ask one question.</h2>
+      <p class="one-line">“What happened while I was away?”</p>
+    </div>
+    <div class="frame beat-wide reveal">
+      <video src="media/brief.mp4" poster="media/brief.jpg"
+             muted loop playsinline preload="none" data-io
+             aria-label="Aegis generating a Daily Brief: a 24-hour summary with event counts, notable events, and a recommendation"></video>
+    </div>
+  </div>
+</section>
+
+<!-- ============ REPORTS ============ -->
+<section id="reports">
+  <div class="wrap-wide">
+    <div class="center reveal">
+      <div class="sec-tag">REPORTS</div>
+      <h2>Then it becomes a document.</h2>
+    </div>
+    <div class="frame beat-wide reveal">
+      <video src="media/report.mp4" poster="media/report.jpg"
+             muted loop playsinline preload="none" data-io
+             aria-label="Exporting a PDF security activity report from Aegis, with an executive summary written by the AI"></video>
+    </div>
+  </div>
+</section>
+
+<!-- ============ THE PRODUCT, UNINTERRUPTED ============ -->
+<section class="shot-section">
+  <div class="wrap-wide">
+    <div class="frame reveal">
+      <img src="media/dashboard-full.jpg" width="2400" height="1486" loading="lazy"
+           alt="The Aegis dashboard: 24-hour event counts, a severity breakdown, filters, and the full event stream for today.">
+    </div>
+  </div>
+</section>
+
+<!-- ============ WHERE AEGIS FITS ============ -->
+<section id="compare">
+  <div class="wrap-wide">
+    <div class="reveal">
+      <div class="sec-tag">WHERE AEGIS FITS</div>
+      <h2>02:14. A USB goes in.<br><span class="dim">Here's what each tool tells you.</span></h2>
+      <p class="one-line">Same machine, same night, same event. Pick a tool.</p>
+    </div>
+
+    <div class="chips reveal" role="group" aria-label="Compare Aegis with other tools">
+      <button class="chip" type="button" data-vs="edr" aria-pressed="true">EDR / XDR</button>
+      <button class="chip" type="button" data-vs="siem" aria-pressed="false">SIEM</button>
+      <button class="chip" type="button" data-vs="av" aria-pressed="false">DEFENDER</button>
+      <button class="chip" type="button" data-vs="taskmgr" aria-pressed="false">ACTIVITY MONITOR</button>
+      <button class="chip" type="button" data-vs="evtx" aria-pressed="false">EVENT VIEWER</button>
+      <button class="chip" type="button" data-vs="spy" aria-pressed="false">MONITORING APPS</button>
+    </div>
+
+    <div class="vs reveal">
+      <div class="panel">
+        <div class="panel-bar"><span class="t"><i class="r">●</i><span id="vs-name">EDR / XDR CONSOLE</span></span></div>
+        <pre class="raw" id="vs-raw" aria-live="polite"></pre>
+        <div class="verdict" id="vs-verdict"></div>
       </div>
-
-      <div class="shot panel reveal" role="img" aria-label="Mock of the Threat Intelligence panel showing VirusTotal detections and MITRE techniques">
-        <div class="panel-bar"><span class="t"><i>●</i>THREAT INTELLIGENCE</span></div>
-        <div class="body">
-          <div class="kv"><span class="k">file</span><span>invoice.pdf.exe</span></div>
-          <div class="kv"><span class="k">sha-256</span><span>9f86d08…0a08</span></div>
-          <div class="kv"><span class="k">virustotal</span><span style="color:#FF9B9B">48 / 76 engines</span></div>
-          <div class="vt-bar" aria-hidden="true"><i></i></div>
-          <div class="mitre">
-            <span class="badge threat">T1547 — BOOT AUTOSTART</span>
-            <span class="badge threat">T1036 — MASQUERADING</span>
+      <div class="panel">
+        <div class="panel-bar"><span class="t"><i class="g">◉</i>AEGIS — MEMORY</span></div>
+        <div class="mem-list">
+          <div class="mem-evt">
+            <span class="mk med">●</span><span class="tm">02:14</span>
+            <span class="what">USB device connected — SanDisk Ultra<span class="badge med">UNRECOGNIZED</span>
+              <span class="ai">A storage device you've never connected before was plugged in while your screen was locked. You were away.</span>
+            </span>
+          </div>
+          <div class="mem-evt">
+            <span class="mk high">●</span><span class="tm">02:14</span>
+            <span class="what">invoice.pdf.exe copied to ~/Downloads<span class="badge threat">T1036</span>
+              <span class="ai">An executable disguised with a document name. A copy and its hash were preserved before anyone could delete it.</span>
+            </span>
+          </div>
+          <div class="mem-evt">
+            <span class="mk ses">◉</span><span class="tm">07:02</span>
+            <span class="what">you unlocked — Away Session summary ready
+              <span class="ai">While you were away for 4h 51m, an unknown USB arrived and left one disguised executable behind. Evidence is attached.</span>
+            </span>
           </div>
         </div>
-      </div>
-
-      <div class="shot panel reveal" role="img" aria-label="Mock of the incident detail panel with captured evidence">
-        <div class="panel-bar"><span class="t"><i>●</i>INCIDENT DETAIL</span></div>
-        <div class="body">
-          <div class="kv"><span class="k">trigger</span><span>persistence + hostile hash</span></div>
-          <div class="kv"><span class="k">evidence</span><span>file copy · hashes · context</span></div>
-          <div class="kv"><span class="k">timeline</span><span>6 related events linked</span></div>
-          <div class="kv"><span class="k">export</span><span>PDF report ready</span></div>
-          <p class="summary">Evidence was captured automatically the moment this crossed the incident threshold — before anything could be deleted.</p>
-        </div>
+        <div class="verdict"><b>You wake up knowing.</b> No query, no log diving, no security background required.</div>
       </div>
     </div>
-    <p class="shots-note reveal">// faithful HTML recreations of the live dashboard — themes, tamper-protection shield, and trust lists included in the real thing</p>
+
+    <div class="trust-strip reveal">
+      <span><i>●</i>NOT A REPLACEMENT — KEEP DEFENDER ON</span>
+      <span><i>●</i>NEVER BLOCKS OR QUARANTINES</span>
+      <span><i>●</i>ONE MACHINE, NO FLEET, NO CONSOLE</span>
+    </div>
+
+    <p class="pull reveal">Everything else watches for attackers.<br>Aegis watches for <span class="q">what you missed</span>.</p>
   </div>
 </section>
 
-<!-- ============ 6 · REAL SCENARIO ============ -->
-<section id="scenario">
-  <div class="wrap">
-    <div class="center">
-      <div class="sec-tag reveal">WHILE YOU WERE AWAY…</div>
-      <h2 class="reveal">31 minutes. Here's everything.</h2>
-      <p class="sec-lede reveal">When your machine locks, Aegis opens an Away Session. When you come back, the story is waiting.</p>
-    </div>
-
-    <div class="rail reveal">
-      <div class="rail-item mute">
-        <div class="when">14:21 · SESSION</div>
-        <h4>Laptop locked</h4>
-        <p>Away Session begins. Everything from here on is recorded and grouped.</p>
-      </div>
-      <div class="rail-item warn">
-        <div class="when">14:36 · <span class="badge med">MEDIUM</span></div>
-        <h4>USB device connected</h4>
-        <p>A removable drive appears — <span class="mono">SanDisk Ultra USB 3.0</span> — while the screen is still locked.</p>
-      </div>
-      <div class="rail-item bad">
-        <div class="when">14:37 · <span class="badge high">HIGH</span></div>
-        <h4>invoice.pdf.exe copied to Downloads</h4>
-        <p>A file pretending to be a PDF. Aegis captures a copy and its hashes as evidence, immediately.</p>
-      </div>
-      <div class="rail-item bad">
-        <div class="when">14:37 · <span class="badge threat">CRITICAL</span></div>
-        <h4>VirusTotal: 48 of 76 engines flag it</h4>
-        <p>The file's hash — never the file — is checked against VirusTotal. Behavior maps to <span class="mono">MITRE T1036</span>, masquerading.</p>
-      </div>
-      <div class="rail-item bad">
-        <div class="when">14:38 · <span class="badge threat">CRITICAL</span></div>
-        <h4>Persistence registered</h4>
-        <p>The executable adds itself to startup — <span class="mono">T1547</span>. The installer is deleted a minute later; the evidence copy survives.</p>
-      </div>
-      <div class="rail-item">
-        <div class="when">14:52 · SESSION</div>
-        <h4>You unlock your laptop</h4>
-        <p>The Away Session closes and the summary is already on screen.</p>
-      </div>
-    </div>
-
-    <div class="verdict reveal">
-      <span class="k">AEGIS — AWAY SESSION SUMMARY</span>
-      <p>While you were away for 31 minutes, a USB drive was connected and a disguised
-      executable was copied to Downloads, flagged by 48 antivirus engines, and registered
-      itself to run at startup. The installer was deleted afterward, but a copy and its
-      hashes were preserved as evidence. This needs your attention.</p>
-    </div>
-
-    <p class="closer reveal">You were gone 31 minutes.<br>You know everything.</p>
-  </div>
-</section>
-
-<!-- ============ 7 · WHY AEGIS IS DIFFERENT ============ -->
-<section id="different">
-  <div class="wrap">
-    <div class="sec-tag reveal">WHY AEGIS IS DIFFERENT</div>
-    <h2 class="reveal">Built for humans, not log parsers.</h2>
-    <div class="compare reveal">
-      <table>
-        <thead>
-          <tr><th scope="col">Elsewhere</th><th scope="col">Aegis</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>Raw logs</td><td>Human explanations</td></tr>
-          <tr><td>Separate tools</td><td>One memory</td></tr>
-          <tr><td>Thousands of events</td><td>Only important events</td></tr>
-          <tr><td>Event Viewer archaeology</td><td>A Daily Brief</td></tr>
-          <tr><td>Manual investigation</td><td>AI summaries with evidence attached</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
-
-<!-- ============ 7b · AEGIS vs THE TOOLS YOU ALREADY HAVE ============ -->
-<section id="compare">
-  <div class="wrap">
-    <div class="sec-tag reveal">WHERE AEGIS FITS</div>
-    <h2 class="reveal">You already have security tools.<br>None of them tell you the story.</h2>
-    <p class="sec-lede reveal">
-      EDR blocks. Antivirus scans. Event Viewer records everything and explains nothing.
-      Aegis sits in the gap none of them cover: remembering what happened on <b>your</b>
-      machine, in words you don't need a SOC analyst to read.
-    </p>
-    <div class="compare trio reveal">
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">Tool</th>
-            <th scope="col">What it's built to do</th>
-            <th scope="col">What Aegis does instead</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>EDR / XDR<em>CROWDSTRIKE · SENTINELONE · DEFENDER FOR ENDPOINT</em></td>
-            <td>Detect and <b>respond</b> across a fleet — kill processes, isolate hosts, feed a security team's console. Managed by someone else, licensed per seat.</td>
-            <td>Never blocks, kills, or quarantines. One machine, owned by you, no console and no admin above you. It observes and explains; every decision stays yours.</td>
-          </tr>
-          <tr>
-            <td>SIEM<em>SPLUNK · ELASTIC · WAZUH · SENTINEL</em></td>
-            <td>Aggregate logs from hundreds of hosts, then wait for an analyst to write the right query and build the right dashboard.</td>
-            <td>No query language, no dashboards to build. The timeline is already filtered, scored, and written in English — for the one host that's yours.</td>
-          </tr>
-          <tr>
-            <td>Antivirus<em>WINDOWS DEFENDER · XPROTECT · MALWAREBYTES</em></td>
-            <td>Match files against signatures and heuristics, then quarantine what looks malicious. Silent when nothing matches.</td>
-            <td>Doesn't scan files for malware and doesn't try to replace it. Records the events antivirus has no opinion on — a USB at 02:14, a new login item, someone using your laptop.</td>
-          </tr>
-          <tr>
-            <td>Task Manager<em>ACTIVITY MONITOR · TOP · PROCESS EXPLORER</em></td>
-            <td>Show what's running <b>right now</b>. Close the window and the past is gone — there's no history to go back to.</td>
-            <td>History is the entire point. What ran at 02:14 while you slept is still there tomorrow, with its parent process and why it was flagged.</td>
-          </tr>
-          <tr>
-            <td>Event Viewer<em>CONSOLE.APP · JOURNALCTL · SYSLOG</em></td>
-            <td>Record everything the OS emits — thousands of entries a day, no severity you'd trust, no context, no explanation. Archaeology.</td>
-            <td>Keeps only what's worth remembering, scores it locally, enriches it with VirusTotal and MITRE ATT&amp;CK, and explains each event in a sentence.</td>
-          </tr>
-          <tr>
-            <td>Monitoring apps<em>PARENTAL · EMPLOYEE SURVEILLANCE</em></td>
-            <td>Capture screens, keystrokes, and content, and ship it to somebody else's server for somebody else to read.</td>
-            <td>Records system events, not content. No screenshots of your work, no keylogging, no upload — the database is a file on your disk.</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="not-list reveal">
-      <div>
-        <b>Not a replacement</b>
-        <p>Keep Defender on. Keep your EDR if you have one. Aegis answers a question they were never designed to answer.</p>
-      </div>
-      <div>
-        <b>Not a verdict machine</b>
-        <p>Severity is a hint, not a judgment. Aegis has no allow/deny, no "you're protected" badge, and no guarantees.</p>
-      </div>
-      <div>
-        <b>Not enterprise software</b>
-        <p>One machine, one person, no agents to enroll and no fleet to manage. If you need a SOC, you need a SIEM.</p>
-      </div>
-    </div>
-
-    <p class="closer reveal">Everything else watches for attackers.<br>Aegis watches for <span style="color:var(--primary)">what you missed</span>.</p>
-  </div>
-</section>
-
-<!-- ============ 8 · FEATURES ============ -->
+<!-- ============ FEATURES ============ -->
 <section id="features">
-  <div class="wrap">
-    <div class="sec-tag reveal">FEATURES</div>
-    <h2 class="reveal">Everything above, itemized.</h2>
-    <div class="feat-grid">
-      <div class="feat gold reveal">
-        <span class="mk">◆</span>
-        <h3>AI Explanations</h3>
-        <p>An event fires — and becomes a plain-English sentence you can act on, severity already scored locally.</p>
-      </div>
-      <div class="feat reveal">
-        <span class="mk">●</span>
-        <h3>Threat Intelligence</h3>
-        <p>A suspicious file appears — its hash meets VirusTotal and MITRE ATT&amp;CK, and the event gains context. Opt-in.</p>
-      </div>
-      <div class="feat reveal">
-        <span class="mk">●</span>
-        <h3>Away Sessions</h3>
-        <p>Your screen locks — Aegis groups everything until you return, with a summary waiting on unlock.</p>
-      </div>
-      <div class="feat gold reveal">
-        <span class="mk">◆</span>
-        <h3>Daily Brief</h3>
-        <p>Every 24 hours becomes one page you'll actually read — what happened, what mattered, what didn't.</p>
-      </div>
-      <div class="feat reveal">
-        <span class="mk">●</span>
-        <h3>Incident Reports</h3>
-        <p>Related events link into one incident with its evidence attached — exportable as a PDF.</p>
-      </div>
-      <div class="feat reveal">
-        <span class="mk">●</span>
-        <h3>Trust Learning</h3>
-        <p>You trust a process or USB device once — the noise it made disappears from then on.</p>
-      </div>
-      <div class="feat reveal">
-        <span class="mk">●</span>
-        <h3>Evidence Capture</h3>
-        <p>A hostile file lands — Aegis copies and hashes it instantly. Deleting the original erases nothing.</p>
-      </div>
-      <div class="feat reveal">
-        <span class="mk">●</span>
-        <h3>Tamper Protection</h3>
-        <p>Something touches Aegis itself — its database, its monitors — and gaps in coverage get flagged, not hidden.</p>
-      </div>
-      <div class="feat reveal">
-        <span class="mk">●</span>
-        <h3>Cross-Platform</h3>
-        <p>Windows, macOS, and Linux from one codebase, with per-platform monitors underneath.</p>
-      </div>
+  <div class="wrap-wide">
+    <div class="reveal">
+      <div class="sec-tag">WHAT'S INSIDE</div>
+      <h2>Six things it does.</h2>
+    </div>
+    <div class="grid6">
+      <div class="f reveal"><span class="ico">🧠</span><h3>Endpoint Memory</h3><p>One searchable history of everything that happened on your machine.</p></div>
+      <div class="f reveal"><span class="ico">🤖</span><h3>AI Explanations</h3><p>Any event, explained in plain English — including whether it's normal.</p></div>
+      <div class="f reveal"><span class="ico">📅</span><h3>Daily Brief</h3><p>A 24-hour summary you can read in a minute.</p></div>
+      <div class="f reveal"><span class="ico">📄</span><h3>Reports</h3><p>Export any period as a PDF with an executive summary on the front.</p></div>
+      <div class="f reveal"><span class="ico">🔍</span><h3>Threat Intelligence</h3><p>Optional VirusTotal and MITRE ATT&amp;CK enrichment on the events that warrant it.</p></div>
+      <div class="f reveal"><span class="ico">🔒</span><h3>Local First</h3><p>Your events live in a local database. Scoring happens on your machine.</p></div>
     </div>
   </div>
 </section>
 
-<!-- ============ 9 · ARCHITECTURE ============ -->
-<section id="architecture">
+<!-- ============ PRIVACY ============ -->
+<section class="privacy">
   <div class="wrap">
-    <div class="center">
-      <div class="sec-tag reveal">ARCHITECTURE</div>
-      <h2 class="reveal">Simple on purpose.</h2>
-      <p class="sec-lede reveal">Events flow one way. Intelligence is added at each stage — never removed.</p>
-    </div>
-    <div class="arch reveal" aria-label="Architecture: the operating system feeds monitors, then a rule engine, then threat intelligence, then AI, then Memory.">
-      <div class="node"><h4>Operating System</h4><p>windows · macos · linux</p></div>
-      <div class="node"><h4>Monitors</h4><p>process · usb · filesystem · persistence · session</p></div>
-      <div class="node"><h4>Rule Engine</h4><p>local severity scoring — no network required</p></div>
-      <div class="node gold"><h4>Threat Intelligence</h4><p>virustotal hashes · mitre att&amp;ck — opt-in</p></div>
-      <div class="node gold"><h4>AI Explainer</h4><p>openai · anthropic · nvidia · ollama</p></div>
-      <div class="node mem"><h4>Memory</h4><p>timeline · incidents · daily brief · settings</p></div>
+    <div class="reveal">
+      <div class="sec-tag center">PRIVACY</div>
+      <p class="big">Your machine's story <em>never leaves your machine</em>.</p>
+      <p class="fine">
+        Events, evidence, and your Memory stay in a local database on your disk. Severity is scored
+        locally. <b>Threat intelligence and AI explanations are opt-in</b> — they only run once you add
+        your own API key, and they send event metadata and file hashes, never file contents. Aegis
+        records system events, not what you type, read, or look at.
+      </p>
     </div>
   </div>
 </section>
 
-<!-- ============ 9b · MEET THE ENGINE ============ -->
-<section id="engine">
-  <div class="wrap">
-    <div class="sec-tag reveal">MEET THE ENGINE</div>
-    <h2 class="reveal">Inside the engine.</h2>
-    <p class="sec-lede reveal">No framework, no magic — <span class="mono" style="font-family:var(--font-mono);font-size:14px">core/</span> is a handful of readable Python modules, each with one job. Don't take the diagram's word for it.</p>
-    <div class="docs-grid">
-      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/dispatcher.py" target="_blank" rel="noopener">
-        <span class="k">PIPELINE</span>
-        <h4>dispatcher.py</h4>
-        <p>Every event passes through here — deduped, scored, rate-limited, explained, persisted.</p>
-      </a>
-      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/rule_engine.py" target="_blank" rel="noopener">
-        <span class="k">GATE</span>
-        <h4>rule_engine.py</h4>
-        <p>Decides locally whether an event deserves an AI call at all.</p>
-      </a>
-      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/severity_engine.py" target="_blank" rel="noopener">
-        <span class="k">SCORE</span>
-        <h4>severity_engine.py</h4>
-        <p>Deterministic low-to-critical scoring, before any network call.</p>
-      </a>
-      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/folder_monitor.py" target="_blank" rel="noopener">
-        <span class="k">WATCH</span>
-        <h4>folder_monitor.py</h4>
-        <p>Near-real-time file watching, genuinely cross-platform.</p>
-      </a>
-      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/session_monitor.py" target="_blank" rel="noopener">
-        <span class="k">SESSIONS</span>
-        <h4>session_monitor.py</h4>
-        <p>Lock and unlock — the boundaries of every Away Session.</p>
-      </a>
-      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/enrichment.py" target="_blank" rel="noopener">
-        <span class="k">INTEL</span>
-        <h4>enrichment.py</h4>
-        <p>Attaches VirusTotal and MITRE ATT&amp;CK context before the AI speaks.</p>
-      </a>
-      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/evidence.py" target="_blank" rel="noopener">
-        <span class="k">EVIDENCE</span>
-        <h4>evidence.py</h4>
-        <p>Turns tamper attempts into stored incidents, evidence attached.</p>
-      </a>
-      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/core/ai_explainer.py" target="_blank" rel="noopener">
-        <span class="k">VOICE</span>
-        <h4>ai_explainer.py</h4>
-        <p>One module speaks to OpenAI, Claude, NVIDIA, or Ollama — plain English out.</p>
-      </a>
+<!-- ============ OPEN SOURCE ============ -->
+<section id="open">
+  <div class="wrap-wide">
+    <div class="reveal">
+      <div class="sec-tag">OPEN SOURCE</div>
+      <h2>Read every line before you trust it.</h2>
     </div>
-  </div>
-</section>
-
-<!-- ============ 10 · PRIVACY ============ -->
-<section id="privacy">
-  <div class="wrap">
-    <div class="sec-tag reveal">PRIVACY FIRST</div>
-    <h2 class="reveal">Your machine's story stays on your machine.</h2>
-    <p class="sec-lede reveal">A monitoring tool you can't trust is worse than no tool at all. So the defaults are local, and the exceptions are explicit.</p>
-    <div class="priv-list">
-      <div class="priv-item reveal">
-        <span class="x">● LOCAL</span>
-        <h4>Local SQLite database</h4>
-        <p>Every event lives in a database file on your disk. No cloud account, no telemetry.</p>
-      </div>
-      <div class="priv-item reveal">
-        <span class="x">● LOCAL</span>
-        <h4>No file uploads — ever</h4>
-        <p>VirusTotal lookups send a hash of the file, never the file. And only if you turn enrichment on.</p>
-      </div>
-      <div class="priv-item reveal">
-        <span class="x">● YOUR CHOICE</span>
-        <h4>You pick the AI</h4>
-        <p>OpenAI, Anthropic, NVIDIA — or Ollama on your own hardware for a fully local setup. Keys are encrypted at rest.</p>
-      </div>
-      <div class="priv-item reveal">
-        <span class="x">● LOCAL</span>
-        <h4>Monitoring never leaves</h4>
-        <p>Watching, scoring, and logging all happen on-device. The AI call is optional; the record is not.</p>
-      </div>
-      <div class="priv-item reveal">
-        <span class="x">● OPEN</span>
-        <h4>Source you can read</h4>
-        <p>The whole pipeline is open source. Don't take this page's word for it — read the code.</p>
-      </div>
-      <div class="priv-item reveal">
-        <span class="x">● OFFLINE</span>
-        <h4>Works without internet</h4>
-        <p>No connection? Monitoring and scoring continue. You only lose enrichment and cloud explanations.</p>
-      </div>
+    <div class="os-grid reveal">
+      <div class="os-cell"><span class="k">VERSION</span><span class="v em">v2.0.2-alpha</span></div>
+      <div class="os-cell"><span class="k">PLATFORMS</span><span class="v">3</span></div>
+      <div class="os-cell"><span class="k">LICENSE</span><span class="v">Open</span></div>
+      <div class="os-cell"><span class="k">STATUS</span><span class="v">Beta</span></div>
     </div>
-  </div>
-</section>
-
-<!-- ============ 11 · TECH STACK ============ -->
-<section id="stack">
-  <div class="wrap">
-    <div class="sec-tag reveal">UNDER THE HOOD</div>
-    <h2 class="reveal">Boring technology, deliberately.</h2>
-    <p class="sec-lede reveal">Chosen so it runs anywhere, reads easily, and survives its author's enthusiasm.</p>
-    <div class="stack reveal">
-      <span>Python</span>
-      <span>SQLite</span>
-      <span>JavaScript</span>
-      <span>HTML</span>
-      <span>CSS</span>
-      <span>PyInstaller</span>
-      <span>VirusTotal API</span>
-      <span>MITRE ATT&amp;CK</span>
-      <span>OpenAI</span>
-      <span>Anthropic Claude</span>
-      <span>NVIDIA</span>
-      <span>Ollama</span>
-      <span>GitHub Actions</span>
+    <div class="codebox reveal">
+      <div class="cb-bar"><span>terminal</span><span>bash / powershell</span></div>
+<pre><span class="p">$</span> pip install -r requirements-macos.txt   <span class="c"># or -windows.txt / -linux.txt</span>
+<span class="p">$</span> python desktop_app.py                   <span class="c"># sign in with admin / admin</span></pre>
     </div>
-  </div>
-</section>
-
-<!-- ============ 12 · ROADMAP ============ -->
-<section id="roadmap">
-  <div class="wrap">
-    <div class="sec-tag reveal">ROADMAP</div>
-    <h2 class="reveal">Alive, and honest about what's next.</h2>
-    <div class="road">
-      <div class="road-col now reveal">
-        <span class="ver">V2 — SHIPPING NOW</span>
-        <h3>The intelligence release</h3>
-        <ul>
-          <li>Threat intelligence — VirusTotal + MITRE ATT&amp;CK</li>
-          <li>Away Sessions with gap detection</li>
-          <li>Daily Brief</li>
-          <li>Evidence capture &amp; incident reports</li>
-          <li>Tamper protection</li>
-        </ul>
-      </div>
-      <div class="road-col next reveal">
-        <span class="ver">V3 — EXPLORING</span>
-        <h3>The reach release</h3>
-        <ul>
-          <li>Network intelligence</li>
-          <li>Cross-device memory</li>
-          <li>Plugin SDK</li>
-        </ul>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============ 13 · DOCUMENTATION ============ -->
-<section id="docs">
-  <div class="wrap">
-    <div class="sec-tag reveal">DOCUMENTATION</div>
-    <h2 class="reveal">Read the reasoning, not just the README.</h2>
-    <div class="docs-grid">
-      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis#readme" target="_blank" rel="noopener">
-        <span class="k">START HERE</span>
-        <h4>README</h4>
-        <p>What Aegis is, how to install it, and how to run it on each platform.</p>
-      </a>
-      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">
-        <span class="k">DEEP DIVE</span>
-        <h4>Architecture</h4>
-        <p>Every component, the verification log, and every known gap — documented, not hidden.</p>
-      </a>
-      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/blob/main/docs/DECISIONS.md" target="_blank" rel="noopener">
-        <span class="k">WHY</span>
-        <h4>Decisions</h4>
-        <p>Engineering decisions and the reasoning behind them, kept as a running record.</p>
-      </a>
-      <a class="doc reveal" href="https://github.com/anubhavmohandas/Aegis/issues" target="_blank" rel="noopener">
-        <span class="k">CONTRIBUTE</span>
-        <h4>Issues</h4>
-        <p>Found a bug or want a feature? Issues and PRs are open.</p>
-      </a>
-    </div>
-  </div>
-</section>
-
-<!-- ============ 14 · FAQ ============ -->
-<section id="faq">
-  <div class="wrap">
-    <div class="center">
-      <div class="sec-tag reveal">FAQ</div>
-      <h2 class="reveal">The questions worth asking.</h2>
-    </div>
-    <div class="faq reveal">
-      <details>
-        <summary>Does Aegis replace antivirus?</summary>
-        <div class="a"><b>No — on purpose.</b> Aegis has no signatures, no verdicts, and never blocks or removes anything. It's an awareness layer that runs happily alongside your antivirus. If you need a detector, run one — and let Aegis remember what happened around it.</div>
-      </details>
-      <details>
-        <summary>Does Aegis upload my files?</summary>
-        <div class="a"><b>No.</b> Threat-intelligence lookups send a file's hash to VirusTotal — never the file itself — and only if you enable enrichment. Everything else stays in a local SQLite database.</div>
-      </details>
-      <details>
-        <summary>Does it work offline?</summary>
-        <div class="a"><b>Mostly, yes.</b> Monitoring, severity scoring, Memory, and evidence capture are fully local. Offline you lose VirusTotal enrichment and cloud AI explanations — unless you run Ollama locally, in which case you lose almost nothing.</div>
-      </details>
-      <details>
-        <summary>Which AI models can it use?</summary>
-        <div class="a">OpenAI, Anthropic Claude, NVIDIA-hosted models, and local models via <b>Ollama</b> — plus any OpenAI-compatible endpoint. The provider and key are set from Settings and encrypted at rest. No key? Aegis still watches, scores, and remembers; you just lose the plain-English explanations.</div>
-      </details>
-      <details>
-        <summary>What does "alpha" mean here?</summary>
-        <div class="a">Versioning tracks <b>validation, not features</b>. Alpha means the features are built and macOS is validated on real hardware; Windows runs validated from source with a packaged build pending, and Linux is implemented but not yet hardware-validated. The full verification log is in ARCHITECTURE.md.</div>
-      </details>
-      <details>
-        <summary>Is my data really mine?</summary>
-        <div class="a">Yes. One SQLite file on your disk, exportable to JSON, CSV, or PDF from the dashboard. Delete the file and the history is gone — Aegis keeps no copy anywhere else.</div>
-      </details>
-    </div>
-  </div>
-</section>
-
-<!-- ============ 15 · DOWNLOAD ============ -->
-<section id="download">
-  <div class="wrap">
-    <div class="sec-tag reveal">DOWNLOAD</div>
-    <h2 class="reveal">Running in three commands.</h2>
-    <div class="qs-grid">
-      <div>
-        <p class="sec-lede reveal"><b style="color:var(--text)">desktop_app.py</b> is the real app — one window, live Memory, and Settings. It runs fine without an API key; you just lose the AI explanations, not the watching.</p>
-        <ul class="qs-notes reveal">
-          <li><b>First run:</b> sign in with <b>admin / admin</b>, then change it from <b>Settings → Account</b>.</li>
-          <li><b>API key</b> lives in <b>Settings → AI Explainer</b> — encrypted at rest, survives self-updates.</li>
-          <li><b>Threat intelligence</b> is opt-in: add a VirusTotal key in Settings to enable it.</li>
-          <li><b>Windows:</b> run from an Administrator terminal for full process-monitoring power.</li>
-          <li><b>Headless box?</b> <b>python main.py</b> runs the same monitors as a tray app, configured via <b>config/config.yaml</b>.</li>
-        </ul>
-        <div class="cta-row reveal" style="margin-top:36px">
-          <a class="btn btn-primary" href="https://github.com/anubhavmohandas/Aegis/releases" target="_blank" rel="noopener">Get the latest release ↗</a>
-        </div>
-        <div class="status-box reveal">
-          <div class="kv"><span class="k">version</span><span>v2.0.2-alpha</span></div>
-          <div class="kv"><span class="k">platforms</span><span>windows · macos · linux</span></div>
-          <div class="kv"><span class="k">latest build</span><span>july 2026</span></div>
-          <div class="kv"><span class="k">source</span><span>open · github</span></div>
-        </div>
-      </div>
-      <div class="reveal">
-        <div class="codebox">
-          <div class="cb-bar"><span>terminal</span><span>bash / powershell</span></div>
-          <pre><span class="p">$</span> python -m venv venv &amp;&amp; source venv/bin/activate
-<span class="c"># Windows: venv\Scripts\activate</span>
-<span class="p">$</span> pip install -r requirements-macos.txt
-<span class="c"># or -windows.txt / -linux.txt</span>
-<span class="p">$</span> python desktop_app.py
-<span class="c"># opens the dashboard in its own window — sign in with admin / admin</span></pre>
-        </div>
-        <div class="codebox" style="margin-top:16px">
-          <div class="cb-bar"><span>headless / no window</span><span>tray only</span></div>
-          <pre><span class="p">$</span> python main.py
-<span class="c"># same monitors, no window — reads config/config.yaml + .env</span></pre>
-        </div>
-      </div>
+    <div class="cta-row reveal" style="margin-top:30px">
+      <a class="btn btn-primary" href="https://github.com/anubhavmohandas/Aegis/releases" target="_blank" rel="noopener">Download Beta</a>
+      <a class="btn btn-ghost" href="https://github.com/anubhavmohandas/Aegis" target="_blank" rel="noopener">View on GitHub</a>
     </div>
   </div>
 </section>
 
 <!-- ============ CREATOR ============ -->
-<section class="creator" id="creator">
-  <div class="wrap">
+<section class="creator">
+  <div class="wrap-wide">
     <div class="card reveal">
       <div class="sigil"><img src="assets/tray_icon.png" alt=""></div>
       <div class="who">
         <span class="tag">CREATOR</span>
         <h3>Anubhav Mohandas</h3>
-        <p>
-          I built Aegis because I wanted to actually <b>understand</b> my own machine —
-          not trust a black box to grade it for me. Every design choice follows from that:
-          score locally, explain plainly, remember everything, promise nothing. Built with
-          love, shipped with honesty. 🛡️
-        </p>
+        <p>I built Aegis because I wanted to actually <b>understand</b> my own machine — not trust a
+          black box to grade it for me. Score locally, explain plainly, remember everything, promise
+          nothing. 🛡️</p>
       </div>
       <div class="links">
-        <a class="btn btn-primary" href="https://anubhavmohandas.netlify.app" target="_blank" rel="noopener">Portfolio ↗</a>
+        <a class="btn btn-ghost" href="https://anubhavmohandas.netlify.app" target="_blank" rel="noopener">Portfolio ↗</a>
         <a class="btn btn-ghost" href="https://github.com/anubhavmohandas" target="_blank" rel="noopener">GitHub ↗</a>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ============ FOOTER ============ -->
 <footer>
-  <div class="wrap">
+  <div class="wrap-wide">
     <div class="foot-inner">
       <img src="assets/tray_icon.png" alt="">
       <span class="fbrand">AEGIS</span>
       <span class="sep">/</span>
       <a href="https://github.com/anubhavmohandas/Aegis" target="_blank" rel="noopener">GitHub</a>
       <span class="sep">·</span>
-      <a href="#docs">Docs</a>
+      <a href="https://github.com/anubhavmohandas/Aegis/releases" target="_blank" rel="noopener">Releases</a>
       <span class="sep">·</span>
       <a href="https://github.com/anubhavmohandas/Aegis/issues" target="_blank" rel="noopener">Report an issue</a>
-      <span class="sep">·</span>
-      <span style="color:#4A5462;font-family:var(--font-mono);font-size:11.5px;letter-spacing:.04em">press ? for shortcuts</span>
     </div>
     <p class="foot-disclaimer">
-      AEGIS IS NOT ANTIVIRUS AND PROVIDES NO SECURITY GUARANTEES. IT IS A PERSONAL
-      AWARENESS TOOL, NOT A DETECTOR. EVENTS ARE SCORED LOCALLY; THREAT-INTELLIGENCE
-      ENRICHMENT AND AI EXPLANATIONS ARE OPTIONAL AND REQUIRE API KEYS. THE SCENARIO
-      AND DEMO SHOWN ABOVE ARE ILLUSTRATIVE.
+      AEGIS IS NOT ANTIVIRUS AND PROVIDES NO SECURITY GUARANTEES. IT IS A PERSONAL AWARENESS TOOL,
+      NOT A DETECTOR. EVENTS ARE SCORED LOCALLY; THREAT-INTELLIGENCE ENRICHMENT AND AI EXPLANATIONS
+      ARE OPTIONAL AND REQUIRE API KEYS. THE 02:14 SCENARIO SHOWN ABOVE IS ILLUSTRATIVE.
     </p>
   </div>
 </footer>
 
-<div class="kbd-overlay" id="kbd" hidden>
-  <div class="kbd-card" role="dialog" aria-label="Keyboard shortcuts">
-    <div class="kt">KEYBOARD</div>
-    <div class="kbd-row"><span>github</span><kbd>G</kbd></div>
-    <div class="kbd-row"><span>download</span><kbd>D</kbd></div>
-    <div class="kbd-row"><span>back to top</span><kbd>T</kbd></div>
-    <div class="kbd-row"><span>simulate incident</span><kbd>S</kbd></div>
-    <div class="kbd-row"><span>close</span><kbd>Esc</kbd></div>
-  </div>
-</div>
-
 <script>
-/* reveal on scroll */
-const io = new IntersectionObserver((entries)=>{
-  for (const e of entries){
-    if (e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); }
-  }
-},{threshold:.06});
-document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
-
-/* hero demo — simulate an incident in the Memory feed */
-const demoBtn = document.getElementById('demo-btn');
-const mem = document.getElementById('mem');
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const SCRIPT = [
-  {mk:'ses', tm:'14:21', html:'screen locked — Away Session started'},
-  {mk:'med', tm:'14:36', html:'USB device connected — SanDisk Ultra USB 3.0'},
-  {mk:'high', tm:'14:37', html:'invoice.pdf.exe created in ~/Downloads<span class="badge intel">EVIDENCE CAPTURED</span>'},
-  {mk:'crit', tm:'14:37', html:'VirusTotal: 48 / 76 engines flag this hash<span class="badge threat">T1036 MASQUERADING</span>'},
-  {mk:'crit', tm:'14:38', html:'new startup entry registered by invoice.pdf.exe<span class="badge threat">T1547 PERSISTENCE</span>'},
-  {mk:'ses', tm:'14:52', html:'you unlocked — Away Session closed' +
-    '<span class="ai">While you were away for 31 minutes, a disguised executable arrived by USB, was flagged by 48 engines, and registered itself to run at startup. A copy and its hashes were preserved as evidence. This needs your attention.</span>'}
-];
-let baseline = null;
-demoBtn.addEventListener('click', () => {
-  if (baseline === null) baseline = mem.innerHTML;
-  mem.innerHTML = baseline;
-  demoBtn.disabled = true;
-  SCRIPT.forEach((s, i) => {
-    setTimeout(() => {
-      const div = document.createElement('div');
-      div.className = 'mem-evt enter';
-      div.innerHTML = '<span class="mk ' + s.mk + '">●</span><span class="tm">' + s.tm + '</span><span class="what">' + s.html + '</span>';
-      mem.appendChild(div);
-      div.scrollIntoView({block:'nearest', behavior: reduced ? 'auto' : 'smooth'});
-      if (i === SCRIPT.length - 1){ demoBtn.disabled = false; demoBtn.textContent = '↺ Replay'; }
-    }, reduced ? i * 60 : 650 + i * 900);
+
+/* nav gains a background once you leave the hero */
+const nav = document.getElementById('nav');
+const onScroll = () => nav.classList.toggle('stuck', scrollY > 40);
+addEventListener('scroll', onScroll, {passive:true});
+onScroll();
+
+/* reveal on scroll */
+const io = new IntersectionObserver((entries) => {
+  for (const e of entries) if (e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); }
+}, {threshold:.06, rootMargin:'0px 0px -6% 0px'});
+document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+/* section videos: only decode what's on screen. reduced motion -> give controls, never autoplay. */
+const vids = document.querySelectorAll('video[data-io]');
+if (reduced){
+  vids.forEach(v => { v.controls = true; v.preload = 'metadata'; });
+  document.querySelector('.hero-video')?.removeAttribute('autoplay');
+} else {
+  const vio = new IntersectionObserver((entries) => {
+    for (const e of entries){
+      const v = e.target;
+      if (e.isIntersecting){ v.play().catch(() => { v.controls = true; }); }
+      else if (!v.paused){ v.pause(); }
+    }
+  }, {threshold:.25});
+  vids.forEach(v => vio.observe(v));
+}
+
+/* vs. other tools — same 02:14 event, rendered by each tool */
+const VS = {
+  edr: {name:'EDR / XDR CONSOLE',
+    raw:'<span class="k">host</span>   DESKTOP-4A2   <span class="k">agent</span> 7.14.3\n<span class="k">time</span>   02:14:07\n\ndetection ......... <span class="nil">none</span>\nsignature match ... <span class="nil">none</span>\nseverity .......... <span class="nil">informational</span>\naction taken ...... <span class="nil">none</span>\n\n<span class="k">// no policy violation. nothing to isolate.</span>\n<span class="k">// visible only in your admin\'s console.</span>',
+    verdict:'Built to <b>stop attackers across a fleet</b> — and it does that well. But nobody attacked you. Someone just used your laptop, and that isn\'t a policy violation.'},
+  siem: {name:'SIEM — SEARCH',
+    raw:'&gt; index=win host=DESKTOP-4A2 earliest=-8h\n  | stats count by EventCode\n\n<span class="k">EventCode  count</span>\n4663       8,214\n6416         137\n4624          52\n...\n\n<span class="warn">12,481 events matched. Refine your search.</span>',
+    verdict:'Powerful — <b>if you already know what you\'re looking for</b>, and have an analyst to write the query. The answer is in there. So is everything else.'},
+  av: {name:'WINDOWS DEFENDER',
+    raw:'  Quick scan complete.\n\n  <span class="k">Threats found:</span> 0\n  <span class="k">Last scan:</span>     today, 07:31\n\n  <span class="nil">Your device is being protected.</span>',
+    verdict:'It checked the file against signatures and found nothing to quarantine. <b>It has no opinion on who plugged in a USB at 2am</b> — that was never its job.'},
+  taskmgr: {name:'ACTIVITY MONITOR — NOW',
+    raw:'<span class="k">PROCESS          %CPU    MEMORY</span>\nFinder            0.4     182 MB\nSafari            2.1     1.02 GB\nSpotlight         0.1      64 MB\n\n<span class="nil">// live view only. no history.</span>\n<span class="warn">02:14 was 5 hours ago. It\'s gone.</span>',
+    verdict:'Perfect for <b>what\'s running right now</b>. Close the window and the past closes with it — there is no yesterday to scroll back to.'},
+  evtx: {name:'EVENT VIEWER',
+    raw:'<span class="k">Event 6416, Kernel-PnP</span>\nA new external device was recognized by the\nsystem. DeviceInstanceId: USBSTOR\\DISK&amp;VEN_\nSANDISK&amp;PROD_ULTRA&amp;REV_1.00\\4C5300012308...\n\n<span class="k">Event 4663, Security-Auditing</span>\nAn attempt was made to access an object.\nAccesses: WriteData (or AddFile)\nObject Name: C:\\Users\\...\\Downloads\\invoice.pdf.exe',
+    verdict:'Every fact you need is <b>technically already there</b> — buried in 12,000 siblings, unsorted, unscored, and written for the kernel, not for you.'},
+  spy: {name:'MONITORING APP',
+    raw:'<span class="k">02:14</span>  screenshot_0241.png  <span class="warn">uploaded</span>\n<span class="k">02:14</span>  keystrokes.log       <span class="warn">uploaded</span>\n<span class="k">02:15</span>  clipboard.txt        <span class="warn">uploaded</span>\n\n<span class="warn">// your content left the machine.</span>\n<span class="nil">// someone else decides what it meant.</span>',
+    verdict:'It saw everything, including <b>your private content</b> — then shipped it to somebody else\'s server. Aegis records system events, never content, and never uploads.'}
+};
+const vsRaw = document.getElementById('vs-raw');
+const vsName = document.getElementById('vs-name');
+const vsVerdict = document.getElementById('vs-verdict');
+function showVs(key){
+  const d = VS[key];
+  vsName.textContent = d.name;
+  vsRaw.innerHTML = d.raw;
+  vsVerdict.innerHTML = d.verdict;
+  vsRaw.classList.remove('swap'); void vsRaw.offsetWidth; vsRaw.classList.add('swap');
+}
+document.querySelectorAll('.chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', String(c === chip)));
+    showVs(chip.dataset.vs);
   });
 });
-
-/* keyboard shortcuts */
-const kbd = document.getElementById('kbd');
-addEventListener('keydown', (e) => {
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
-  const behavior = reduced ? 'auto' : 'smooth';
-  if (e.key === '?'){ kbd.hidden = !kbd.hidden; }
-  else if (e.key === 'Escape'){ kbd.hidden = true; return; }
-  else if (e.key === 'g' || e.key === 'G'){ window.open('https://github.com/anubhavmohandas/Aegis', '_blank', 'noopener'); }
-  else if (e.key === 'd' || e.key === 'D'){ document.getElementById('download').scrollIntoView({behavior}); }
-  else if (e.key === 't' || e.key === 'T'){ scrollTo({top:0, behavior}); }
-  else if (e.key === 's' || e.key === 'S'){ scrollTo({top:0, behavior}); demoBtn.click(); }
-  else return;
-  e.preventDefault();
-});
-kbd.addEventListener('click', (e) => { if (e.target === kbd) kbd.hidden = true; });
+showVs('edr');
 </script>
 
 </body>

@@ -17,7 +17,7 @@
 
   --text: #F5F7FA;
   --secondary: #A3AFBF;
-  --dim: #6B7684;
+  --dim: #8A94A3;   /* was #6B7684 — only 4.13:1 on --bg, under WCAG AA. now 6.28:1. */
 
   /* severity ramp (derived from the semantic colors above) */
   --sev-low: #7F8EA3;
