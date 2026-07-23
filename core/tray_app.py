@@ -46,7 +46,12 @@ class TrayApp:
         self.on_open_dashboard()
 
     def _quit(self, icon, item):
-        self.on_quit()
+        # on_quit may veto by returning False (main.py's password gate:
+        # quitting is a protected action, same as the desktop app's Quit).
+        # Without this check the icon stopped regardless, and with every
+        # other thread daemonized, a stopped tray loop IS a quit.
+        if self.on_quit() is False:
+            return
         icon.stop()
 
     def run_blocking(self):

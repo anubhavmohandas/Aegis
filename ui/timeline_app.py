@@ -177,6 +177,13 @@ def main():
     parser.add_argument("--db", default="aegis_events.db", help="Path to the SQLite event store")
     args = parser.parse_args()
 
+    # Same guard dashboard/server.py's CLI has: EventStore(path) CREATEs a
+    # fresh empty DB if the path is wrong, so a typo'd --db silently showed
+    # an empty timeline instead of an error.
+    if not Path(args.db).is_file():
+        sys.exit(f"error: event store not found at {args.db!r} -- run main.py first, "
+                 f"or pass --db path/to/aegis_events.db")
+
     app = QApplication(sys.argv)
     store = EventStore(args.db)
     window = TimelineWindow(store)

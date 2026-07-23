@@ -16,11 +16,13 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_JS = (ROOT / "dashboard/static/app.js").read_text()
+APP_JS = (ROOT / "dashboard/static/app.js").read_text(encoding="utf-8")
 
 
 def test_downloads_enabled_before_start():
-    src = (ROOT / "desktop_app.py").read_text()
+    # encoding matters: both files contain non-ASCII (em-dashes), and
+    # Windows' locale default (cp1252) can raise UnicodeDecodeError on them.
+    src = (ROOT / "desktop_app.py").read_text(encoding="utf-8")
     setting = src.index("webview.settings['ALLOW_DOWNLOADS'] = True")
     assert setting < src.index("webview.start(")
 

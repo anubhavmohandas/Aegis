@@ -124,7 +124,29 @@ def main(use_tray: bool = True):
         # run, and useful on Linux dev boxes without a desktop tray.
         return dispatcher, all_monitors, on_quit
 
-    tray = TrayApp(on_quit=on_quit)
+    def gated_quit():
+        # Tray Quit honors the tamper gate exactly like the desktop app's
+        # menu-bar Quit (password prompt + lockout + evidence capture) --
+        # this was the one quit path in the app that skipped it. Returns
+        # False to veto (TrayApp._quit then keeps the icon running).
+        # Lazy import: desktop_app imports this module at load time.
+        # Ctrl-C below stays ungated on purpose: terminal access already
+        # defeats a userland gate (kill -9), and that path is covered
+        # after the fact by heartbeat-gap detection, not prevention.
+        try:
+            from desktop_app import _authorize_action
+            allowed = _authorize_action("quit", "Quit Aegis",
+                                        "Enter the dashboard password to quit Aegis.")
+        except Exception:
+            # A tamper gate must fail CLOSED: an import/dialog error means
+            # "keep running", never a silent quit bypass.
+            logger.warning("Quit gate errored -- refusing to quit (fail closed).", exc_info=True)
+            return False
+        if not allowed:
+            return False
+        on_quit()
+
+    tray = TrayApp(on_quit=gated_quit)
     try:
         # macOS requires the tray/run-loop to own the main thread.
         tray.run_blocking()
