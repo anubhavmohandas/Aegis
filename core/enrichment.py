@@ -13,9 +13,10 @@ WHY THIS IS OPT-IN (enrich_enabled defaults to false) AND GATED:
     allowlist philosophy, Aegis never sends anything off-box without the
     user explicitly turning it on.
   - Quota: the VT free tier is 4 lookups/min, 500/day. The dispatcher allows
-    20 events/min, so enrichment CANNOT be per-event: only high/critical
-    events are enriched, results are cached in SQLite (so chrome.exe starting
-    400 times costs one lookup, and cached verdicts work offline), and an
+    20 events/min, so enrichment CANNOT be per-event: only events at/above a
+    configurable severity floor (config.enrich_min_severity, default "medium")
+    are enriched, results are cached in SQLite (so chrome.exe starting 400
+    times costs one lookup, and cached verdicts work offline), and an
     in-process budget stays under the free-tier rate.
   - Hash-only, never upload: a file VT has never seen returns 404 and is
     reported as "unknown_hash" -- uploading the user's file to a public
@@ -47,7 +48,7 @@ import certifi
 
 from core.events import EventCategory, MonitorEvent
 from core.rule_engine import _sha256_of  # reuse: same size cap + locked-file handling
-from core.severity_engine import _SUSPICIOUS_PATH_FRAGMENTS
+from core.severity_engine import SEVERITY_ORDER, _SUSPICIOUS_PATH_FRAGMENTS
 
 logger = logging.getLogger("aegis.enrichment")
 
@@ -66,7 +67,14 @@ _CACHE_TTL_SECONDS = 24 * 3600   # occam: one flat TTL; verdicts do change (esp.
                                  # gaining detections days later), so "forever" would be wrong
 _QUOTA_BACKOFF_SECONDS = 600     # after a 429, stop trying for a while instead of burning the budget
 
-_ENRICHABLE_SEVERITIES = {"high", "critical"}
+# Enrichment runs at/above this severity floor (config.enrich_min_severity
+# overrides it). Default "medium", not "high/critical": on an ordinary machine
+# the high/critical events are monitoring gaps and tamper alerts, which have no
+# file to hash -- so a high-only floor means VT verdicts essentially never
+# appear during normal use. The 24h per-hash cache keeps "medium" cheap:
+# repeated binaries cost one lookup, not one per launch. Raise to "high" if the
+# VT free-tier quota (500/day) is a concern.
+_DEFAULT_ENRICH_FLOOR = "medium"
 
 # The four stats buckets that mean "an engine actually scanned this" -- the
 # denominator VT's own UI uses. Excludes timeout/failure/type-unsupported.
@@ -146,7 +154,7 @@ class ThreatEnricher:
         Every failure path attaches nothing and the pipeline proceeds as if
         enrichment were off."""
         try:
-            if severity not in _ENRICHABLE_SEVERITIES:
+            if not self._enrichable(severity):
                 return
             intel: dict = {}
             techniques = mitre_techniques(event)
@@ -161,6 +169,17 @@ class ThreatEnricher:
             # Same contract as every other pipeline stage guard: enrichment
             # must never take the dispatcher down or block the explanation.
             logger.exception("Enrichment failed for %r -- continuing without it", event.summary)
+
+    def _enrichable(self, severity: str) -> bool:
+        """True if severity is at/above the configured floor. An unknown
+        severity fails CLOSED (no enrichment) -- the cautious direction here is
+        'don't disclose a hash to VirusTotal when unsure', the opposite of the
+        notify floor, which fails open toward more noise."""
+        floor = getattr(self.config, "enrich_min_severity", _DEFAULT_ENRICH_FLOOR)
+        try:
+            return SEVERITY_ORDER.index(severity) >= SEVERITY_ORDER.index(floor)
+        except ValueError:
+            return False
 
     # --- VirusTotal --------------------------------------------------------
 
@@ -311,13 +330,27 @@ if __name__ == "__main__":
     assert all(e._under_budget() for _ in range(_VT_BUDGET_PER_MINUTE))
     assert not e._under_budget()
 
-    # --- severity gate + no-key path: annotate() attaches nothing, never raises
-    low = ev(EventCategory.PROCESS_STARTED, {"exe": "/Users/x/Downloads/a.exe"})
-    e.annotate(low, "medium")
-    assert "threat_intel" not in low.details
+    # --- severity floor (default "medium" -- _Cfg has no enrich_min_severity)
+    lo = ev(EventCategory.PROCESS_STARTED, {"exe": "/Users/x/Downloads/a.exe"})
+    e.annotate(lo, "low")
+    assert "threat_intel" not in lo.details            # below floor -> skipped, no lookup
+    med = ev(EventCategory.PROCESS_STARTED, {"exe": "/Users/x/Downloads/a.exe"})
+    e.annotate(med, "medium")
+    assert med.details["threat_intel"]["mitre"][0]["id"] == "T1204.002"  # medium now enriched (offline half, keyless)
     hi = ev(EventCategory.STARTUP_ITEM_ADDED, {"name": "evil", "path": "/nonexistent"})
     e.annotate(hi, "high")
-    assert hi.details["threat_intel"]["mitre"][0]["id"] == "T1547"  # offline half still works keyless
+    assert hi.details["threat_intel"]["mitre"][0]["id"] == "T1547"  # high still works keyless
+    assert e._enrichable("critical") and not e._enrichable("bogus")  # unknown severity fails closed
+
+    # --- floor is configurable: raise it to "high" and medium is skipped again
+    class _HiCfg:
+        db_path = _Cfg.db_path
+        vt_api_key = None
+        enrich_min_severity = "high"
+    e_hi = ThreatEnricher(_HiCfg())
+    med2 = ev(EventCategory.PROCESS_STARTED, {"exe": "/Users/x/Downloads/a.exe"})
+    e_hi.annotate(med2, "medium")
+    assert "threat_intel" not in med2.details          # floor raised -> medium below it -> skipped
 
     print("enrichment self-check: OK")
 

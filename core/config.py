@@ -94,8 +94,11 @@ class AppConfig:
     trusted_process_hashes: list[str] = field(default_factory=list)  # sha256, harder to spoof than name -- see core/rule_engine.py
     trusted_usb_ids: list[str] = field(default_factory=list)        # opt-in AI-call skip, see core/rule_engine.py
     enrich_enabled: bool = False            # opt-in threat enrichment (VirusTotal hash lookups + local MITRE
-                                            # annotations) for high/critical events. Default OFF: querying a
-                                            # hash discloses it to VirusTotal -- see core/enrichment.py.
+                                            # annotations). Default OFF: querying a hash discloses it to
+                                            # VirusTotal -- see core/enrichment.py.
+    enrich_min_severity: str = "medium"     # severity floor for enrichment (low|medium|high|critical).
+                                            # "medium" so VT verdicts appear during normal use; raise to
+                                            # "high" to cut VirusTotal free-tier quota use.
     # --- Tamper protection (see core/evidence.py + dashboard tamper endpoints) ---
     tamper_require_password: bool = True    # require the dashboard password to Stop Monitoring / Quit
     tamper_attempts_before_capture: int = 3 # failed attempts before evidence is captured
@@ -165,6 +168,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         trusted_process_hashes=_parse_str_list(raw, "trusted_process_hashes"),
         trusted_usb_ids=_parse_str_list(raw, "trusted_usb_ids"),
         enrich_enabled=bool(raw.get("enrich_enabled", False)),
+        enrich_min_severity=_parse_enrich_floor(raw.get("enrich_min_severity", "medium")),
         tamper_require_password=bool(raw.get("tamper_require_password", True)),
         tamper_attempts_before_capture=max(1, _parse_int(raw, "tamper_attempts_before_capture", 3)),
         tamper_evidence_screenshot=bool(raw.get("tamper_evidence_screenshot", True)),
@@ -219,6 +223,19 @@ def _parse_min_severity(value) -> str:
         file=sys.stderr,
     )
     return "low"
+
+
+def _parse_enrich_floor(value) -> str:
+    """Severity floor for threat enrichment. Unlike the notify floor, an invalid
+    value falls back to 'medium' (the default), NOT 'low': 'low' would mean
+    'enrich everything', the most quota- and disclosure-hungry direction, which
+    is the wrong way to fail for something that sends hashes off-box."""
+    level = str(value).strip().lower()
+    if level in ("low", "medium", "high", "critical"):
+        return level
+    print(f"[config] WARNING: enrich_min_severity {value!r} is not one of "
+          f"low/medium/high/critical -- using 'medium'.", file=sys.stderr)
+    return "medium"
 
 
 def _parse_int(raw: dict, key: str, default: int) -> int:

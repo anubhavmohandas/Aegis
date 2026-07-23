@@ -82,3 +82,7 @@ trusted_usb_ids: []           # e.g. ["usb\\vid_0781&pid_5581\\...\\"] (Windows 
 # The VT API key is not stored here: set the VT_API_KEY environment variable
 # (or a VT_API_KEY line in .env). Free-tier keys: https://www.virustotal.com
 enrich_enabled: false
+# Severity floor for enrichment: low | medium | high | critical. "medium"
+# (default) surfaces VT verdicts during normal use; "high" enriches only
+# high/critical events to conserve the VirusTotal free-tier quota (500/day).
+enrich_min_severity: medium

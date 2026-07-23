@@ -339,6 +339,25 @@ h2{
 }
 .compare tr:last-child td{border-bottom:none}
 .compare td:last-child{color:#D6DEE8;border-left:1px solid var(--border-soft);background:rgba(60,177,121,.025)}
+/* three-column variant: tool · what it does · what aegis does */
+.compare.trio{overflow-x:auto}
+.compare.trio th:nth-child(2),.compare.trio td:nth-child(2){border-left:1px solid var(--border-soft)}
+.compare.trio td:first-child{
+  color:var(--text);font-family:var(--font-display);font-weight:600;white-space:nowrap;
+}
+.compare.trio td:first-child em{
+  display:block;font-family:var(--font-mono);font-style:normal;font-weight:400;
+  font-size:11px;letter-spacing:.04em;color:var(--dim);margin-top:4px;
+}
+.not-list{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:0 48px;margin-top:56px;
+}
+.not-list div{border-top:1px solid var(--border-soft);padding:24px 0 6px}
+.not-list b{
+  display:block;font-family:var(--font-display);font-weight:600;font-size:15.5px;
+  color:var(--text);margin-bottom:7px;
+}
+.not-list p{font-size:14px;line-height:1.75}
 
 /* ---- features: stories, not cards ---- */
 .feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0 48px;margin-top:64px}
@@ -557,15 +576,16 @@ html.js .reveal.in{opacity:1;transform:none}
   section{padding:110px 0}
   .stop{grid-template-columns:1fr;gap:10px;padding:30px 0}
   .shots{grid-template-columns:1fr}
-  .feat-grid,.priv-list{grid-template-columns:1fr 1fr;gap:0 36px}
+  .feat-grid,.priv-list,.not-list{grid-template-columns:1fr 1fr;gap:0 36px}
   .road{grid-template-columns:1fr;gap:48px}
   .docs-grid{grid-template-columns:1fr 1fr}
   .qs-grid{grid-template-columns:1fr;gap:44px}
   .nav-links a:not(.btn){display:none}
 }
 @media (max-width:560px){
-  .feat-grid,.priv-list,.docs-grid{grid-template-columns:1fr}
+  .feat-grid,.priv-list,.docs-grid,.not-list{grid-template-columns:1fr}
   .compare th,.compare td{padding:14px 18px;font-size:13px}
+  .compare.trio table{min-width:620px}
   section{padding:88px 0}
   .mem-evt{grid-template-columns:14px 46px 1fr;gap:9px;padding:11px 14px}
 }
@@ -582,6 +602,7 @@ html.js .reveal.in{opacity:1;transform:none}
     <div class="nav-links">
       <a href="#how">how it works</a>
       <a href="#memory">memory</a>
+      <a href="#compare">vs. other tools</a>
       <a href="#features">features</a>
       <a href="#privacy">privacy</a>
       <a href="#docs">docs</a>
@@ -867,6 +888,79 @@ html.js .reveal.in{opacity:1;transform:none}
         </tbody>
       </table>
     </div>
+  </div>
+</section>
+
+<!-- ============ 7b · AEGIS vs THE TOOLS YOU ALREADY HAVE ============ -->
+<section id="compare">
+  <div class="wrap">
+    <div class="sec-tag reveal">WHERE AEGIS FITS</div>
+    <h2 class="reveal">You already have security tools.<br>None of them tell you the story.</h2>
+    <p class="sec-lede reveal">
+      EDR blocks. Antivirus scans. Event Viewer records everything and explains nothing.
+      Aegis sits in the gap none of them cover: remembering what happened on <b>your</b>
+      machine, in words you don't need a SOC analyst to read.
+    </p>
+    <div class="compare trio reveal">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Tool</th>
+            <th scope="col">What it's built to do</th>
+            <th scope="col">What Aegis does instead</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>EDR / XDR<em>CROWDSTRIKE · SENTINELONE · DEFENDER FOR ENDPOINT</em></td>
+            <td>Detect and <b>respond</b> across a fleet — kill processes, isolate hosts, feed a security team's console. Managed by someone else, licensed per seat.</td>
+            <td>Never blocks, kills, or quarantines. One machine, owned by you, no console and no admin above you. It observes and explains; every decision stays yours.</td>
+          </tr>
+          <tr>
+            <td>SIEM<em>SPLUNK · ELASTIC · WAZUH · SENTINEL</em></td>
+            <td>Aggregate logs from hundreds of hosts, then wait for an analyst to write the right query and build the right dashboard.</td>
+            <td>No query language, no dashboards to build. The timeline is already filtered, scored, and written in English — for the one host that's yours.</td>
+          </tr>
+          <tr>
+            <td>Antivirus<em>WINDOWS DEFENDER · XPROTECT · MALWAREBYTES</em></td>
+            <td>Match files against signatures and heuristics, then quarantine what looks malicious. Silent when nothing matches.</td>
+            <td>Doesn't scan files for malware and doesn't try to replace it. Records the events antivirus has no opinion on — a USB at 02:14, a new login item, someone using your laptop.</td>
+          </tr>
+          <tr>
+            <td>Task Manager<em>ACTIVITY MONITOR · TOP · PROCESS EXPLORER</em></td>
+            <td>Show what's running <b>right now</b>. Close the window and the past is gone — there's no history to go back to.</td>
+            <td>History is the entire point. What ran at 02:14 while you slept is still there tomorrow, with its parent process and why it was flagged.</td>
+          </tr>
+          <tr>
+            <td>Event Viewer<em>CONSOLE.APP · JOURNALCTL · SYSLOG</em></td>
+            <td>Record everything the OS emits — thousands of entries a day, no severity you'd trust, no context, no explanation. Archaeology.</td>
+            <td>Keeps only what's worth remembering, scores it locally, enriches it with VirusTotal and MITRE ATT&amp;CK, and explains each event in a sentence.</td>
+          </tr>
+          <tr>
+            <td>Monitoring apps<em>PARENTAL · EMPLOYEE SURVEILLANCE</em></td>
+            <td>Capture screens, keystrokes, and content, and ship it to somebody else's server for somebody else to read.</td>
+            <td>Records system events, not content. No screenshots of your work, no keylogging, no upload — the database is a file on your disk.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="not-list reveal">
+      <div>
+        <b>Not a replacement</b>
+        <p>Keep Defender on. Keep your EDR if you have one. Aegis answers a question they were never designed to answer.</p>
+      </div>
+      <div>
+        <b>Not a verdict machine</b>
+        <p>Severity is a hint, not a judgment. Aegis has no allow/deny, no "you're protected" badge, and no guarantees.</p>
+      </div>
+      <div>
+        <b>Not enterprise software</b>
+        <p>One machine, one person, no agents to enroll and no fleet to manage. If you need a SOC, you need a SIEM.</p>
+      </div>
+    </div>
+
+    <p class="closer reveal">Everything else watches for attackers.<br>Aegis watches for <span style="color:var(--primary)">what you missed</span>.</p>
   </div>
 </section>
 

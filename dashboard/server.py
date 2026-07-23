@@ -547,6 +547,10 @@ def write_settings(body: dict) -> dict:
         "trusted_usb_ids": _clean_str_list(body.get("trusted_usb_ids")),
         # VirusTotal threat enrichment (core/enrichment.py) -- now UI-managed.
         "enrich_enabled": bool(body.get("enrich_enabled", _passthrough("enrich_enabled", False))),
+        # Severity floor for enrichment. No UI field yet, so this is pure
+        # passthrough -- without it, saving Settings would silently reset a
+        # hand-tuned "high" back to the default and quietly multiply VT usage.
+        "enrich_min_severity": str(_passthrough("enrich_min_severity", "medium")),
         # Tamper protection (core/evidence.py).
         "tamper_require_password": bool(body.get("tamper_require_password",
                                                  _passthrough("tamper_require_password", True))),
