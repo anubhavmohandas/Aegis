@@ -111,7 +111,7 @@ class MonitorPipeline:
                 except Exception:
                     logger.warning("Error rolling back %s", m.__class__.__name__, exc_info=True)
             if dispatcher is not None:
-                dispatcher.stop()   # shuts the explainer pool; the queue is dropped with us
+                dispatcher.stop()   # explainer pool + DB handles; the queue is dropped with us
             raise
 
         self._monitors = monitors

@@ -272,6 +272,14 @@ class ThreatEnricher:
             logger.warning("VT cache read failed (%s) -- treating as miss", e)
             return None
 
+    def close(self) -> None:
+        """Release the lazily-opened cache connection. Called by
+        Dispatcher.stop() -- without it, every Stop/Start cycle in the desktop
+        app leaked this handle alongside the event store's."""
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
     def _cache_put(self, sha256: str, payload: dict) -> None:
         try:
             conn = self._get_conn()

@@ -77,7 +77,7 @@ hiddenimports = ["anthropic", "openai"]
 # Never bundle the other platforms' collector packages or their native deps;
 # they can't import on this OS and only produce warnings/bloat.
 # tkinter only excluded on macOS: the tray's password/info dialogs use native
-# NSAlert there, but desktop_app._prompt_stop_password_tk needs tkinter on
+# NSAlert there, but desktop_app._prompt_password_tk needs tkinter on
 # Windows/Linux -- excluding it everywhere silently broke the packaged tray Stop.
 excludes = ["PySide6", "pytest"]
 

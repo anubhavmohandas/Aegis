@@ -180,6 +180,25 @@ class Dispatcher:
         # "Stop monitoring" must feel instant. Pending explanations are lost,
         # their events are not -- every row is already persisted.
         self._explain_pool.shutdown(wait=False, cancel_futures=True)
+        # Confirmed bug: neither connection was ever closed. The desktop app's
+        # Stop/Start Monitoring builds a WHOLE NEW Dispatcher each start (see
+        # desktop_app.MonitorPipeline.start -- none of these classes are
+        # restart-safe, so "always construct new" is the pattern), and the old
+        # one's SQLite handle just stayed open. Measured: 10 stop/start cycles
+        # leaked 10 file descriptors, and a Settings save triggers a restart.
+        # Closing here rather than at the end of run_forever() also covers the
+        # rollback path in MonitorPipeline.start(), where stop() can be called
+        # on a Dispatcher whose thread never started.
+        for closeable in (self.store, self.enricher):
+            if closeable is None:
+                continue
+            try:
+                closeable.close()
+            except Exception as e:
+                # A pool thread finishing its AI call can still race a write in
+                # here; _explain_async/_persist already log and move on. Never
+                # let cleanup be the thing that breaks a stop.
+                logger.debug("Error closing %s: %s", closeable.__class__.__name__, e)
 
     # --- pipeline entry point -------------------------------------------
     # Decomposed into one method per stage (v2 cleanup -- this was previously

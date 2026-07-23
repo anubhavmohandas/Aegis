@@ -864,7 +864,18 @@ def stop_monitor() -> dict:
         # Stops the collector+dispatcher threads (desktop_app.py's
         # MonitorPipeline.stop) but leaves the app/window/dashboard server
         # running -- pausing monitoring is not the same as quitting the app.
-        DashboardHandler.monitor_stop_callback()
+        #
+        # Same guard start_monitor() already carries, and for the same reason:
+        # the password gate above has already passed at this point, so a raise
+        # here is a genuine failure to stop, not a rejected request -- and it
+        # escaped do_POST (which catches only BrokenPipeError) as a dropped
+        # connection, leaving the UI saying "Request failed" with no way to
+        # tell whether monitoring is still running.
+        try:
+            DashboardHandler.monitor_stop_callback()
+        except Exception as e:
+            logger_srv.exception("In-process monitor stop failed")
+            return {**monitor_status(), "error": f"could not stop monitoring: {e}"}
         return monitor_status()
     state = _read_monitor_state()
     pid = state["pid"] if state and _process_alive(state.get("pid", -1)) else _find_external_monitor_pid()
@@ -967,13 +978,23 @@ def _register_failed_attempt(action: str, cfg=None) -> dict:
     # is exactly why it passed None) -- so re-deriving it here has to go through
     # the never-raises path, or this re-raises the error the caller handled.
     cfg = cfg or _safe_config()
-    # The whole body runs under one lock. Without it, a burst of parallel wrong
-    # passwords each read st["fails"]/st["captured"] before any of them wrote,
-    # so N threads all saw "not captured yet" and all fired capture_incident():
-    # 20 concurrent attempts produced 18 incident folders -- 18 screenshots and
-    # 18 contending grabs of a single webcam -- and left the fails counter at 0.
-    # A brute-force burst is precisely when this path must stay accurate, and
-    # serializing wrong-password handling is a feature here, not a cost.
+    # ONLY THE BOOKKEEPING RUNS UNDER THE LOCK -- the counter, the lockout
+    # window, and the decision of which attempt performs the capture.
+    #
+    # Why the lock at all: without it, a burst of parallel wrong passwords each
+    # read st["fails"]/st["captured"] before any of them wrote, so N threads all
+    # saw "not captured yet" and all fired capture_incident(): 20 concurrent
+    # attempts produced 18 incident folders -- 18 screenshots and 18 contending
+    # grabs of a single webcam -- and left the fails counter at 0.
+    #
+    # Why the slow work is NOT under it: the DB write and capture_incident()
+    # together take seconds (screencapture, up to 8s settling a webcam, a 3s
+    # public-IP fetch). Holding one global lock across all of that meant a
+    # single wrong password froze every OTHER gated action -- Settings, Delete
+    # Evidence, sign-in -- for that whole stretch, and on macOS the quit gate
+    # runs on the Cocoa main thread, so the window beachballed with it. Claiming
+    # the capture under the lock ("this attempt is the one") keeps the
+    # once-only guarantee a burst needs without paying for it in lock time.
     # occam: one global lock over all actions; per-action locks only if a real
     # workload ever has two different gates being attacked at the same time.
     with _tamper_lock:
@@ -988,43 +1009,47 @@ def _register_failed_attempt(action: str, cfg=None) -> dict:
         if locked:
             return locked
         st = _tamper_state.setdefault(action, {"fails": 0, "locked_until": 0.0, "captured": False})
-        time.sleep(0.4)  # blunt guessing damper
+        time.sleep(0.4)  # blunt guessing damper -- inside the lock, so it serializes a burst too
         st["fails"] += 1
         n = st["fails"]
         locked_now = n >= LOCKOUT_THRESHOLD
-        store = None
+        # Claimed here, executed below: whoever flips this False->True owns the
+        # capture, so a parallel burst still produces exactly one incident.
+        capture = n >= cfg.tamper_attempts_before_capture and not st["captured"]
+        if capture:
+            st["captured"] = True
+        result = {"error": "incorrect password", "attempts": n}
+        # Lockout: block the action for a fixed window, then start fresh.
+        if locked_now:
+            st["locked_until"] = time.time() + LOCKOUT_SECONDS
+            st["fails"] = 0
+            st["captured"] = False
+            result["locked"] = True
+            result["retry_after"] = LOCKOUT_SECONDS
+            result["error"] = f"too many attempts -- locked for {LOCKOUT_SECONDS}s"
+
+    store = None
+    try:
+        store = _writable_store()
         try:
-            store = _writable_store()
-            try:
-                store.insert(
-                    source="tamper", category="tamper_attempt",
-                    summary=(f"Failed password on protected action: {action} (attempt {n}"
-                             + (f" -- locked out for {LOCKOUT_SECONDS}s)" if locked_now else ")")),
-                    details={"action": action, "attempt": n, "locked_out": locked_now},
-                    confidence="certain", severity="critical" if locked_now else "high")
-            except Exception as e:
-                logger_srv.error("Could not log tamper attempt: %s", e)
-            result = {"error": "incorrect password", "attempts": n}
-            # Evidence capture: once, at the configured threshold.
-            if n >= cfg.tamper_attempts_before_capture and not st["captured"]:
-                from core.evidence import capture_incident
-                inc = capture_incident(reason=f"unauthorized attempt: {action}", attempts=n,
-                                       store=store, config=cfg, extra_context={"action": action})
-                st["captured"] = True
-                result["incident_id"] = inc.get("id")
-                result["evidence_captured"] = True
-            # Lockout: block the action for a fixed window, then start fresh.
-            if locked_now:
-                st["locked_until"] = time.time() + LOCKOUT_SECONDS
-                st["fails"] = 0
-                st["captured"] = False
-                result["locked"] = True
-                result["retry_after"] = LOCKOUT_SECONDS
-                result["error"] = f"too many attempts -- locked for {LOCKOUT_SECONDS}s"
-            return result
-        finally:
-            if store is not None:
-                store.close()
+            store.insert(
+                source="tamper", category="tamper_attempt",
+                summary=(f"Failed password on protected action: {action} (attempt {n}"
+                         + (f" -- locked out for {LOCKOUT_SECONDS}s)" if locked_now else ")")),
+                details={"action": action, "attempt": n, "locked_out": locked_now},
+                confidence="certain", severity="critical" if locked_now else "high")
+        except Exception as e:
+            logger_srv.error("Could not log tamper attempt: %s", e)
+        if capture:
+            from core.evidence import capture_incident
+            inc = capture_incident(reason=f"unauthorized attempt: {action}", attempts=n,
+                                   store=store, config=cfg, extra_context={"action": action})
+            result["incident_id"] = inc.get("id")
+            result["evidence_captured"] = True
+    finally:
+        if store is not None:
+            store.close()
+    return result
 
 
 def _throttle_failed_password(action: str) -> dict:
@@ -1789,7 +1814,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except BrokenPipeError:
             pass  # client closed the tab mid-response; nothing to do
 
+    # Confirmed bug: both handlers below passed limit_cap=100_000 and stopped
+    # there -- but limit_cap is a CEILING, not a default. With no `limit` in the
+    # query string (the frontend's filterQuery() never sets one for these two
+    # endpoints) query_events fell back to its own 200 default, so "Export CSV"
+    # on a 1253-event store silently produced 200 rows, and a 30-day PDF report
+    # -- including the AI executive summary written from those rows -- covered
+    # only the newest 200 events in the range. daily_brief() passes "limit"
+    # explicitly for exactly this reason; these two were the ones that didn't.
+    # An explicit client-supplied limit still wins, and limit_cap still caps.
+    EXPORT_DEFAULT_LIMIT = "100000"
+
     def _handle_export(self, params: dict):
+        params.setdefault("limit", [self.EXPORT_DEFAULT_LIMIT])
         events = query_events(self.db_path, params, limit_cap=100_000)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         if params.get("format", ["json"])[0] == "csv":
@@ -1809,6 +1846,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         from core.config import load_config
         from core.report_generator import format_range_label, generate_pdf_report
 
+        params.setdefault("limit", [self.EXPORT_DEFAULT_LIMIT])
         events = query_events(self.db_path, params, limit_cap=100_000)
         try:
             since = float(params.get("since", ["0"])[0] or 0)
