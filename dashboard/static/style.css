@@ -695,6 +695,23 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .conf-degraded .conf-dot { background: transparent; border: 1.5px solid var(--sev-high); }
 .ai-skipped-tag { color: var(--ink-3); border: 1px solid var(--border-strong); border-radius: 3px; padding: 0 5px; }
 
+/* Trust-at-a-glance pill (see app.js trustFor): green = verified Apple
+   system binary / user Trust List, amber = VT-suspicious, red = VT-flagged.
+   Colored dot + tinted border, readable in every theme via currentColor. */
+.trust-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--font-mono); font-size: 11px;
+  padding: 0 6px; border-radius: 3px;
+  border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
+}
+.trust-badge::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; flex: none;
+}
+.trust-badge.ok   { color: var(--accent); }
+.trust-badge.warn { color: var(--sev-medium); }
+.trust-badge.bad  { color: var(--sev-critical); font-weight: 700; }
+
 .event-chevron { color: var(--ink-3); font-family: var(--font-mono); font-size: 12px; }
 .event-row:hover .event-chevron { color: var(--accent); }
 
@@ -937,6 +954,12 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   font-family: var(--font-mono); font-size: 11px; color: var(--ink-3);
 }
 .statusbar-sep { width: 1px; height: 12px; background: var(--border-strong); }
+
+/* The 24h closure line (app.js renderVerdictLine): one sentence answering
+   "am I okay?" without scrolling the timeline. */
+#footer-verdict.ok    { color: var(--accent); }
+#footer-verdict.warn  { color: var(--sev-high); }
+#footer-verdict.alert { color: var(--sev-critical); font-weight: 700; }
 
 /* ---------- sidebar nav ---------- */
 

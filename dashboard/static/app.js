@@ -248,6 +248,11 @@ function renderStats(stats) {
   hicritEl.textContent = hicrit;
   hicritEl.classList.toggle("alert", hicrit > 0);
 
+  // The closure line: one always-visible sentence answering "so... am I okay?"
+  // — the question the stats band's raw numbers make the user compute
+  // themselves. Same 24h-scoped stats the band above already shows.
+  renderVerdictLine(stats);
+
   const bar = $("severity-bar");
   const legend = $("severity-legend");
   bar.innerHTML = "";
@@ -278,7 +283,66 @@ function renderStats(stats) {
   }
 }
 
+function renderVerdictLine(stats) {
+  const el = $("footer-verdict");
+  if (!el) return;
+  const crit = stats.by_severity.critical || 0;
+  const high = stats.by_severity.high || 0;
+  let text, cls;
+  if (crit > 0)       { text = `${stats.last_24h} events · ${crit} critical — review now`; cls = "alert"; }
+  else if (high > 0)  { text = `${stats.last_24h} events · ${high} high — review recommended`; cls = "warn"; }
+  else if (!stats.last_24h) { text = "quiet — nothing recorded"; cls = "ok"; }
+  else                { text = `${stats.last_24h} events — everything looks normal`; cls = "ok"; }
+  el.textContent = `last 24h: ${text}`;
+  el.className = cls;
+  el.hidden = false;
+  $("footer-verdict-sep").hidden = false;
+}
+
+
 /* ---------- timeline ---------- */
+
+/* Parsed details_json, cached per event object. Keyed in a WeakMap rather
+   than stashed on the event itself so the drawer's raw-JSON view never shows
+   a cache field that isn't really part of the row. */
+const detailsCache = new WeakMap();
+function eventDetails(ev) {
+  let d = detailsCache.get(ev);
+  if (!d) {
+    try { d = JSON.parse(ev.details_json) || {}; } catch { d = {}; }
+    detailsCache.set(ev, d);
+  }
+  return d;
+}
+
+/* Trust at a glance — green/amber/red, faster to read than a severity word.
+   Derived entirely from data every row already carries: the rule engine's
+   risk_hint (SIP-verified Apple binary, user Trust List) and the enrichment
+   stage's VirusTotal verdict. Only definite states earn a badge — stamping
+   "unknown" on every third-party process would be a wall of amber that says
+   nothing; the drawer's Summary tab states unknown explicitly instead. */
+function trustFor(ev) {
+  const vt = (eventDetails(ev).threat_intel || {}).vt;
+  if (vt && (vt.detections || 0) > 0)
+    return { cls: "bad", label: "Malicious",
+             note: `Flagged malicious by ${vt.detections} of ${vt.engines_total || "?"} VirusTotal engines` };
+  if (vt && (vt.suspicious || 0) > 0)
+    return { cls: "warn", label: "Suspicious",
+             note: `Called suspicious by ${vt.suspicious} VirusTotal engine${vt.suspicious === 1 ? "" : "s"}` };
+  if (ev.risk_hint === "os_platform_binary")
+    return { cls: "ok", label: "Apple system",
+             note: "Verified Apple system binary — it lives in a directory macOS itself (SIP) prevents anyone from modifying" };
+  if (ev.risk_hint === "aegis_own_child")
+    return { cls: "ok", label: "Aegis", note: "Started by Aegis itself" };
+  if ((ev.risk_hint || "").startsWith("user_trusted"))
+    return { cls: "ok", label: "Trusted", note: "On your Trust List" };
+  return null;
+}
+
+function trustBadgeHtml(ev) {
+  const t = trustFor(ev);
+  return t ? `<span class="trust-badge ${t.cls}" title="${escapeHtml(t.note)}">${t.label}</span>` : "";
+}
 
 function eventRowHtml(ev, fresh) {
   const conf = ev.confidence || "certain";
@@ -296,6 +360,7 @@ function eventRowHtml(ev, fresh) {
           <span>${escapeHtml(prettyCategory(ev.category))}</span>
           <span class="conf conf-${conf}" title="${CONFIDENCE_TITLES[conf] || conf}">
             <span class="conf-dot"></span>${conf}</span>
+          ${trustBadgeHtml(ev)}
           ${aiSkipped}
         </span>
       </span>
@@ -332,6 +397,7 @@ function groupHtml(run, freshIds) {
           <span class="event-sub">
             <span class="src">${SOURCE_LABELS[newest.source] || escapeHtml(newest.source)}</span>
             <span>${run.length} events · ${fmtTime(oldest.timestamp)} – ${fmtTime(newest.timestamp)}</span>
+            ${trustBadgeHtml(newest)}
           </span>
         </span>
         <span class="event-chevron group-chevron">›</span>
@@ -1044,8 +1110,7 @@ function openDrawer(id) {
   document.querySelectorAll(".event-row.selected").forEach((r) => r.classList.remove("selected"));
   document.querySelector(`.event-row[data-id="${id}"]`)?.classList.add("selected");
 
-  let details = {};
-  try { details = JSON.parse(ev.details_json) || {}; } catch { /* show raw below regardless */ }
+  const details = eventDetails(ev);
   const detailRows = Object.entries(details)
     .filter(([k]) => k !== "_schema" && k !== "threat_intel")  // threat_intel has its own panel
     .map(([k, v]) => `<tr><td class="k">${escapeHtml(k)}</td>
@@ -1062,10 +1127,19 @@ function openDrawer(id) {
 
   const conf = ev.confidence || "certain";
   const ti = threatIntelHtml(details);
+  // The row only badges definite trust states; here in the drawer the unknown
+  // state is stated outright — "unknown" is the honest answer for most
+  // third-party software, and saying it beats letting the user infer safety
+  // from silence.
+  const tstate = trustFor(ev);
+  const trustLine = !tstate && ev.source === "process"
+    ? '<div class="ai-skipped-note">Trust: unknown — not a verified Apple system binary and not on your Trust List. That is normal for third-party apps.</div>'
+    : "";
   $("drawer-body").innerHTML = `
     <div class="drawer-badges">
       ${sourceIcon(ev.source)}
       <span class="badge badge-${ev.severity}">${ev.severity}</span>
+      ${trustBadgeHtml(ev)}
       <span class="meta-badge">${SOURCE_LABELS[ev.source] || escapeHtml(ev.source)}</span>
       <span class="meta-badge">${escapeHtml(prettyCategory(ev.category))}</span>
       <span class="meta-badge conf conf-${conf}" title="${CONFIDENCE_TITLES[conf] || conf}">
@@ -1084,6 +1158,7 @@ function openDrawer(id) {
 
     <div class="tab-panel active" data-panel="summary">
       ${ti || '<div class="ai-skipped-note">No threat-intelligence lookup for this event.</div>'}
+      ${trustLine}
     </div>
 
     <div class="tab-panel" data-panel="ai" hidden>
