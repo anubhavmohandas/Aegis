@@ -534,14 +534,17 @@ html.js .reveal.in{opacity:1;transform:none;transition:opacity .7s cubic-bezier(
   <div class="wrap-wide">
     <div class="reveal">
       <div class="sec-tag">WHAT'S INSIDE</div>
-      <h2>Six things it does.</h2>
+      <h2>Nine things it does.</h2>
     </div>
     <div class="grid6">
       <div class="f reveal"><span class="ico">🧠</span><h3>Endpoint Memory</h3><p>One searchable history of everything that happened on your machine.</p></div>
       <div class="f reveal"><span class="ico">🤖</span><h3>AI Explanations</h3><p>Any event, explained in plain English — including whether it's normal.</p></div>
+      <div class="f reveal"><span class="ico">🟢</span><h3>Trust Badges</h3><p>Events wear a green, amber, or red pill — system-signed, trusted by you, or flagged by VirusTotal.</p></div>
+      <div class="f reveal"><span class="ico">🩺</span><h3>The 24-Hour Verdict</h3><p>One sentence in the status bar answers “am I okay?” — with a visible heartbeat proving the monitor is live.</p></div>
       <div class="f reveal"><span class="ico">📅</span><h3>Daily Brief</h3><p>A 24-hour summary you can read in a minute.</p></div>
       <div class="f reveal"><span class="ico">📄</span><h3>Reports</h3><p>Export any period as a PDF with an executive summary on the front.</p></div>
       <div class="f reveal"><span class="ico">🔍</span><h3>Threat Intelligence</h3><p>Optional VirusTotal and MITRE ATT&amp;CK enrichment on the events that warrant it.</p></div>
+      <div class="f reveal"><span class="ico">📸</span><h3>Tamper Evidence</h3><p>Stopping or quitting Aegis takes your password. Failed attempts are logged — repeat them and it captures evidence.</p></div>
       <div class="f reveal"><span class="ico">🔒</span><h3>Local First</h3><p>Your events live in a local database. Scoring happens on your machine.</p></div>
     </div>
   </div>
@@ -557,7 +560,9 @@ html.js .reveal.in{opacity:1;transform:none;transition:opacity .7s cubic-bezier(
         Events, evidence, and your Memory stay in a local database on your disk. Severity is scored
         locally. <b>Threat intelligence and AI explanations are opt-in</b> — they only run once you add
         your own API key, and they send event metadata and file hashes, never file contents. Aegis
-        records system events, not what you type, read, or look at.
+        records system events, not what you type, read, or look at. <b>Tamper evidence</b> — a
+        screenshot, and a webcam photo only if you switch it on — is stored on your own disk like
+        everything else.
       </p>
     </div>
   </div>
@@ -623,7 +628,8 @@ html.js .reveal.in{opacity:1;transform:none;transition:opacity .7s cubic-bezier(
     <p class="foot-disclaimer">
       AEGIS IS NOT ANTIVIRUS AND PROVIDES NO SECURITY GUARANTEES. IT IS A PERSONAL AWARENESS TOOL,
       NOT A DETECTOR. EVENTS ARE SCORED LOCALLY; THREAT-INTELLIGENCE ENRICHMENT AND AI EXPLANATIONS
-      ARE OPTIONAL AND REQUIRE API KEYS. THE 02:14 SCENARIO SHOWN ABOVE IS ILLUSTRATIVE.
+      ARE OPTIONAL AND REQUIRE API KEYS. TAMPER PROTECTION MAKES INTERFERENCE VISIBLE — IT CANNOT
+      PREVENT IT. THE 02:14 SCENARIO SHOWN ABOVE IS ILLUSTRATIVE.
     </p>
   </div>
 </footer>

@@ -63,7 +63,11 @@ public release.
 - ✅ Dashboard UI — live timeline with filters/search (repeated same-source
   events collapse into one expandable group), a details drawer with AI
   explanation, AI-generated PDF report export, and a Settings page
-  (AI provider/key, notifications, watched folders, trust lists)
+  (AI provider/key, notifications, watched folders, trust lists). Every
+  event row, group, and the drawer carries a green/amber/red **trust badge**
+  (OS-protected binary / your trust list / VirusTotal verdict; unknowns are
+  stated in the drawer, never badged in rows), and the status bar answers
+  "am I okay?" in one sentence summarizing the last 24 hours
 - ✅ Opt-in threat enrichment — VirusTotal hash reputation (hash-only, the
   file is never uploaded; cached in SQLite so repeat binaries cost one
   lookup and verdicts work offline) plus offline MITRE ATT&CK annotations,
