@@ -330,6 +330,20 @@ def _add_macos_menubar(window, pipeline, on_quit):
                 except Exception:
                     logger.warning("Tray stop failed", exc_info=True)
 
+            def signOutDashboard_(self, _sender):
+                # Ends every signed-in dashboard session and re-locks Settings.
+                # Not password-gated: signing out only reduces access.
+                try:
+                    from dashboard.server import sign_out_all
+                    sign_out_all()
+                    try:
+                        window.evaluate_js('location.replace("/login")')
+                    except Exception:
+                        pass   # hidden/closed window; pages bounce on their next 401
+                    _info_alert_macos(AppKit, "Aegis", "Signed out of the dashboard.")
+                except Exception:
+                    logger.warning("Tray sign-out failed", exc_info=True)
+
             def menuWillOpen_(self, menu):
                 # Start/Stop reflect the live pipeline state instead of both
                 # being clickable all the time (requires autoenablesItems off).
@@ -381,6 +395,7 @@ def _add_macos_menubar(window, pipeline, on_quit):
                     ("Start Monitoring", "startMonitoring:"),
                     ("Stop Monitoring", "stopMonitoring:"),
                     (None, None),
+                    ("Sign Out of Dashboard", "signOutDashboard:"),
                     ("Quit Aegis", "quitAegis:"),
                 ]
                 for title, selector in items:
@@ -558,6 +573,20 @@ def _add_pystray_tray(window, pipeline, on_quit):
             except Exception:
                 logger.warning("Tray stop failed", exc_info=True)
 
+        def _sign_out(icon, item):
+            # Ends every signed-in dashboard session and re-locks Settings.
+            # Not password-gated: signing out only reduces access.
+            try:
+                from dashboard.server import sign_out_all
+                sign_out_all()
+                try:
+                    window.evaluate_js('location.replace("/login")')
+                except Exception:
+                    pass   # hidden/closed window; pages bounce on their next 401
+                _info_alert_tk("Aegis", "Signed out of the dashboard.")
+            except Exception:
+                logger.warning("Tray sign-out failed", exc_info=True)
+
         def _quit(icon, item):
             # Quitting is password-gated too. window.destroy() closes the window
             # directly (bypasses the 'closing' gate on some backends), so gate it
@@ -584,6 +613,7 @@ def _add_pystray_tray(window, pipeline, on_quit):
             pystray.MenuItem("Stop Monitoring", _stop,
                              enabled=lambda item: pipeline.running),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Sign Out of Dashboard", _sign_out),
             pystray.MenuItem("Quit Aegis", _quit),
         )
         icon = pystray.Icon("aegis", _load_icon_image(), "Aegis", menu=menu)

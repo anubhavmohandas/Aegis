@@ -117,6 +117,16 @@ def _prune_expired(d: dict) -> None:
         d.pop(token, None)
 
 
+def sign_out_all() -> None:
+    """Invalidate every dashboard session and re-lock Settings. Used by the
+    desktop app's tray/menu-bar Sign Out; open pages get a 401 on their next
+    request and bounce to /login. Needs no password: signing out can only
+    reduce access -- same reasoning as /api/settings/lock."""
+    _sessions.clear()
+    _settings_unlock_until.clear()
+    logger_srv.info("All dashboard sessions signed out (tray)")
+
+
 def _hash_password(password: str, salt: bytes, iterations: int = PBKDF2_ITERATIONS) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations).hex()
 
