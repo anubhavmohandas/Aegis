@@ -217,8 +217,8 @@ function buildThemePicker() {
   const btn = $("theme-btn");
   const close = () => { pop.hidden = true; btn.setAttribute("aria-expanded", "false"); };
 
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation();
+  btn.addEventListener("click", () => {
+    // no stopPropagation: letting the click reach document closes any other open popover
     pop.hidden = !pop.hidden;
     btn.setAttribute("aria-expanded", String(!pop.hidden));
   });
@@ -227,7 +227,7 @@ function buildThemePicker() {
     if (card) applyTheme(card.dataset.theme);
   });
   document.addEventListener("click", (e) => {
-    if (!pop.hidden && !pop.contains(e.target) && e.target !== btn) close();
+    if (!pop.hidden && !pop.contains(e.target) && !btn.contains(e.target)) close();
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 }
@@ -1977,8 +1977,8 @@ function wireMorePopover() {
   const pop = $("more-pop");
   const btn = $("more-btn");
   const close = () => { pop.hidden = true; btn.setAttribute("aria-expanded", "false"); };
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation();
+  btn.addEventListener("click", () => {
+    // no stopPropagation: letting the click reach document closes any other open popover
     pop.hidden = !pop.hidden;
     btn.setAttribute("aria-expanded", String(!pop.hidden));
   });
