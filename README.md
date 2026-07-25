@@ -44,7 +44,7 @@ will prompt for Automation permission the first time it checks login items.
 Notification noise too high? Raise the popup floor with `notify_min_severity:
 high` from Settings — everything still lands in the timeline either way.
 
-## Status — v2.0.5
+## Status — v2.1.0
 
 Versioning tracks validation, not features: **alpha** = features done, macOS
 validated; **beta** = Windows also validated on real hardware; **2.0.0** =
@@ -68,6 +68,9 @@ public release.
   (OS-protected binary / your trust list / VirusTotal verdict; unknowns are
   stated in the drawer, never badged in rows), and the status bar answers
   "am I okay?" in one sentence summarizing the last 24 hours
+- ✅ Ask Aegis — ask the timeline questions in plain English ("did anything
+  touch my Downloads while I was away?"); answers cite the specific events
+  they came from, and work without an API key via an offline fallback
 - ✅ Opt-in threat enrichment — VirusTotal hash reputation (hash-only, the
   file is never uploaded; cached in SQLite so repeat binaries cost one
   lookup and verdicts work offline) plus offline MITRE ATT&CK annotations,

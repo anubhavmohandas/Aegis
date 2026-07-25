@@ -14,13 +14,24 @@ const PAGE_SIZE = 200;
 // collapse it down to just the process name. Cuts the repeated "New
 // process:" noise on a long list without losing any information the row's
 // own "Process" source tag + timestamp don't already carry.
+//
+// The trailing " -- note" group is NOT optional decoration: dispatcher's
+// _annotate_summary appends a plain-English note for recognised system
+// binaries (core/process_notes.py). This pattern used to be $-anchored right
+// after the PID, so every noted row failed to match -- which silently broke
+// BOTH behaviours that depend on it: rows never collapsed, and groupKey fell
+// back to the full summary (PID included), making every row unique so runs
+// never grouped. One noted process, mdworker_shared, is ~1000 rows/day.
+// The note is deterministic per process name, so keeping it out of the group
+// key loses nothing.
 const FRESH_SUMMARY_MS = 10000;
-const PROCESS_SUMMARY_RE = /^New (?:process|application launched): (.+) \(PID \d+\)$/;
+const PROCESS_SUMMARY_RE = /^New (?:process|application launched): (.+) \(PID \d+\)(?: -- (.+))?$/;
 
 function displaySummary(ev, now = Date.now()) {
   if (now - ev.timestamp * 1000 <= FRESH_SUMMARY_MS) return ev.summary;
   const m = PROCESS_SUMMARY_RE.exec(ev.summary);
-  return m ? m[1] : ev.summary;
+  if (!m) return ev.summary;
+  return m[2] ? `${m[1]} — ${m[2]}` : m[1];
 }
 
 const SEVERITY_ORDER = ["critical", "high", "medium", "low"];

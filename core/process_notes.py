@@ -42,12 +42,76 @@ _NOTES = {
     "mdworker_shared": "Spotlight indexing a file",
     "mds": "Spotlight's indexing service",
     "mds_stores": "Spotlight writing its search index",
+    "spotlightknowledged": "Spotlight's on-device knowledge index",
     "cfprefsd": "Apple's preferences service reading app settings",
     "distnoted": "Apple's system notification relay",
     "nsurlsessiond": "Apple's background download/upload service",
     "softwareupdated": "macOS checking for software updates",
+    "contactsd": "Apple's Contacts service",
+    "addressbookmanager": "Apple's Contacts database service",
+    "addressbooksourcesync": "Apple's Contacts service syncing an account's address book",
+    "com.apple.icloudhelper": "Apple's iCloud account helper",
+    "remindd": "Apple's Reminders sync service",
+    "trustd": "Apple's certificate-trust service, which validates TLS certificates",
+    "netbiosd": "Apple's NetBIOS service, used for Windows file-sharing name lookups",
+    "containermanagerd": "Apple's app-sandbox container service",
+    "containermanager": "Apple's app-sandbox container service",
+    "mdmclient": "macOS device-management client checking in with an MDM server",
+    "managedclient": "macOS device management applying configuration profiles",
+    "helpd": "Apple's Help Viewer content service",
+    "extensionkitservice": "macOS host process for an app extension",
+    "pluginlibraryservice": "macOS enumerating network file-system plug-ins",
+    "systemsettingsagent": "the System Settings app's background helper",
+    "bluetoothuiserver": "Apple's Bluetooth UI service (pairing and device prompts)",
+    "axvisualsupportagent": "Apple's accessibility visual-support service",
+    "parsec-fbf": "Apple's Spotlight/Siri feedback uploader",
+    "oahd": "Rosetta's translation service for Intel apps on Apple silicon",
+    "xprotectservice": "Apple's built-in XProtect malware scan",
+    # login / authorization
+    "login": "started a login session for a terminal or user",
+    # p_comm truncates to 16 chars, so both spellings can arrive (see describe()).
+    "authorizationhost": "macOS handling an authorization prompt (the admin password dialog)",
+    "authorizationhos": "macOS handling an authorization prompt (the admin password dialog)",
+    "taskgated-helper": "macOS checking a program's code signature before granting debug rights",
+    # WebKit / Safari helper processes
+    "com.apple.webkit.webcontent": "a Safari/WebKit tab rendering a web page",
+    "com.apple.webkit.webcontent.enhancedsecurity":
+        "a Safari/WebKit tab rendering a web page with enhanced security enabled",
+    "com.apple.webkit.networking": "Safari/WebKit's network process, which makes the actual web requests",
+    "com.apple.webkit.gpu": "Safari/WebKit's GPU process, which draws page content",
+    "com.apple.safariplatformsupport.helper": "Safari's platform-support helper",
+    # graphics / media XPC services
+    "mtlcompilerservice": "compiled GPU shaders for an app (Metal)",
+    "vtdecoderxpcservice": "decoded video for an app (VideoToolbox)",
+    "vtencoderxpcservice": "encoded video for an app (VideoToolbox)",
+    "com.apple.audio.sandboxhelper": "Apple's sandboxed host for an audio plug-in",
+    "quicklookuiservice": "rendered a Quick Look file preview",
+    "quicklookuihelper": "rendered a Quick Look file preview",
+    # UI and automation surfaces
+    "system events": "Apple's scripting bridge that lets AppleScript control apps and UI",
+    "screencaptureui": "the macOS screenshot UI (Shift-Cmd-5 or the screenshot HUD)",
+    "folderactionsdispatcher": "ran a Folder Action script attached to a watched folder",
+    "com.apple.appkit.xpc.openandsavepanelservice": "showed a file Open or Save dialog",
+    "system settings": "the macOS System Settings app",
+    "phone": "the macOS Phone app (iPhone call relay)",
+    # disk-space and diagnostics housekeeping
+    "cachedeleteextension": "macOS reclaiming disk space from Safari's caches",
+    "tvcacheextension": "macOS reclaiming disk space from the TV app's caches",
+    "musiccacheextension": "macOS reclaiming disk space from the Music app's caches",
+    "mailcachedelete": "macOS reclaiming disk space from Mail's caches",
+    "assetmetricsextension": "reported asset-download metrics to Apple",
+    "reportmemoryexception": "recorded an app's excessive memory use for diagnostics",
+    "reportmemoryexce": "recorded an app's excessive memory use for diagnostics",
+    "reportcrash": "recorded a crash report for an app that quit unexpectedly",
+    "spindump": "sampled an unresponsive app to record why it hung",
     # everyday CLI tools
     "tail": "followed the end of a file, usually a log",
+    "head": "read the first lines of a file",
+    "tee": "wrote output to a file and passed it along",
+    "sed": "edited text in a stream or file",
+    "env": "ran a command with a modified environment",
+    "sleep": "waited a set number of seconds, usually inside a script",
+    "codesign": "inspected or applied a code signature",
     "grep": "searched text in files",
     "find": "searched the filesystem for files",
     "ps": "listed running processes",
@@ -102,8 +166,19 @@ if __name__ == "__main__":
     # Mac or on Linux CI (Path.resolve() doesn't require the file to exist).
     _re._sip_ok = lambda: True  # type: ignore[assignment]
 
+    # describe() lowercases before the lookup, so a capitalised key ("System
+    # Events", "MTLCompilerService") would silently never match -- the exact
+    # way this table breaks when someone pastes a name straight from `ps`.
+    assert all(k == k.lower() for k in _NOTES), "note keys must be lowercase"
+
     assert describe("ioreg", "/usr/sbin/ioreg").startswith("read the hardware registry")
     assert describe("zsh", "/bin/zsh") is not None
+    # Names arrive in whatever case the collector reports them.
+    assert describe("System Events", "/System/Library/CoreServices/System Events.app/"
+                                     "Contents/MacOS/System Events") is not None
+    assert describe("com.apple.WebKit.GPU", "/System/Library/Frameworks/WebKit.framework/x") is not None
+    # p_comm truncates at 16 chars; both spellings must resolve to the same note.
+    assert describe("authorizationhos", "/System/x") == describe("authorizationhost", "/System/x")
     # A payload named after a system tool must NOT inherit the friendly text.
     assert describe("ioreg", "/Users/me/Downloads/ioreg") is None
     assert describe("ioreg", "") is None
