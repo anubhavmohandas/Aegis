@@ -18,7 +18,7 @@
 ; (__version__) because Inno Setup can't import Python. Bump both together.
 
 #define MyAppName "Aegis"
-#define MyAppVersion "2.0.8"
+#define MyAppVersion "2.1.0"
 #define MyAppPublisher "Anubhav"
 #define MyAppExeName "Aegis.exe"
 
