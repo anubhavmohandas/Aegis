@@ -1094,7 +1094,22 @@ function threatIntelHtml(details) {
    so "not explained yet" is a normal, temporary state -- distinct from
    ai_skipped (deliberately never explained) and from a stored failure. */
 function explanationHtml(ev) {
-  if (ev.explanation) return `<div class="explanation">${renderMarkdownLite(ev.explanation)}</div>`;
+  if (ev.explanation) {
+    // The explainer leads with a one-line plain-English headline (see
+    // SYSTEM_PROMPT in core/ai_explainer.py); show it as a heading and render
+    // the rest as before. Explanations written before this convention — and
+    // the "[AI unavailable …]" placeholders — have no real headline, so those
+    // just render whole, unchanged.
+    const text = String(ev.explanation).trim();
+    const nl = text.indexOf("\n");
+    const headline = (nl === -1 ? text : text.slice(0, nl)).trim();
+    const body = nl === -1 ? "" : text.slice(nl + 1).trim();
+    if (nl !== -1 && headline && !headline.startsWith("[")) {
+      return `<div class="explanation"><p class="expl-headline">${escapeHtml(headline)}</p>` +
+             `${body ? renderMarkdownLite(body) : ""}</div>`;
+    }
+    return `<div class="explanation">${renderMarkdownLite(text)}</div>`;
+  }
   if (ev.ai_skipped) {
     return '<div class="ai-skipped-note">AI explanation was skipped for this event ' +
            '(trusted/ignored by config, or the explainer was unavailable).</div>';
@@ -1362,11 +1377,71 @@ async function switchView(view) {
     }
   }
   $("view-console").hidden = view !== "console";
+  $("view-ask").hidden = view !== "ask";
   $("view-incidents").hidden = view !== "incidents";
   $("view-settings").hidden = view !== "settings";
   document.querySelectorAll(".side-item[data-view]").forEach((t) =>
     t.classList.toggle("active", t.dataset.view === view));
   if (view === "incidents") loadIncidents();
+  if (view === "ask") $("ask-input").focus();
+}
+
+/* ---------- Ask Aegis ---------- */
+// Each question is answered fresh from a server-side retrieval over the event
+// log; the last few turns are sent back as light context so follow-ups work.
+// The "chat" is client-side only — nothing is persisted server-side.
+const askHistory = [];   // {q, a} pairs, capped when sent
+let askBusy = false;
+
+function askBubble(role, cls = "") {
+  const el = document.createElement("div");
+  el.className = `ask-msg ask-${role}${cls ? " " + cls : ""}`;
+  $("ask-log").appendChild(el);
+  $("ask-log").scrollTop = $("ask-log").scrollHeight;
+  return el;
+}
+
+async function askAegis(question) {
+  question = String(question || "").trim();
+  if (!question || askBusy) return;
+  askBusy = true;
+  $("ask-send").disabled = true;
+  $("ask-intro").hidden = true;
+  $("ask-input").value = "";
+
+  askBubble("user").textContent = question;
+  const reply = askBubble("aegis", "ask-thinking");
+  reply.innerHTML = '<span class="ask-typing"><i></i><i></i><i></i></span>';
+
+  try {
+    const res = await fetch("/api/ask", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, history: askHistory.slice(-4) }),
+    });
+    if (res.status === 401) { location.replace("/login"); return; }
+    const data = await res.json();
+    reply.classList.remove("ask-thinking");
+    if (data.error) {
+      reply.classList.add("ask-error");
+      reply.textContent = data.error;
+    } else {
+      const n = data.events_considered || 0;
+      const grounding = n
+        ? `<div class="ask-grounding">Answered from ${n} logged event${n === 1 ? "" : "s"}.</div>`
+        : `<div class="ask-grounding">No matching events were found for this question.</div>`;
+      reply.innerHTML = renderMarkdownLite(data.answer) + grounding;
+      askHistory.push({ q: question, a: data.answer });
+    }
+  } catch {
+    reply.classList.remove("ask-thinking");
+    reply.classList.add("ask-error");
+    reply.textContent = "Couldn't reach the dashboard server — is it still running?";
+  } finally {
+    askBusy = false;
+    $("ask-send").disabled = false;
+    $("ask-log").scrollTop = $("ask-log").scrollHeight;
+    $("ask-input").focus();
+  }
 }
 
 function toast(message, isError = false) {
@@ -1670,6 +1745,16 @@ function bindSettings() {
       if (t.dataset.view) switchView(t.dataset.view);
       else if (t.dataset.action) SIDE_ACTIONS[t.dataset.action]?.();
     }));
+
+  // Ask Aegis: submit the question, or click an example chip to ask it.
+  $("ask-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    askAegis($("ask-input").value);
+  });
+  $("ask-examples").addEventListener("click", (e) => {
+    const chip = e.target.closest(".ask-chip");
+    if (chip) askAegis(chip.textContent);
+  });
 
   $("set-notify-enabled").addEventListener("change", (e) => {
     applyNotifyEnabledState(e.target.checked);

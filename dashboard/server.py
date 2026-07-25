@@ -36,6 +36,7 @@ import json
 import logging
 import os
 import platform
+import re
 import secrets
 import sqlite3
 import subprocess
@@ -449,6 +450,103 @@ def daily_brief(db_path: str) -> dict:
         summary = "[AI summary unavailable] See the counts and highlighted events."
     return {"since": since, "until": now, "counts": counts,
             "top_events": top_events, "summary": summary}
+
+
+# --- Ask Aegis (natural-language Q&A over the event log) ----------------------
+# "What happened today?", "Did anyone connect a USB?", "When did Python last
+# run?". Retrieval-then-answer: gather a bounded, relevant slice of events
+# (recent activity + anything high/critical + keyword matches from the
+# question) and let the AI answer from ONLY those, citing times. Read-only like
+# every other query path here -- it never writes and never touches config, so a
+# session alone gates it (same as /api/events), not the Settings unlock. The
+# events it reads are the same ones already visible in the timeline to that
+# session, so this exposes nothing new.
+
+ASK_MAX_QUESTION = 2000        # a question, not a document -- caps prompt size and abuse
+ASK_MAX_EVENTS = 120           # ceiling on how many events get stuffed into the prompt
+ASK_EXPL_SNIPPET = 200         # chars of each event's stored explanation to include
+# Dropped from keyword search: too common to narrow anything, and they never
+# match event text anyway (an event summary never literally contains "today").
+ASK_STOPWORDS = {
+    "the", "and", "for", "did", "was", "are", "has", "have", "that", "this",
+    "with", "what", "when", "why", "who", "how", "does", "did", "any", "some",
+    "been", "you", "your", "today", "yesterday", "show", "tell", "get", "last",
+    "there", "were", "from", "about", "into", "out", "run", "ran", "happened",
+}
+
+
+def _ask_context_events(db_path: str, question: str) -> list[dict]:
+    """Pull the slice of events worth showing the model for this question.
+    Three overlapping sources merged by id: recent activity, recent
+    high/critical, and all-time keyword matches from the question."""
+    merged: dict[int, dict] = {}
+
+    def take(rows: list[dict]) -> None:
+        for e in rows:
+            merged.setdefault(e["id"], e)
+
+    now = time.time()
+    # Recent activity -> "what happened today / while I was away".
+    take(query_events(db_path, {"since": [str(now - 2 * 86400)], "limit": ["80"]}))
+    # Anything notable in the last month -> "show suspicious activity".
+    take(query_events(db_path, {"severity": ["high,critical"],
+                                "since": [str(now - 30 * 86400)], "limit": ["40"]}))
+    # Keyword matches across ALL time -> "when did python last run", "usb",
+    # "did someone try to disable monitoring" (matches tamper summaries). The
+    # LIKE search already spans summary/explanation/details_json (see
+    # _build_event_query), so this reaches trust-listed and older events the
+    # recent window skips.
+    terms = [w for w in re.findall(r"[a-z0-9_.\-]{3,}", question.lower())
+             if w not in ASK_STOPWORDS]
+    for term in dict.fromkeys(terms):          # de-dup, preserve order
+        take(query_events(db_path, {"q": [term], "limit": ["30"]}))
+        if len(merged) >= ASK_MAX_EVENTS * 3:  # plenty gathered; stop querying
+            break
+
+    events = sorted(merged.values(), key=lambda e: -e["timestamp"])
+    return events[:ASK_MAX_EVENTS]
+
+
+def _format_ask_events(events: list[dict]) -> str:
+    lines = []
+    for e in events:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(e["timestamp"]))
+        line = f"[{when}] ({e['severity']}) {e['source']}/{e['category']}: {e['summary']}"
+        expl = (e.get("explanation") or "").strip()
+        # Skip the "[AI unavailable ...]" / "[No API key ...]" placeholder
+        # explanations -- they're noise to the model, not context.
+        if expl and not expl.startswith("["):
+            line += "  | note: " + " ".join(expl.split())[:ASK_EXPL_SNIPPET]
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def ask_aegis(db_path: str, question: str, history) -> dict:
+    question = (question or "").strip()
+    if not question:
+        return {"error": "Ask a question first."}
+    if len(question) > ASK_MAX_QUESTION:
+        return {"error": f"Question is too long (max {ASK_MAX_QUESTION} characters)."}
+
+    events = _ask_context_events(db_path, question)
+    block = _format_ask_events(events)
+
+    clean_history = []
+    if isinstance(history, list):
+        for turn in history[-4:]:              # last few turns are enough context
+            if isinstance(turn, dict):
+                clean_history.append({"q": str(turn.get("q", ""))[:500],
+                                      "a": str(turn.get("a", ""))[:1500]})
+
+    try:
+        from core.ai_explainer import AIExplainer
+        from core.config import load_config
+        answer = AIExplainer(load_config()).answer(question, block, clean_history)
+    except Exception as e:
+        logger_srv.error("Ask Aegis failed: %s", e)
+        answer = ("[AI unavailable] I couldn't answer that just now -- the events are "
+                  "still in the timeline for you to read directly.")
+    return {"answer": answer, "events_considered": len(events)}
 
 
 # --- settings ----------------------------------------------------------------
@@ -1714,6 +1812,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({"error": "download_url and asset_name are required"}, status=400)
                     return
                 result = install_update(url, name)
+                self._send_json(result, status=400 if result.get("error") else 200)
+            elif parsed.path == "/api/ask":
+                # Read-only Q&A over the event log. A session gates it, same as
+                # /api/events -- it reads only what that session can already see
+                # and changes nothing, so it needs no Settings unlock.
+                if not self._authed():
+                    self._send_json({"error": "authentication required"}, status=401)
+                    return
+                try:
+                    # Cap the body read: the question is capped again after
+                    # parsing, but don't buffer an unbounded payload first.
+                    length = min(int(self.headers.get("Content-Length") or 0), 100_000)
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                except (json.JSONDecodeError, ValueError):
+                    self._send_json({"error": "invalid JSON body"}, status=400)
+                    return
+                result = ask_aegis(self.db_path, str(body.get("question", "")),
+                                   body.get("history"))
                 self._send_json(result, status=400 if result.get("error") else 200)
             elif parsed.path == "/api/logout":
                 token = self._session_token()
