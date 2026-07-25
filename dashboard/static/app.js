@@ -1391,7 +1391,26 @@ async function switchView(view) {
 // log; the last few turns are sent back as light context so follow-ups work.
 // The "chat" is client-side only — nothing is persisted server-side.
 const askHistory = [];   // {q, a} pairs, capped when sent
+const askSources = new Map();   // event id -> full row, so a Sources click opens the drawer
 let askBusy = false;
+
+/* The events an answer was drawn from, shown under it and clickable through to
+   the real timeline record — Ask Aegis stays an interface to the memory, not a
+   chatbot that replaces reading it. */
+function askSourcesHtml(sources) {
+  if (!sources || !sources.length) return "";
+  const rows = sources.map((ev) => {
+    askSources.set(ev.id, ev);
+    return `<button class="ask-source" data-id="${ev.id}" type="button"
+              title="Open this event in the timeline">
+        <span class="ask-source-time">${fmtTime(ev.timestamp)}</span>
+        <span class="badge badge-${ev.severity}">${ev.severity}</span>
+        <span class="ask-source-sum">${escapeHtml(displaySummary(ev))}</span>
+      </button>`;
+  }).join("");
+  return `<div class="ask-sources">
+      <div class="ask-sources-label">Sources · from your timeline</div>${rows}</div>`;
+}
 
 function askBubble(role, cls = "") {
   const el = document.createElement("div");
@@ -1425,11 +1444,18 @@ async function askAegis(question) {
       reply.classList.add("ask-error");
       reply.textContent = data.error;
     } else {
-      const n = data.events_considered || 0;
-      const grounding = n
-        ? `<div class="ask-grounding">Answered from ${n} logged event${n === 1 ? "" : "s"}.</div>`
-        : `<div class="ask-grounding">No matching events were found for this question.</div>`;
-      reply.innerHTML = renderMarkdownLite(data.answer) + grounding;
+      // Prefer the concrete Sources list; fall back to a grounding line only
+      // when there's nothing specific to point at.
+      let footer;
+      if (data.sources && data.sources.length) {
+        footer = askSourcesHtml(data.sources);
+      } else if (data.events_considered) {
+        footer = `<div class="ask-grounding">Drawn from ${data.events_considered} recent ` +
+                 `event${data.events_considered === 1 ? "" : "s"} — no single event stood out.</div>`;
+      } else {
+        footer = `<div class="ask-grounding">No matching events were found for this question.</div>`;
+      }
+      reply.innerHTML = renderMarkdownLite(data.answer) + footer;
       askHistory.push({ q: question, a: data.answer });
     }
   } catch {
@@ -1754,6 +1780,15 @@ function bindSettings() {
   $("ask-examples").addEventListener("click", (e) => {
     const chip = e.target.closest(".ask-chip");
     if (chip) askAegis(chip.textContent);
+  });
+  // A Sources row opens that event in the timeline drawer. The full row came
+  // down with the answer, so inject it into the store (older events may not be
+  // loaded) and reuse the same drawer the timeline uses.
+  $("ask-log").addEventListener("click", (e) => {
+    const src = e.target.closest(".ask-source");
+    if (!src) return;
+    const ev = askSources.get(Number(src.dataset.id));
+    if (ev) { state.byId.set(ev.id, ev); openDrawer(ev.id); }
   });
 
   $("set-notify-enabled").addEventListener("change", (e) => {

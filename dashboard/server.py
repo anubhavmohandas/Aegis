@@ -464,6 +464,7 @@ def daily_brief(db_path: str) -> dict:
 
 ASK_MAX_QUESTION = 2000        # a question, not a document -- caps prompt size and abuse
 ASK_MAX_EVENTS = 120           # ceiling on how many events get stuffed into the prompt
+ASK_MAX_SOURCES = 8            # how many "here's where that came from" events to return
 ASK_EXPL_SNIPPET = 200         # chars of each event's stored explanation to include
 # Dropped from keyword search: too common to narrow anything, and they never
 # match event text anyway (an event summary never literally contains "today").
@@ -507,6 +508,35 @@ def _ask_context_events(db_path: str, question: str) -> list[dict]:
     return events[:ASK_MAX_EVENTS]
 
 
+def _rank_ask_sources(events: list[dict], question: str) -> list[dict]:
+    """The events an answer is grounded in -- returned to the UI so every answer
+    points back at the real timeline records it came from (verifiable, and a
+    nudge back to the log itself). Rank by relevance to the question: keyword
+    hits in the summary/explanation, then a nudge for high/critical, then
+    recency. When nothing keyword/severity-relevant matches (e.g. "what
+    happened today"), fall back to the most recent events -- which IS the
+    honest answer to that question."""
+    terms = [w for w in re.findall(r"[a-z0-9_.\-]{3,}", question.lower())
+             if w not in ASK_STOPWORDS]
+
+    def relevance(e: dict) -> int:
+        hay = (e["summary"] or "").lower()
+        expl = (e.get("explanation") or "").lower()
+        score = 0
+        for t in terms:
+            if t in hay:
+                score += 3
+            elif t in expl:
+                score += 1
+        return score + {"critical": 2, "high": 1}.get(e["severity"], 0)
+
+    scored = [(relevance(e), e["timestamp"], e) for e in events]
+    strong = [row for row in scored if row[0] > 0]
+    pool = strong or scored                       # nothing relevant -> newest wins
+    pool.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    return [e for _, _, e in pool[:ASK_MAX_SOURCES]]
+
+
 def _format_ask_events(events: list[dict]) -> str:
     lines = []
     for e in events:
@@ -546,7 +576,10 @@ def ask_aegis(db_path: str, question: str, history) -> dict:
         logger_srv.error("Ask Aegis failed: %s", e)
         answer = ("[AI unavailable] I couldn't answer that just now -- the events are "
                   "still in the timeline for you to read directly.")
-    return {"answer": answer, "events_considered": len(events)}
+    # Full event rows (not just ids) so the UI can open each one in the drawer
+    # without another round-trip -- same shape query_events returns everywhere.
+    return {"answer": answer, "events_considered": len(events),
+            "sources": _rank_ask_sources(events, question)}
 
 
 # --- settings ----------------------------------------------------------------

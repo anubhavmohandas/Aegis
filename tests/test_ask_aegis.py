@@ -96,6 +96,21 @@ assert any(e["source"] == "usb" for e in ev), f"'usb' must surface the USB event
 block = srv._format_ask_events(srv._ask_context_events(str(DB), "python"))
 assert "python3" in block and "(low)" in block and "note: Ran a Python program" in block, block
 
+# Sources: a keyword question ranks the matching event first, and the returned
+# rows are full event rows (so the UI can open them without another fetch).
+ev = srv._ask_context_events(str(DB), "When did python last run?")
+sources = srv._rank_ask_sources(ev, "When did python last run?")
+assert sources and "python3" in sources[0]["summary"], \
+    f"python must be the top source: {summaries(sources)}"
+assert {"id", "timestamp", "summary", "severity", "details_json"} <= set(sources[0]), \
+    f"sources must be full event rows: {sorted(sources[0])}"
+# "show suspicious activity" has no keyword hits -> severity must float the
+# high-severity tamper event above low-severity ambient events.
+ssrc = srv._rank_ask_sources(srv._ask_context_events(str(DB), "show suspicious activity"),
+                             "show suspicious activity")
+assert ssrc[0]["severity"] in ("high", "critical"), \
+    f"suspicious-activity sources should lead with high/critical: {summaries(ssrc)}"
+
 # --- 2. the /api/ask route -------------------------------------------------
 status, _ = call("/api/ask", {"question": "hi"})           # no session
 assert status == 401, f"ask must require auth, got {status}"
@@ -123,5 +138,7 @@ status, body = call("/api/ask", {"question": "What happened today?"}, cookie=coo
 assert status == 200, f"{status} {body}"
 assert "answer" in body and isinstance(body.get("events_considered"), int), body
 assert body["events_considered"] >= 1, body
+assert isinstance(body.get("sources"), list) and body["sources"], f"answer must carry sources: {body}"
+assert "summary" in body["sources"][0], body["sources"][0]
 
 print("ask_aegis self-check: OK")
