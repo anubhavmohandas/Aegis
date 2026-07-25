@@ -379,10 +379,17 @@ def _add_macos_menubar(window, pipeline, on_quit):
                 if APP_ICON.is_file():
                     img = AppKit.NSImage.alloc().initByReferencingFile_(str(APP_ICON))
                     img.setSize_((18.0, 18.0))  # pyobjc bridges NSSize from a 2-tuple
-                    # NOT a template: the Aegis mark is a full-color logo, and
-                    # template mode would flatten it to a solid white/black
-                    # silhouette (the "white square" bug). Show the real colors.
-                    img.setTemplate_(False)
+                    # Template mode keys off ALPHA only. That's exactly why it
+                    # used to produce the "white square" bug: tray_icon.png was
+                    # then the full marketing lockup on an OPAQUE black square,
+                    # so every pixel sat at alpha 255 and flattened to a solid
+                    # block. The asset is now a transparent shield
+                    # (packaging/make_icons.py), so template mode gives the real
+                    # outline -- and macOS auto-inverts it, which is the only
+                    # way one icon stays legible on both light and dark menu
+                    # bars. Full colour is preserved for pystray on
+                    # Windows/Linux, which reads the same file and ignores this.
+                    img.setTemplate_(True)
                     button.setImage_(img)
                 else:
                     button.setTitle_("Aegis")

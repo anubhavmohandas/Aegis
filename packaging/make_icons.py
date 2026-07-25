@@ -148,9 +148,20 @@ def build_windows_icon() -> Image.Image:
 
 
 def build_tray_icon() -> Image.Image:
-    """Menu bar / system tray: shield on transparent, no plate. The opaque
-    black background is what made this render as a black square in the macOS
-    menu bar; transparent reads correctly on both light and dark."""
+    """Menu bar / system tray: shield on transparent, no plate.
+
+    Deliberately full colour even though macOS renders it as a template
+    (monochrome) image: NSImage template mode keys off the ALPHA channel and
+    ignores RGB, so this one file serves both surfaces -- macOS flattens it
+    to an auto-inverting silhouette in the menu bar, while pystray on
+    Windows/Linux (core/tray_app.py) draws the same file in full colour.
+
+    The opaque black background this replaces is what forced
+    setTemplate_(False) in desktop_app.py: template mode on a fully opaque
+    square has every pixel at alpha 255, so it flattened to a solid block --
+    the "white square" bug named in that comment. With real transparency
+    template mode produces the actual shield outline instead.
+    """
     canvas = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
     _place_glyph(canvas, extract_glyph(), 0.92)
     return canvas
@@ -184,7 +195,9 @@ if __name__ == "__main__":
     build_windows_icon().save(
         OUT_ICO, sizes=[(s, s) for s in (16, 32, 48, 64, 128, 256)])
 
-    for p in (OUT_ICNS, OUT_ICO):
+    build_tray_icon().save(OUT_TRAY)
+
+    for p in (OUT_ICNS, OUT_ICO, OUT_TRAY):
         print(f"wrote {p.relative_to(ROOT)} ({p.stat().st_size:,} bytes)")
 
     # Self-checks: the whole point is the geometry, so assert it rather than
@@ -199,4 +212,12 @@ if __name__ == "__main__":
         assert ico.ico.sizes() >= {(16, 16), (32, 32), (48, 48), (256, 256)}, \
             f"Windows .ico missing sizes: {ico.ico.sizes()}"
 
-    print("checks passed: Apple 824/1024 grid, .ico 16-256")
+    # The menu bar renders this as a template image, which uses alpha alone --
+    # so a fully-opaque asset flattens to a solid block (see build_tray_icon).
+    # Assert real transparency rather than trusting the crop.
+    with Image.open(OUT_TRAY) as tray:
+        alpha = tray.convert("RGBA").split()[3]
+        assert alpha.getpixel((1, 1)) == 0, "tray icon has a plate, not transparency"
+        assert alpha.getextrema()[1] == 255, "tray icon has no solid pixels"
+
+    print("checks passed: Apple 824/1024 grid, .ico 16-256, tray transparent")
