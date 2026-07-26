@@ -5,11 +5,21 @@
 <h1 align="center">Aegis</h1>
 <p align="center"><b>AI-powered desktop security assistant for Windows, macOS, and Linux.</b></p>
 
-Aegis watches your machine in the background — new processes, USB devices,
-startup persistence, and your Desktop/Downloads/Documents folders — and
-explains what it sees in plain English using Claude or OpenAI, with a local
-severity score (low/medium/high/critical) computed before any AI call.
-Everything's logged to a searchable timeline. **Not antivirus. No security
+<p align="center">
+Your computer records everything it does and explains none of it —
+<b>Aegis watches the parts that matter and tells you, in plain English,
+what just happened on your machine and whether you should care.</b>
+</p>
+
+<p align="center">
+  <img src="docs/media/aegis-demo.gif" width="820"
+       alt="Aegis running on macOS: the live event stream, an event opened to its detail drawer, the theme picker, a password-gated Stop Monitoring, the AI explaining a deleted file in plain English, and Ask Aegis answering &quot;Did anyone connect a USB?&quot; with the timeline events it drew from.">
+</p>
+
+It watches new processes, USB devices, startup persistence, and your
+Desktop/Downloads/Documents folders, scores every event locally
+(low/medium/high/critical) *before* any AI call, and logs everything to a
+searchable timeline you can ask questions of. **Not antivirus. No security
 guarantees. A personal awareness tool, not a detector.**
 
 ## Quick start
@@ -44,7 +54,69 @@ will prompt for Automation permission the first time it checks login items.
 Notification noise too high? Raise the popup floor with `notify_min_severity:
 high` from Settings — everything still lands in the timeline either way.
 
-## Status — v2.1.2
+## How it works
+
+Every collector's only contract is to push `MonitorEvent` objects onto one
+shared queue — nothing downstream knows or cares which OS produced an event, so
+adding a new signal means writing one collector and changing nothing else.
+
+```mermaid
+flowchart LR
+  subgraph COL["Collectors — one per OS, per signal"]
+    direction TB
+    P["process starts"]
+    U["USB devices"]
+    S["startup persistence"]
+    F["watched folders"]
+    L["screen lock / unlock"]
+  end
+
+  COL ==>|MonitorEvent| Q(["shared queue"])
+  Q --> DISP["Dispatcher<br/>dedupe · trust rules · severity<br/>rate limit · enrichment"]
+
+  DISP --> LOG["events.log"]
+  DISP ==>|row written immediately| DB[("SQLite<br/>aegis_events.db")]
+  DISP -.->|worker pool, off the hot path| AI
+
+  AI["AI explainer<br/>Claude / OpenAI-compatible / Ollama"]
+  AI -->|explanation backfilled| DB
+  AI --> NOTIF["desktop notification"]
+
+  DB --> UI["Dashboard · desktop_app.py<br/>Tray · main.py"]
+  UI -.->|Ask Aegis · Daily Brief · PDF report| AI
+```
+
+The one non-obvious edge is the dotted one: the AI call is a 4–30 second
+network round-trip, so the event's row lands in SQLite with a null explanation
+and a worker pool fills it in later. The row is what you're waiting for; the
+explanation isn't. Severity is likewise computed *before* the rate limiter, so a
+burst of low-severity noise can hit the cap while a single high/critical event
+never gets silently dropped for landing in a noisy window.
+
+Full detail — every stage, every tradeoff, every known gap — in
+[`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+## Screenshots
+
+### macOS
+
+| **Dashboard** — live stream, counts, severity split | **Any event** — opened to its plain-English explanation |
+|---|---|
+| ![Aegis dashboard on macOS: 24-hour event counts, a severity breakdown, filters, and the live event stream.](docs/media/macos-dashboard.png) | ![An event's detail drawer on the AI Explanation tab: a screen recording was deleted from the Desktop, "a normal file deletion action", "likely normal", "check the Trash if you need to recover the file."](docs/media/macos-explain.png) |
+
+![Ask Aegis answering "Did anyone connect a USB?" — a plain-English answer naming the drive and time, followed by the exact timeline events it drew from.](docs/media/macos-ask.png)
+
+**Ask Aegis** — free-form questions over your own timeline, and every answer
+cites the events it came from.
+
+### Windows
+
+Not shown yet, deliberately: the Windows packaged build hasn't been run on real
+hardware, so there is no honest screenshot to put here. See Status below —
+this section gets filled from the same script (`website/build-media.sh`) the
+moment there is a real build to record.
+
+## Status — v2.1.3
 
 Versioning tracks validation, not features: **alpha** = features done, macOS
 validated; **beta** = Windows also validated on real hardware; **2.0.0** =

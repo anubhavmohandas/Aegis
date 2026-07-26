@@ -1931,9 +1931,14 @@ function askSourcesHtml(sources) {
   if (!sources || !sources.length) return "";
   const rows = sources.map((ev) => {
     askSources.set(ev.id, ev);
+    // Sources are ranked by relevance, not time, so a bare clock reads as
+    // scrambled the moment days mix -- date anything that isn't from today.
+    const d = new Date(ev.timestamp * 1000);
+    const when = dayLabel(ev.timestamp) === "Today" ? fmtTime(ev.timestamp)
+      : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${fmtTime(ev.timestamp)}`;
     return `<button class="ask-source" data-id="${ev.id}" type="button"
-              title="Open this event in the timeline">
-        <span class="ask-source-time">${fmtTime(ev.timestamp)}</span>
+              title="${fmtFullTime(ev.timestamp)} -- open this event in the timeline">
+        <span class="ask-source-time">${when}</span>
         <span class="badge badge-${ev.severity}">${ev.severity}</span>
         <span class="ask-source-sum">${escapeHtml(displaySummary(ev))}</span>
       </button>`;
@@ -1953,6 +1958,17 @@ function askBubble(role, cls = "") {
 async function askAegis(question) {
   question = String(question || "").trim();
   if (!question || askBusy) return;
+  // "clear" is a command, not a question. Typed on its own it used to be sent
+  // to the model, which -- given the previous turns as context and no new
+  // question to answer -- simply repeated its last answer.
+  if (/^(clear|reset|new chat|start over)[.!]?$/i.test(question)) {
+    $("ask-log").replaceChildren();
+    askHistory.length = 0;
+    askSources.clear();
+    $("ask-intro").hidden = false;
+    $("ask-input").value = "";
+    return;
+  }
   askBusy = true;
   $("ask-send").disabled = true;
   $("ask-intro").hidden = true;

@@ -69,9 +69,14 @@ Collector (OS-specific)
        |-- rate limit (hard cap 20 AI calls/min -- high/critical are EXEMPT)
        |-- enrichment (opt-in: high/critical get a VirusTotal hash verdict + MITRE
        |    ATT&CK tags attached before the AI runs -- see "Threat enrichment")
+       |-- persist the row NOW, explanation=NULL (see _stage_explain_and_notify)
        |-- AI explainer (Claude/OpenAI) -> plain-English explanation, told the severity
+       |     runs on a small worker pool, NOT on the queue-draining thread: the
+       |     call is a 4-30s round-trip, and the row is what the user is waiting
+       |     for, not the explanation. It writes back via update_explanation().
        v
-   Notification (desktop toast, title tagged with severity) + persisted row
+   Notification (desktop toast, title tagged with severity), fired when the
+   explanation lands + the already-persisted row updated in place
        |
        v
   ui/timeline_app.py reads the SQLite store on demand, independent process

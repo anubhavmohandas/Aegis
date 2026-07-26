@@ -10,6 +10,7 @@ Covers the two non-trivial parts:
 No framework, no API key, no network: `python tests/test_ask_aegis.py`.
 """
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -21,6 +22,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _TMP = Path(tempfile.mkdtemp(prefix="aegis-ask-"))
+# Redirecting the config paths isn't enough isolation: a provider key exported
+# in the developer's own shell still reaches load_config(), and the /api/ask
+# check below then makes a real network call and times out at random.
+for _k in [k for k in os.environ if k.endswith("_API_KEY")]:
+    os.environ.pop(_k)
 import core.config as core_config  # noqa: E402
 
 core_config.DEFAULT_CONFIG_PATH = _TMP / "config" / "config.yaml"
@@ -110,6 +116,13 @@ ssrc = srv._rank_ask_sources(srv._ask_context_events(str(DB), "show suspicious a
                              "show suspicious activity")
 assert ssrc[0]["severity"] in ("high", "critical"), \
     f"suspicious-activity sources should lead with high/critical: {summaries(ssrc)}"
+# Chit-chat gets the reply alone -- no "here are 8 high-severity events" under a
+# "thanks". Real questions must keep their sources, including the ones whose
+# words are all stopwords ("what happened today").
+for greeting in ("hi", "Thanks!", "ok", "Theek hai", "thanks yaar", "ok cool"):
+    assert srv._rank_ask_sources(ev, greeting) == [], f"{greeting!r} must return no sources"
+assert srv._rank_ask_sources(ev, "what happened today?"), \
+    "a real question must still get sources even when every word is a stopword"
 
 # --- 2. the /api/ask route -------------------------------------------------
 status, _ = call("/api/ask", {"question": "hi"})           # no session

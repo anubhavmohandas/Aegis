@@ -566,6 +566,15 @@ ASK_STOPWORDS = {
     "been", "you", "your", "today", "yesterday", "show", "tell", "get", "last",
     "there", "were", "from", "about", "into", "out", "run", "ran", "happened",
 }
+# Conversation, not a query. Answering "hi" with eight unrelated high-severity
+# events is what makes the guard read like a machine -- these get the reply
+# alone, no Sources block under it.
+ASK_CHITCHAT = {
+    "hi", "hii", "hello", "hey", "yo", "sup", "namaste", "hola",
+    "thanks", "thank", "thx", "ty", "ok", "okay", "k", "cool", "nice",
+    "great", "good", "bye", "hmm", "acha", "achha", "theek", "hai", "sahi",
+    "yaar", "bhai", "bro", "dude", "man", "you", "so", "much", "very", "lol",
+}
 
 
 def _ask_context_events(db_path: str, question: str) -> list[dict]:
@@ -608,6 +617,9 @@ def _rank_ask_sources(events: list[dict], question: str) -> list[dict]:
     recency. When nothing keyword/severity-relevant matches (e.g. "what
     happened today"), fall back to the most recent events -- which IS the
     honest answer to that question."""
+    words = re.sub(r"[^a-z ]", " ", question.lower()).split()
+    if words and all(w in ASK_CHITCHAT for w in words):   # "hi", "thanks yaar", "ok cool"
+        return []
     terms = [w for w in re.findall(r"[a-z0-9_.\-]{3,}", question.lower())
              if w not in ASK_STOPWORDS]
 
@@ -651,7 +663,7 @@ def ask_aegis(db_path: str, question: str, history) -> dict:
         return {"error": f"Question is too long (max {ASK_MAX_QUESTION} characters)."}
 
     events = _ask_context_events(db_path, question)
-    block = _format_ask_events(events)
+    block = _format_ask_events(events)   # the clock is prepended in AIExplainer._summarize
 
     clean_history = []
     if isinstance(history, list):

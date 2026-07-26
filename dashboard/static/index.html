@@ -230,9 +230,10 @@
 <section id="view-ask" class="ask-view" hidden aria-label="Ask Aegis">
   <div class="ask-intro" id="ask-intro">
     <h2 class="settings-title">Ask Aegis</h2>
-    <p class="settings-desc">Ask, in plain English, about what your computer has been doing. Every
-      answer is drawn only from the events Aegis has logged — it reads its own memory and never
-      guesses. It isn't an antivirus, and it can't see performance data like why an app is slow.</p>
+    <p class="settings-desc">Ask however you'd ask the guard at your gate — "kuch weird hua today?"
+      works as well as a full sentence. Every answer comes only from the events Aegis actually
+      logged; it reads its own memory and never guesses. It isn't an antivirus, and it can't see
+      performance data like why an app is slow.</p>
     <div class="ask-examples" id="ask-examples">
       <button class="ask-chip" type="button">What happened today?</button>
       <button class="ask-chip" type="button">Did anyone connect a USB?</button>
@@ -244,7 +245,8 @@
   <div class="ask-log" id="ask-log" aria-live="polite"></div>
   <form class="ask-form" id="ask-form" autocomplete="off">
     <input class="ask-input" id="ask-input" type="text" maxlength="2000"
-           placeholder="Ask about your computer's activity…" aria-label="Your question">
+           placeholder="Ask about your computer's activity — plain English or Hinglish…"
+           aria-label="Your question">
     <button class="btn btn-primary ask-send" id="ask-send" type="submit">Ask</button>
   </form>
 </section>
