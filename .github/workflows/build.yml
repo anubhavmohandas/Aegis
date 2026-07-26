@@ -20,6 +20,29 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Confirmed bug this exists to prevent (the v2.1.1 release): the tag was
+      # pushed from a commit where core/version.py still read 2.1.0, so the
+      # build produced aegis-2.1.0.dmg / aegis-2.1.0-setup.exe and the release
+      # job happily published a 2.1.0 build under a v2.1.1 tag. Every installed
+      # 2.1.0 copy then saw "2.1.1 available" forever, downloading and
+      # reinstalling the version it was already running on every click of the
+      # update button. Nothing anywhere checked that the tag described what was
+      # actually being built -- so check it here, BEFORE the ~10 minutes of
+      # building, and fail the release rather than publish a broken one.
+      # windows-installer.iss is checked too: it carries a hand-synced copy of
+      # the version (Inno Setup can't import Python), which is a second way for
+      # the same drift to reach users.
+      - name: Tag matches core/version.py
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash        # windows-latest defaults to pwsh, where this is not valid
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          SRC=$(python -c "from core.version import __version__; print(__version__)")
+          ISS=$(grep -oE '^#define MyAppVersion "[^"]+"' packaging/windows-installer.iss | sed -E 's/.*"(.*)"/\1/')
+          echo "tag=$TAG  core/version.py=$SRC  windows-installer.iss=$ISS"
+          [ "$TAG" = "$SRC" ] || { echo "::error::tag $GITHUB_REF_NAME does not match core/version.py ($SRC) -- bump it and re-tag"; exit 1; }
+          [ "$ISS" = "$SRC" ] || { echo "::error::packaging/windows-installer.iss ($ISS) does not match core/version.py ($SRC) -- bump both together"; exit 1; }
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -57,6 +80,21 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+
+      # Same guard as the windows job above -- see the comment there for the
+      # release this prevents. Both jobs check independently so a tagged build
+      # fails fast on whichever runner starts first, and neither can reach the
+      # release job with artifacts named for a version the tag doesn't claim.
+      - name: Tag matches core/version.py
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          SRC=$(python -c "from core.version import __version__; print(__version__)")
+          ISS=$(grep -oE '^#define MyAppVersion "[^"]+"' packaging/windows-installer.iss | sed -E 's/.*"(.*)"/\1/')
+          echo "tag=$TAG  core/version.py=$SRC  windows-installer.iss=$ISS"
+          [ "$TAG" = "$SRC" ] || { echo "::error::tag $GITHUB_REF_NAME does not match core/version.py ($SRC) -- bump it and re-tag"; exit 1; }
+          [ "$ISS" = "$SRC" ] || { echo "::error::packaging/windows-installer.iss ($ISS) does not match core/version.py ($SRC) -- bump both together"; exit 1; }
 
       - name: Install dependencies
         run: |

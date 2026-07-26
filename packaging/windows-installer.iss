@@ -16,9 +16,13 @@
 ;
 ; KEEP IN SYNC BY HAND: MyAppVersion below duplicates core/version.py
 ; (__version__) because Inno Setup can't import Python. Bump both together.
+; The "Tag matches core/version.py" step in .github/workflows/build.yml now
+; fails a tagged build when this drifts, so a release can no longer be
+; published with an installer whose version disagrees with the tag -- that is
+; exactly what shipped a 2.1.0 build as v2.1.1 (see core/updater.py).
 
 #define MyAppName "Aegis"
-#define MyAppVersion "2.1.0"
+#define MyAppVersion "2.1.2"
 #define MyAppPublisher "Anubhav"
 #define MyAppExeName "Aegis.exe"
 
