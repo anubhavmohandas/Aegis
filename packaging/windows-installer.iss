@@ -22,7 +22,7 @@
 ; exactly what shipped a 2.1.0 build as v2.1.1 (see core/updater.py).
 
 #define MyAppName "Aegis"
-#define MyAppVersion "2.1.2"
+#define MyAppVersion "2.1.3"
 #define MyAppPublisher "Anubhav"
 #define MyAppExeName "Aegis.exe"
 
