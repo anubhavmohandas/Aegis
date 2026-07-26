@@ -246,14 +246,63 @@ function filterQuery(extra = {}) {
   return p.toString();
 }
 
+/* Browser-side half of the instrumentation (core/metrics.py is the server's).
+   Deliberately the same shape -- bounded ring buffer, nearest-rank percentiles
+   -- so the diagnostics page can render a client series and a server series
+   through one code path instead of two.
+
+   These three numbers only mean anything next to the server's: a 400ms poll
+   against a 12ms handler says the time went somewhere between the two, not into
+   Aegis. That comparison is the reason the client measures at all rather than
+   just displaying what the server reports. */
+const CLIENT_WINDOW = 120;
+const clientMetrics = {
+  series: new Map(),
+  record(name, ms) {
+    let arr = this.series.get(name);
+    if (!arr) this.series.set(name, (arr = []));
+    arr.push(ms);
+    if (arr.length > CLIENT_WINDOW) arr.shift();
+  },
+  stats(name) {
+    const arr = this.series.get(name);
+    if (!arr || !arr.length) return null;
+    const sorted = [...arr].sort((a, b) => a - b);
+    // Nearest rank = ceil(p/100 * N), 1-indexed -- same definition as
+    // core/metrics.py _percentile, so a client series and a server series
+    // shown side by side are computed the same way. ceil, not round: rounding
+    // puts p95 of 1..100 at 96.
+    const pct = (p) => sorted[Math.min(sorted.length,
+      Math.max(1, Math.ceil((p / 100) * sorted.length))) - 1];
+    return {
+      samples: arr.length,
+      last: +arr[arr.length - 1].toFixed(2),
+      avg: +(sorted.reduce((a, b) => a + b, 0) / sorted.length).toFixed(2),
+      p50: +pct(50).toFixed(2), p95: +pct(95).toFixed(2),
+      max: +sorted[sorted.length - 1].toFixed(2),
+    };
+  },
+  recent(name, n = 40) {
+    return (this.series.get(name) || []).slice(-n);
+  },
+};
+
 async function api(path) {
-  const res = await fetch(path);
-  if (res.status === 401) {
-    location.replace("/login");        // session expired or missing
-    throw new Error("unauthenticated");
+  const started = performance.now();
+  try {
+    const res = await fetch(path);
+    if (res.status === 401) {
+      location.replace("/login");        // session expired or missing
+      throw new Error("unauthenticated");
+    }
+    if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+    return await res.json();
+  } finally {
+    // Query string stripped so /api/events?limit=200&q=x and its next call
+    // share one series -- otherwise every keystroke in the search box would
+    // mint a new label and the page would be unreadable.
+    clientMetrics.record(`fetch ${path.split("?")[0]}`, performance.now() - started);
   }
-  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
-  return res.json();
 }
 
 /* ---------- themes ---------- */
@@ -594,7 +643,22 @@ function emptyStateHtml() {
     </div>`;
 }
 
+/* Measures building the timeline: this function's JS plus the DOM mutation it
+   performs. It does NOT include layout and paint -- assigning innerHTML queues
+   that for the browser's next frame rather than doing it here, and a number
+   that silently excluded paint while calling itself "render time" would send
+   someone hunting in the wrong place. The frame-time sampler on the
+   diagnostics page is what catches the paint cost. */
 function renderTimeline(freshIds = new Set()) {
+  const started = performance.now();
+  try {
+    renderTimelineDom(freshIds);
+  } finally {
+    clientMetrics.record("build timeline", performance.now() - started);
+  }
+}
+
+function renderTimelineDom(freshIds) {
   const timeline = $("timeline");
 
   if (!state.events.length) {
@@ -1431,6 +1495,246 @@ function openDrawer(id) {
   loadRelated(id);
 }
 
+/* ---------- diagnostics ---------- */
+
+/* A hidden performance page. The pipeline crosses four boundaries — collector,
+   dispatcher, SQLite, AI — plus the HTTP server and this browser, and when
+   someone reports "Aegis feels slow" any one of them is a candidate. Every
+   stage is timed separately (core/metrics.py, plus clientMetrics above) so the
+   answer is a reading rather than an argument.
+
+   Costs nothing until opened: the poll and the frame sampler only run while the
+   view is visible, and the server computes the payload on request. */
+const DIAG_POLL_MS = 2000;
+const diagState = { unlocked: false, timer: null, raf: null, frames: [], last: null };
+
+/* Frame intervals, sampled only while the page is open. A permanent rAF loop
+   would keep the renderer awake forever — a background CPU burn shipped inside
+   the tool you use to investigate CPU burn. */
+function startFrameSampler() {
+  if (diagState.raf || prefersReducedMotion()) return;
+  let prev = performance.now();
+  const tick = (now) => {
+    const delta = now - prev;
+    prev = now;
+    // Ignore the multi-second gaps a backgrounded/occluded window produces:
+    // they're the OS throttling rAF, not a slow frame, and one of them would
+    // wreck the average for minutes.
+    if (delta < 1000) {
+      diagState.frames.push(delta);
+      if (diagState.frames.length > 180) diagState.frames.shift();
+    }
+    diagState.raf = requestAnimationFrame(tick);
+  };
+  diagState.raf = requestAnimationFrame(tick);
+}
+
+function stopFrameSampler() {
+  if (diagState.raf) cancelAnimationFrame(diagState.raf);
+  diagState.raf = null;
+}
+
+function frameStats() {
+  const f = diagState.frames;
+  if (f.length < 5) return null;
+  const sorted = [...f].sort((a, b) => a - b);
+  const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length;
+  const p95 = sorted[Math.min(sorted.length, Math.max(1, Math.ceil(0.95 * sorted.length))) - 1];
+  return { fps: +(1000 / avg).toFixed(1), avg: +avg.toFixed(2),
+           p95: +p95.toFixed(2), worst: +sorted[sorted.length - 1].toFixed(2),
+           samples: f.length };
+}
+
+function fmtMs(v) {
+  if (v == null) return "—";
+  return v >= 1000 ? `${(v / 1000).toFixed(2)}s` : `${v.toFixed(v < 10 ? 1 : 0)}ms`;
+}
+
+/* Thresholds are per-metric because "slow" is not one number: 200ms is fine for
+   an AI round trip and alarming for a SQLite read. Only ever used to tint a
+   value — the number itself is always shown, so a wrong threshold can mislead
+   nobody who reads the figure. */
+function tintFor(kind, value) {
+  if (value == null) return "";
+  const limits = {
+    fetch: [150, 600], build: [16, 50], sqlite: [25, 120],
+    http: [50, 250], ai: [8000, 20000], dispatch: [50, 250],
+    frame: [20, 34], queue: [5, 25],
+  }[kind];
+  if (!limits) return "";
+  return value >= limits[1] ? "diag-bad" : value >= limits[0] ? "diag-warn" : "diag-ok";
+}
+
+/* One metric card: headline value, supporting percentiles, and a bar strip of
+   the recent samples so a spike is visible as a shape, not just a max. */
+function diagCard(label, value, sub, series, kind, hint) {
+  const tint = tintFor(kind, typeof value === "number" ? value : null);
+  const peak = series && series.length ? Math.max(...series, 0.0001) : 0;
+  const bars = series && series.length
+    ? `<div class="diag-spark">${series.map((v) => {
+        const h = Math.max(4, (v / peak) * 100);
+        return `<i style="height:${h}%" title="${fmtMs(v)}"></i>`;
+      }).join("")}</div>`
+    : "";
+  return `
+    <div class="diag-card"${hint ? ` title="${escapeHtml(hint)}"` : ""}>
+      <span class="diag-label">${escapeHtml(label)}</span>
+      <span class="diag-value ${tint}">${typeof value === "number" ? fmtMs(value) : escapeHtml(String(value))}</span>
+      <span class="diag-sub">${sub || "&nbsp;"}</span>
+      ${bars}
+    </div>`;
+}
+
+function timerSub(stats) {
+  if (!stats) return "no samples yet";
+  return `p50 ${fmtMs(stats.p50)} · p95 ${fmtMs(stats.p95)} · max ${fmtMs(stats.max)} · n=${stats.samples}`;
+}
+
+function diagSection(title, note, cards) {
+  return `<div class="diag-section">
+      <div class="drawer-section-label">${escapeHtml(title)}</div>
+      ${note ? `<p class="diag-note">${note}</p>` : ""}
+      <div class="diag-grid">${cards.join("")}</div>
+    </div>`;
+}
+
+function renderDiagnostics(d) {
+  diagState.last = d;
+  const out = [];
+
+  // --- browser -------------------------------------------------------------
+  const pollStats = clientMetrics.stats("fetch /api/stats");
+  const evStats = clientMetrics.stats("fetch /api/events");
+  const buildStats = clientMetrics.stats("build timeline");
+  const fr = frameStats();
+  out.push(diagSection("Browser", "Measured in this window. Compare poll latency against the server's handler time below — a large gap is transport or renderer, not Aegis.", [
+    diagCard("Poll latency · /api/stats", pollStats ? pollStats.p50 : "—",
+             timerSub(pollStats), clientMetrics.recent("fetch /api/stats"), "fetch",
+             "Round trip for the 4s console poll, measured in the browser."),
+    diagCard("Event fetch · /api/events", evStats ? evStats.p50 : "—",
+             timerSub(evStats), clientMetrics.recent("fetch /api/events"), "fetch",
+             "Round trip for the timeline query."),
+    diagCard("Timeline build", buildStats ? buildStats.p50 : "—",
+             timerSub(buildStats), clientMetrics.recent("build timeline"), "build",
+             "JS + DOM mutation to rebuild the timeline. Excludes layout/paint — the frame time card covers that."),
+    diagCard("Frame time", fr ? fr.avg : "—",
+             fr ? `${fr.fps} fps avg · p95 ${fmtMs(fr.p95)} · worst ${fmtMs(fr.worst)}` : "sampling…",
+             diagState.frames.slice(-40), "frame",
+             "Interval between rendered frames while this page is open. 16.7ms = 60fps."),
+  ]));
+
+  // --- dashboard server ----------------------------------------------------
+  const s = d.server || {};
+  const st = s.timers || {};
+  const series = s.series || {};
+  const httpCards = Object.keys(st)
+    .filter((k) => k.startsWith("http ") && k !== "http all")
+    .sort((a, b) => (st[b].p95 || 0) - (st[a].p95 || 0))
+    .slice(0, 4)
+    .map((k) => diagCard(k.replace("http ", ""), st[k].p50, timerSub(st[k]),
+                         series[k], "http", "Server-side handler time for this route."));
+  out.push(diagSection("Dashboard server", `PID ${s.pid ?? "—"} · up ${formatUptime(s.uptime_seconds)} · RSS ${s.rss_mb != null ? s.rss_mb + " MB" : "—"}`, [
+    diagCard("HTTP handler · all routes", st["http all"] ? st["http all"].p50 : "—",
+             timerSub(st["http all"]), series["http all"], "http",
+             "Time inside the request handler, every route."),
+    diagCard("SQLite read · events", st.sqlite_events ? st.sqlite_events.p50 : "—",
+             timerSub(st.sqlite_events), series.sqlite_events, "sqlite",
+             "The timeline query. Grows with the store and with text search."),
+    diagCard("SQLite read · stats", st.sqlite_stats ? st.sqlite_stats.p50 : "—",
+             timerSub(st.sqlite_stats), series.sqlite_stats, "sqlite",
+             "Aggregates behind the stats band and the hourly sparkline."),
+    diagCard("Server memory", s.rss_mb != null ? `${s.rss_mb} MB` : "—",
+             "resident set size", null, null,
+             "RSS of the dashboard process."),
+    ...httpCards,
+  ]));
+
+  // --- monitor -------------------------------------------------------------
+  const m = d.monitor || {};
+  if (!m.available) {
+    out.push(diagSection("Monitor pipeline", "", [
+      `<div class="diag-empty">${escapeHtml(m.reason || "No metrics published.")}
+         <span>The dispatcher publishes these every 5s while monitoring runs.
+         Start monitoring and they'll appear.</span></div>`,
+    ]));
+  } else {
+    const mt = m.timers || {};
+    const ms_ = m.series || {};
+    const g = m.gauges || {};
+    const ingest = (m.counters || {}).events_ingested;
+    const collectors = Array.isArray(g.collectors) ? g.collectors : [];
+    const staleNote = m.stale
+      ? `<b class="diag-bad">Snapshot is ${m.age_seconds}s old — monitoring may have stopped.</b>`
+      : `updated ${m.age_seconds}s ago · up ${formatUptime(m.uptime_seconds)}`;
+    out.push(diagSection("Monitor pipeline", staleNote, [
+      diagCard("Queue depth", g.queue_depth != null ? String(g.queue_depth) : "—",
+               "events waiting to be dispatched", null,
+               typeof g.queue_depth === "number" ? "queue" : null,
+               "Backlog between the collectors and the dispatcher. Persistently above zero means collectors are outrunning the pipeline."),
+      diagCard("Ingestion rate", ingest ? `${ingest.per_minute}/min` : "—",
+               ingest ? `${ingest.total} total · ${ingest.in_window} in last ${Math.round(ingest.window_seconds / 60)}m` : "no events yet",
+               null, null, "Events pulled off the queue, over a rolling window."),
+      diagCard("Dispatch time", mt.dispatch ? mt.dispatch.p50 : "—",
+               timerSub(mt.dispatch), ms_.dispatch, "dispatch",
+               "Dedupe → classify → rules → rate limit → persist. Excludes the AI call."),
+      diagCard("AI response", mt.ai_explain ? mt.ai_explain.p50 : "—",
+               timerSub(mt.ai_explain), ms_.ai_explain, "ai",
+               "The model round trip, on its own worker. Slow here does not slow the timeline — rows are persisted before this runs."),
+      diagCard("SQLite write", mt.sqlite_insert ? mt.sqlite_insert.p50 : "—",
+               timerSub(mt.sqlite_insert), ms_.sqlite_insert, "sqlite",
+               "Row insert on the queue-draining thread."),
+      diagCard("Explain backlog", g.explain_pending != null ? String(g.explain_pending) : "—",
+               `${g.explain_workers ?? "—"} workers`, null, null,
+               "Events persisted but still waiting on an explanation."),
+      diagCard("Monitor memory", g.rss_mb != null ? `${g.rss_mb} MB` : "—",
+               "resident set size", null, null, "RSS of the monitor process."),
+      diagCard("Active collectors", String(collectors.length),
+               collectors.length ? escapeHtml(collectors.join(", ")) : "none reported",
+               null, null, "Collector threads that actually started."),
+    ]));
+  }
+
+  // --- event store ---------------------------------------------------------
+  const db = d.db || {};
+  out.push(diagSection("Event store", escapeHtml(db.path || ""), [
+    diagCard("Rows", db.events != null ? db.events.toLocaleString() : "—",
+             "events on disk", null, null, "Total rows in the events table."),
+    diagCard("Database size", db.size_mb != null ? `${db.size_mb} MB` : "—",
+             `page ${db.page_size ?? "—"} · ${db.journal_mode ?? "—"}`, null, null,
+             "Size of the SQLite file."),
+    diagCard("Python", (d.process || {}).python || "—",
+             escapeHtml((d.process || {}).platform || ""), null, null, ""),
+  ]));
+
+  $("diag-body").innerHTML = out.join("");
+}
+
+async function pollDiagnostics() {
+  try {
+    renderDiagnostics(await api("/api/diagnostics"));
+  } catch {
+    // Leave the previous render up. An unreachable server is itself already
+    // reported by the console's live indicator, and blanking the page would
+    // throw away the samples someone is mid-way through reading.
+  }
+}
+
+function openDiagnostics() {
+  diagState.unlocked = true;
+  $("side-diagnostics").hidden = false;
+  switchView("diagnostics");
+}
+
+/* Only runs while the view is on screen — see the comment on startFrameSampler. */
+function setDiagnosticsRunning(on) {
+  clearInterval(diagState.timer);
+  diagState.timer = null;
+  if (!on) { stopFrameSampler(); return; }
+  startFrameSampler();
+  pollDiagnostics();
+  diagState.timer = setInterval(pollDiagnostics, DIAG_POLL_MS);
+}
+
 /* Tab switching for the event drawer — toggles which .tab-panel is shown.
    Delegated once on the drawer body; panels are rebuilt on each openDrawer. */
 function switchDrawerTab(tab) {
@@ -1598,7 +1902,8 @@ async function switchView(view) {
   // visible -- a hidden element can't animate, and without the replay a repeat
   // switch back to a view that already carries the class does nothing.
   const views = { console: "view-console", ask: "view-ask",
-                  incidents: "view-incidents", settings: "view-settings" };
+                  incidents: "view-incidents", settings: "view-settings",
+                  diagnostics: "view-diagnostics" };
   for (const [name, id] of Object.entries(views)) $(id).hidden = name !== view;
   replayAnimation($(views[view]), "view-enter");
 
@@ -1606,6 +1911,9 @@ async function switchView(view) {
     t.classList.toggle("active", t.dataset.view === view));
   if (view === "incidents") loadIncidents();
   if (view === "ask") $("ask-input").focus();
+  // Start/stop the diagnostics poll and frame sampler with visibility, so
+  // leaving the page really does stop the work it was doing.
+  setDiagnosticsRunning(view === "diagnostics");
 }
 
 /* ---------- Ask Aegis ---------- */
@@ -2453,12 +2761,44 @@ function bind() {
   });
   $("report-generate").addEventListener("click", generateReport);
 
+  // diagnostics (hidden page)
+  $("diag-close").addEventListener("click", () => switchView("console"));
+  $("diag-copy").addEventListener("click", async () => {
+    // The client-side numbers exist only in this tab, so fold them into the
+    // copied blob -- a report missing the browser half would be half a
+    // diagnosis.
+    const payload = JSON.stringify({
+      captured_at: new Date().toISOString(),
+      client: {
+        user_agent: navigator.userAgent,
+        frames: frameStats(),
+        timers: Object.fromEntries([...clientMetrics.series.keys()]
+          .map((k) => [k, clientMetrics.stats(k)])),
+      },
+      server: diagState.last,
+    }, null, 2);
+    try {
+      await navigator.clipboard.writeText(payload);
+      toast("Diagnostics report copied");
+    } catch {
+      toast("Could not copy — clipboard blocked", true);
+    }
+  });
+
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { closeDrawer(); closeLogModal(); closeReportModal(); closeDailyBrief(); closeIncidentDrawer(); closeStopModal(); }
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "");
     if (e.key === "/" && !typing && !$("view-console").hidden) {
       e.preventDefault();
       $("search").focus();
+    }
+    // Ctrl/Cmd+Shift+D reveals the diagnostics page. e.code, not e.key: with
+    // Shift held the latter is "D" on a US layout but something else entirely
+    // on others, and this should work regardless of keyboard layout.
+    if (e.code === "KeyD" && e.shiftKey && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if (diagState.unlocked && !$("view-diagnostics").hidden) switchView("console");
+      else openDiagnostics();
     }
   });
 }
@@ -2467,6 +2807,9 @@ async function init() {
   const bootStarted = performance.now();
   bind();
   buildThemePicker();
+  // Deep link, so a "open this and send me a screenshot" instruction doesn't
+  // depend on someone getting a key chord right over a support call.
+  if (location.hash === "#diagnostics") openDiagnostics();
   try { renderStats(await api("/api/stats")); } catch { setConsoleReachable(false); }
   await refreshMonitorStatus();
   refreshShield();

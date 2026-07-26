@@ -55,6 +55,7 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))  # lets the report endpoint lazily `import core.*` -- see _handle_report_pdf
 from core.config import persistent_dir, _is_frozen  # noqa: E402 -- needs REPO_ROOT on sys.path first
+from core.metrics import METRICS, rss_mb  # noqa: E402
 from core.secrets_store import get_secret, set_secret  # noqa: E402
 
 ASSETS_DIR = REPO_ROOT / "assets"                       # brand logo lives with the app assets
@@ -328,11 +329,17 @@ def query_events(db_path: str, params: dict, limit_cap: int = 1000) -> list[dict
     clause, args = _build_event_query(params)
     conn = _connect_ro(db_path)
     try:
-        rows = conn.execute(
-            f"SELECT {', '.join(EVENT_COLUMNS)} FROM events{clause} "
-            f"ORDER BY timestamp DESC, id DESC LIMIT ?",
-            (*args, limit),
-        ).fetchall()
+        # The timeline's own query -- the one that runs on every filter change
+        # and every 4s poll, and the first thing to blame when the console feels
+        # sluggish. Timed around connect-to-rows so an expensive WHERE (a text
+        # search across a large store) shows up here rather than being blamed on
+        # the browser. See /api/diagnostics.
+        with METRICS.time("sqlite_events"):
+            rows = conn.execute(
+                f"SELECT {', '.join(EVENT_COLUMNS)} FROM events{clause} "
+                f"ORDER BY timestamp DESC, id DESC LIMIT ?",
+                (*args, limit),
+            ).fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
@@ -369,6 +376,32 @@ def query_related(db_path: str, event_id: int) -> dict:
 
 HOUR_BUCKETS = 24
 SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+def _record_http(method: str, raw_path: str, started: float) -> None:
+    """Time one request under a bounded label.
+
+    Every /api/ route gets its own series (there are ~25, a fixed set, so the
+    label space can't grow), while static files collapse into one bucket --
+    naming them individually would add nothing but a longer list, since they're
+    the same read-a-file-off-disk path. Anything unrecognised is bucketed as
+    'other' rather than echoed back as a label: self.path is attacker-controlled
+    text, and an unbounded label set is how instrumentation turns into a memory
+    leak."""
+    try:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        path = urlparse(raw_path).path
+        if path.startswith("/api/"):
+            label = f"http {method} {path}"
+        elif path == "/" or "." in path.rsplit("/", 1)[-1]:
+            label = "http static"
+        else:
+            label = "http other"
+        METRICS.timer(label).record(elapsed_ms)
+        METRICS.timer("http all").record(elapsed_ms)
+        METRICS.counter("http_requests").mark()
+    except Exception:
+        pass  # a metrics failure must never turn into a failed response
 
 
 def _hourly_activity(conn: sqlite3.Connection, since: float) -> dict:
@@ -419,6 +452,15 @@ def _hourly_activity(conn: sqlite3.Connection, since: float) -> dict:
 def query_stats(db_path: str) -> dict:
     day_ago = time.time() - 86400
     conn = _connect_ro(db_path)
+    with METRICS.time("sqlite_stats"):
+        return _query_stats_inner(conn, day_ago)
+
+
+def _query_stats_inner(conn: sqlite3.Connection, day_ago: float) -> dict:
+    """Split out purely so the timer above wraps the queries and nothing else.
+    Six aggregates over the whole table plus the hourly histogram -- the
+    heaviest read the dashboard makes, and the one that grows with the event
+    store, so it gets its own line on the diagnostics page."""
     try:
         total = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         last_24h = conn.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ?", (day_ago,)).fetchone()[0]
@@ -1005,6 +1047,102 @@ def monitor_status() -> dict:
     }
 
 
+# --- diagnostics -------------------------------------------------------------
+# Performance telemetry for the hidden diagnostics page. Everything here is
+# read-only and derived from data the process already has; nothing new is
+# computed on a schedule, so the page costs nothing until someone opens it.
+#
+# Metrics arrive from two places and are deliberately kept apart:
+#
+#   server  -- this process's own METRICS (HTTP handler time, SQLite read time)
+#   monitor -- the dispatcher's snapshot, always read back out of the meta table
+#
+# The monitor half goes through meta even when the dispatcher is running
+# in-process (desktop_app mode) and its metrics are therefore sitting in the
+# very same METRICS singleton. Taking the in-memory shortcut there would give
+# the two run modes different code paths and different freshness semantics for
+# the same page. Reading meta both ways means the page is identical in tray mode
+# and desktop mode, and the staleness figure below means something real in both.
+SERVER_TIMER_KEYS = ("http ", "sqlite_events", "sqlite_stats")
+
+# Past this, the dispatcher's snapshot is old enough that its queue depth and
+# rates describe a moment that has passed. Generous next to the dispatcher's
+# 5s publish interval so an ordinary slow tick never reads as stale.
+METRICS_STALE_SECONDS = 20
+
+
+def _monitor_metrics() -> dict:
+    """The dispatcher's published snapshot, plus how old it is."""
+    try:
+        conn = _connect_ro(DashboardHandler.db_path or _safe_config().db_path)
+        try:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = 'metrics_snapshot'").fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return {"available": False, "reason": "event store unreadable"}
+    if not row:
+        return {"available": False, "reason": "monitor has not published metrics yet"}
+    try:
+        snap = json.loads(row[0])
+    except (TypeError, ValueError):
+        return {"available": False, "reason": "unreadable metrics snapshot"}
+    age = max(0.0, time.time() - float(snap.get("at") or 0))
+    snap["age_seconds"] = round(age, 1)
+    snap["stale"] = age > METRICS_STALE_SECONDS
+    snap["available"] = True
+    return snap
+
+
+def _db_facts(db_path: str) -> dict:
+    """Size and row count of the event store -- the two numbers that explain a
+    slow query without needing a profiler."""
+    facts = {"path": db_path}
+    try:
+        facts["size_mb"] = round(os.path.getsize(db_path) / (1024 * 1024), 2)
+    except OSError:
+        facts["size_mb"] = None
+    try:
+        conn = _connect_ro(db_path)
+        try:
+            with METRICS.time("sqlite_count"):
+                facts["events"] = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            facts["page_size"] = conn.execute("PRAGMA page_size").fetchone()[0]
+            facts["journal_mode"] = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        facts["events"] = None
+    return facts
+
+
+def diagnostics(db_path: str) -> dict:
+    snap = METRICS.snapshot()
+    server_timers = {k: v for k, v in snap["timers"].items()
+                     if k.startswith(SERVER_TIMER_KEYS)}
+    return {
+        "at": time.time(),
+        "server": {
+            "role": "dashboard",
+            "pid": os.getpid(),
+            "uptime_seconds": snap["uptime_seconds"],
+            "rss_mb": rss_mb(),
+            "timers": server_timers,
+            "series": {k: v for k, v in snap["series"].items()
+                       if k.startswith(SERVER_TIMER_KEYS)},
+            "counters": snap["counters"],
+        },
+        "monitor": _monitor_metrics(),
+        "db": _db_facts(db_path),
+        "process": {
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+            "frozen": _is_frozen(),
+        },
+    }
+
+
 def start_monitor() -> dict:
     if DashboardHandler.in_process_monitor:
         # Actually starts/rebuilds the collector+dispatcher pipeline in THIS
@@ -1587,6 +1725,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *fmt_args):
         pass  # keep the terminal quiet; errors still surface as HTTP 500s
 
+    # --- request timing ---
+    # do_GET/do_POST are thin wrappers so every response, including error and
+    # early-return paths, is measured. Server-side time recorded here is what
+    # the frontend's own poll-latency figure is compared against: if the browser
+    # sees 400ms and the handler took 12ms, the time went to the connection or
+    # the renderer, not to Aegis.
+
+    def do_GET(self):
+        started = time.perf_counter()
+        try:
+            self._handle_get()
+        finally:
+            _record_http("GET", self.path, started)
+
+    def do_POST(self):
+        started = time.perf_counter()
+        try:
+            self._handle_post()
+        finally:
+            _record_http("POST", self.path, started)
+
     def _send(self, status: int, body: bytes, content_type: str, extra: dict | None = None):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
@@ -1688,7 +1847,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     # --- request handling ---
 
-    def do_POST(self):
+    def _handle_post(self):
         parsed = urlparse(self.path)
         if not self._host_ok():
             self._send(403, b"forbidden host", "text/plain")
@@ -1953,7 +2112,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "Set-Cookie": f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "
                           f"Path=/; Max-Age={SESSION_TTL}"})
 
-    def do_GET(self):
+    def _handle_get(self):
         parsed = urlparse(self.path)
         if not self._host_ok():
             self._send(403, b"forbidden host", "text/plain")
@@ -1980,6 +2139,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         self._send_json(result, status=404 if result.get("error") else 200)
                 elif parsed.path == "/api/stats":
                     self._send_json(query_stats(self.db_path))
+                elif parsed.path == "/api/diagnostics":
+                    # Behind the session like every other /api/ route, but
+                    # deliberately NOT behind the Settings unlock: this is
+                    # timings and counts with no secrets in it, and gating a
+                    # troubleshooting page behind a second password is how you
+                    # ensure nobody uses it during the incident it exists for.
+                    self._send_json(diagnostics(self.db_path))
                 elif parsed.path == "/api/incidents":
                     self._send_json(list_incidents())
                 elif parsed.path == "/api/incidents/get":

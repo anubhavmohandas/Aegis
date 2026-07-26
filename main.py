@@ -32,6 +32,7 @@ from queue import Queue
 from core.config import load_config
 from core.dispatcher import Dispatcher
 from core.folder_monitor import FolderMonitor
+from core.metrics import record_collectors
 from core.notifier import notify
 from core.session_monitor import SessionMonitor
 from core.tray_app import TrayApp
@@ -97,6 +98,7 @@ def main(use_tray: bool = True):
     all_monitors = platform_monitors + [folder_monitor, session_monitor]
     for m in all_monitors:
         m.start()
+    record_collectors(all_monitors)
 
     dispatcher_thread = threading.Thread(target=dispatcher.run_forever, daemon=True)
     dispatcher_thread.start()

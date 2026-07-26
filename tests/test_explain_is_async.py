@@ -67,6 +67,14 @@ def _dispatcher(store, tmp_log):
     d._log_lock = threading.Lock()
     d._last_heartbeat = time.time()
     d._explain_pool = ThreadPoolExecutor(max_workers=3)
+    # This fixture bypasses __init__ (real config, AI client and EventStore are
+    # all stubbed above), so anything __init__ sets has to be mirrored here.
+    # _last_metrics is far in the future to keep _publish_metrics from writing
+    # to the FakeStore during the test; the other two back the explain-backlog
+    # gauge on the diagnostics page.
+    d._last_metrics = float("inf")
+    d._explain_pending = 0
+    d._explain_lock = threading.Lock()
     return d
 
 

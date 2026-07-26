@@ -35,6 +35,7 @@ import webview
 from core.config import load_config
 from core.dispatcher import Dispatcher
 from core.folder_monitor import FolderMonitor
+from core.metrics import record_collectors
 from core.session_monitor import SessionMonitor
 from dashboard.server import MONITOR_LOG_PATH, build_server
 from main import build_platform_monitors
@@ -118,6 +119,9 @@ class MonitorPipeline:
         self._dispatcher = dispatcher
         self._thread = thread
         self.running = True
+        # After the rollback path above, so only a pipeline that actually came
+        # up is reported as running.
+        record_collectors(monitors)
         self.started_at = time.time()
         logger.info("Monitor pipeline started")
 
@@ -141,6 +145,10 @@ class MonitorPipeline:
         self._thread = None
         self.running = False
         self.started_at = None
+        # Clear the published list too, or diagnostics keeps naming collectors
+        # that stopped -- the last snapshot the dispatcher wrote before exiting
+        # would otherwise sit in the meta table looking current.
+        record_collectors([])
         logger.info("Monitor pipeline stopped")
 
 

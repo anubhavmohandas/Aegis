@@ -80,6 +80,34 @@ def is_newer(remote: str, local: str = __version__) -> bool:
     return _parse_version(remote) > _parse_version(local)
 
 
+# Both publishers name their artifact after the version it was BUILT from --
+# packaging/make_dmg.sh does `aegis-$VERSION.dmg` and
+# packaging/windows-installer.iss does the same for the setup .exe, each
+# reading core/version.py. That makes the filename independent evidence of
+# what is actually inside the asset, which the git tag is not.
+_ASSET_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+
+def _asset_version(asset_name: str) -> tuple | None:
+    """(major, minor, patch) read out of a release asset's filename, or None
+    if it has no version in it.
+
+    Deliberately matches ONLY the numeric triple, never a pre-release suffix:
+    an asset name ends in a file extension, and a suffix-aware pattern cannot
+    tell a real pre-release tag from one. `aegis-2.1.1-setup.exe` parsed as
+    version "2.1.1-setup.exe", which then compared unequal to the tag v2.1.1
+    and would have made this guard reject every legitimate WINDOWS release
+    (caught in testing -- the macOS `.dmg` name has no `-suffix`, so it looked
+    fine on the platform it was written on). The triple is all this check
+    needs: it exists to catch a tag pointing at a build of a different
+    version, which is a major/minor/patch difference.
+
+    None means "unverifiable", NOT "mismatched" -- a future asset naming
+    scheme without a version in it must not block updates outright."""
+    m = _ASSET_VERSION_RE.search(asset_name)
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
 def _pick_asset(assets: list[dict]) -> dict | None:
     system = platform.system()
     for asset in assets:
@@ -121,6 +149,29 @@ def check_for_update(timeout: int = 10) -> dict | None:
     if asset is None:
         logger.warning("Newer release %s exists but has no downloadable asset for %s",
                         tag, platform.system())
+        return None
+
+    # Confirmed bug (the real v2.1.1 release): the tag was pushed from a
+    # commit where core/version.py still read 2.1.0, so GitHub advertised
+    # v2.1.1 while the attached assets were `aegis-2.1.0.dmg` /
+    # `aegis-2.1.0-setup.exe` -- a 2.1.0 build. Every installed 2.1.0 copy
+    # therefore saw "2.1.1 is available", downloaded it, swapped its app
+    # bundle for a byte-for-byte equivalent one and relaunched. To the user
+    # that is the update button quitting and reopening the app having changed
+    # nothing -- and it never resolves, because the very next check reports
+    # the same "newer" version again, forever.
+    #
+    # The tag is just a label a human typed; it is not evidence of what got
+    # built. Refuse to offer an update whose own asset filename says it is
+    # not the version being advertised -- reinstalling the version you are
+    # already running is never worth a restart.
+    asset_version = _asset_version(asset["name"])
+    if asset_version is not None and asset_version != _parse_version(tag)[0]:
+        logger.error(
+            "Release %s ships %r, which was built from %s -- refusing to offer an update "
+            "that would reinstall a different version than it advertises. Rebuild and "
+            "republish the release from a commit with core/version.py bumped to match the tag.",
+            tag, asset["name"], ".".join(str(n) for n in asset_version))
         return None
 
     return {

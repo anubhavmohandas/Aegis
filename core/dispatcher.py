@@ -47,6 +47,7 @@ is never skipped.
 
 from __future__ import annotations
 
+import json
 import logging
 import platform
 import subprocess
@@ -62,6 +63,7 @@ from .config import AppConfig
 from .database import EventStore
 from .enrichment import ThreatEnricher
 from .events import EventCategory, MonitorEvent
+from .metrics import METRICS, rss_mb
 from .notifier import notify
 from .process_notes import describe
 from .rule_engine import RuleEngine
@@ -93,6 +95,15 @@ EXPLAIN_WORKERS = 3
 HEARTBEAT_INTERVAL_SECONDS = 60
 HEARTBEAT_KEY = "last_heartbeat"
 GAP_THRESHOLD_SECONDS = 5 * 60
+
+# Performance telemetry (core/metrics.py) published for the dashboard's
+# diagnostics page. Separate key and cadence from the heartbeat above, which is
+# a tamper/gap signal at a deliberately slow 60s: metrics are for someone
+# watching a live graph while they reproduce a slowdown, and a minute-old queue
+# depth is useless for that. One small UPSERT every few seconds, on the loop
+# that already wakes once a second for the queue timeout.
+METRICS_KEY = "metrics_snapshot"
+METRICS_INTERVAL_SECONDS = 5
 # Bracketing an away session: the SESSION_UNLOCKED handler pulls every event
 # in the lock..unlock window for the recap. Cap so a multi-day away window
 # can't build an enormous prompt.
@@ -145,6 +156,9 @@ class Dispatcher:
         self._stop = threading.Event()
         self._log_lock = threading.Lock()
         self._last_heartbeat = 0.0
+        self._last_metrics = 0.0
+        self._explain_pending = 0
+        self._explain_lock = threading.Lock()
         # Explanations run here, not on the queue-draining thread. Small on
         # purpose: this is concurrency to keep one slow response from blocking
         # the next event, not throughput -- more parallel calls into a free-tier
@@ -156,10 +170,17 @@ class Dispatcher:
         self._check_monitoring_gap()
         while not self._stop.is_set():
             self._heartbeat()
+            self._publish_metrics()
             try:
                 event = self.in_queue.get(timeout=1)
             except Empty:
                 continue
+            # Sampled here rather than inside _handle: this is the depth at the
+            # moment an event was pulled, which is the number that says whether
+            # the collectors are outrunning the dispatcher. Reading it after
+            # handling would always show the post-drain figure.
+            METRICS.gauge("queue_depth", self.in_queue.qsize())
+            METRICS.counter("events_ingested").mark()
             # One bad event must never kill this thread: it's the single
             # consumer of every collector's queue, it runs as a daemon, and
             # its death has no visible symptom -- the monitors keep queueing
@@ -169,7 +190,13 @@ class Dispatcher:
             # its own threads against; the central loop was the one place
             # still missing the guard.
             try:
-                self._handle(event)
+                # Wall time for the whole synchronous pipeline (dedupe ->
+                # classify -> rules -> rate limit -> enrich -> persist). The AI
+                # call is NOT in here -- _stage_explain_and_notify hands that to
+                # the pool -- so a slow dispatch time points at local work,
+                # never at the model. That separation is the whole point.
+                with METRICS.time("dispatch"):
+                    self._handle(event)
             except Exception:
                 logger.exception("Unhandled error dispatching event %r -- "
                                  "event skipped, dispatcher still running", event.summary)
@@ -315,29 +342,48 @@ class Dispatcher:
         Nothing is lost on failure: _explain_async always writes something back,
         and the flat log already has the event regardless."""
         event_id = self._persist(event, severity=severity, explanation=None, ai_skipped=False)
+        # Counted around submit/completion rather than read off the executor's
+        # internal _work_queue: pending explanations are a headline diagnostic
+        # (a backlog here means the model, not Aegis, is the bottleneck), and
+        # that attribute is a CPython implementation detail with no guarantees.
+        with self._explain_lock:
+            self._explain_pending += 1
         self._explain_pool.submit(self._explain_async, event, severity, event_id)
 
     def _explain_async(self, event: MonitorEvent, severity: str, event_id: int | None) -> None:
+        # The outer finally is what keeps the pending gauge honest: this method
+        # already swallows its own exceptions, but a raise from anywhere else in
+        # here (or a cancelled future at shutdown) would otherwise leak a count
+        # and leave the diagnostics page reporting a backlog that has drained.
         try:
-            if event.category == EventCategory.SESSION_UNLOCKED:
-                # The "what happened while you were away" briefing IS this
-                # event's explanation -- built from the events inside the
-                # lock..unlock window, not from the unlock event alone.
-                explanation = self._away_recap(event)
-            else:
-                explanation = self.explainer.explain(event, severity)
-        except Exception:
-            # explain()/summarize_away() already swallow their own errors and
-            # return a placeholder string, so reaching here means something
-            # genuinely unexpected. The row must not be left pending forever.
-            logger.exception("Explanation failed for: %s", event.summary)
-            explanation = "[Explanation unavailable -- see logs.]"
-        if event_id is not None:
             try:
-                self.store.update_explanation(event_id, explanation)
-            except Exception as e:
-                logger.error("Failed to store explanation for event %s: %s", event_id, e)
-        self._notify_for(event, severity, explanation)
+                # Times the network round trip alone, on the pool thread that
+                # owns it. A high p95 here with a low dispatch time is the
+                # signature of a slow/rate-limited provider rather than a slow
+                # Aegis -- the distinction the diagnostics page exists to make.
+                with METRICS.time("ai_explain"):
+                    if event.category == EventCategory.SESSION_UNLOCKED:
+                        # The "what happened while you were away" briefing IS
+                        # this event's explanation -- built from the events
+                        # inside the lock..unlock window, not the unlock alone.
+                        explanation = self._away_recap(event)
+                    else:
+                        explanation = self.explainer.explain(event, severity)
+            except Exception:
+                # explain()/summarize_away() already swallow their own errors and
+                # return a placeholder string, so reaching here means something
+                # genuinely unexpected. The row must not be left pending forever.
+                logger.exception("Explanation failed for: %s", event.summary)
+                explanation = "[Explanation unavailable -- see logs.]"
+            if event_id is not None:
+                try:
+                    self.store.update_explanation(event_id, explanation)
+                except Exception as e:
+                    logger.error("Failed to store explanation for event %s: %s", event_id, e)
+            self._notify_for(event, severity, explanation)
+        finally:
+            with self._explain_lock:
+                self._explain_pending = max(0, self._explain_pending - 1)
 
     def _notify_for(self, event: MonitorEvent, severity: str, explanation: str) -> None:
         if not self.config.notify_enabled:
@@ -444,6 +490,37 @@ class Dispatcher:
         except Exception as e:
             logger.debug("Heartbeat write failed: %s", e)
 
+    def _publish_metrics(self) -> None:
+        """Write this process's metrics snapshot where the dashboard can read it.
+
+        The dashboard opens the event store mode=ro and, in tray mode
+        (main.py), is a different process entirely -- so there is no in-memory
+        object it could read instead. The meta table is the existing one-way
+        channel for exactly this (see _heartbeat above), and a JSON blob under
+        one key keeps the schema in this file rather than spread across new
+        columns.
+
+        Failures are logged at debug and dropped: a full disk or a locked DB
+        must degrade to a stale diagnostics page, never to a dispatcher that
+        stops draining the queue."""
+        now = time.time()
+        if now - self._last_metrics < METRICS_INTERVAL_SECONDS:
+            return
+        self._last_metrics = now
+        try:
+            # Refreshed at publish time rather than per-event: both are point
+            # samples, and sampling them once every few seconds keeps psutil off
+            # the hot path entirely.
+            METRICS.gauge("queue_depth", self.in_queue.qsize())
+            METRICS.gauge("rss_mb", rss_mb())
+            METRICS.gauge("explain_workers", EXPLAIN_WORKERS)
+            with self._explain_lock:
+                METRICS.gauge("explain_pending", self._explain_pending)
+            METRICS.gauge("role", "monitor")
+            self.store.set_meta(METRICS_KEY, json.dumps(METRICS.snapshot()))
+        except Exception as e:
+            logger.debug("Metrics publish failed: %s", e)
+
     def _check_monitoring_gap(self) -> None:
         """On startup, compare now against the last heartbeat. A large gap
         means Aegis wasn't running for that stretch -- surface it as an event
@@ -509,18 +586,24 @@ class Dispatcher:
         """Returns the new row's id, or None if the write failed (the caller
         uses it to fill in the explanation later; None just means no update)."""
         try:
-            return self.store.insert(
-                source=event.source,
-                category=event.category.value,
-                summary=event.summary,
-                details=event.details,
-                confidence=event.confidence,
-                severity=severity,
-                explanation=explanation,
-                risk_hint=risk_hint,
-                ai_skipped=ai_skipped,
-                timestamp=event.timestamp,
-            )
+            # The write side of "is SQLite the bottleneck?". EventStore.insert
+            # serialises on a lock and commits per row, so this is where lock
+            # contention or a slow disk shows up -- and it sits on the
+            # queue-draining thread, so when it climbs, everything behind it
+            # waits. The dashboard's read timings are tracked separately.
+            with METRICS.time("sqlite_insert"):
+                return self.store.insert(
+                    source=event.source,
+                    category=event.category.value,
+                    summary=event.summary,
+                    details=event.details,
+                    confidence=event.confidence,
+                    severity=severity,
+                    explanation=explanation,
+                    risk_hint=risk_hint,
+                    ai_skipped=ai_skipped,
+                    timestamp=event.timestamp,
+                )
         except Exception as e:
             # DB failure must never crash the monitor loop -- the flat log
             # (_log_raw, above) already has this event regardless.

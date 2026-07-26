@@ -137,6 +137,39 @@ class AIExplainer:
     def __init__(self, config: AppConfig):
         self.config = config
         self._client = None
+        # Confirmed bug: a rejected API key produced one doomed HTTPS round
+        # trip PER EVENT for the whole life of the process (verified in
+        # monitor.log: an unbroken run of "HTTP/1.1 401 Unauthorized" against
+        # integrate.api.nvidia.com, one per dispatched event). A 401 is
+        # permanent and user-fixable, not transient -- retrying it forever
+        # buys nothing and burns an explainer-pool thread each time. Same
+        # "bad key: fail once, log once, stop calling until restart" pattern
+        # core/enrichment.py already uses for VirusTotal. A Settings save
+        # rebuilds the whole Dispatcher (and therefore this object), so
+        # entering a corrected key clears the flag without a manual restart.
+        self._auth_failed = False
+
+    @staticmethod
+    def _is_auth_error(e: Exception) -> bool:
+        # Both SDKs raise their own AuthenticationError class, but both also
+        # carry the HTTP status on the exception -- keying off the status
+        # keeps this provider-agnostic (an OpenAI-compatible endpoint behind
+        # an older SDK, or a gateway that answers 403 instead of 401, still
+        # gets classified correctly) without importing either SDK here.
+        return getattr(e, "status_code", None) in (401, 403)
+
+    def _auth_message(self, fallback: str, raw_event: bool = True) -> str:
+        # Deliberately says WHAT is wrong and WHERE to fix it. The old generic
+        # "[AI explainer unavailable -- see logs]" was accurate but unusable:
+        # it's what the dashboard's AI Explanation tab renders, and it gave a
+        # non-developer no way to tell a rejected key apart from the endpoint
+        # being down -- the actual cause was only visible by opening
+        # monitor.log. Naming the env var (never the key value) matches what
+        # the no-key-configured branch already surfaces.
+        label = "Raw event: " if raw_event else ""
+        return (f"[AI unavailable -- {self.config.ai_api_key_env} was rejected by the "
+                f"provider] {label}{fallback}\n"
+                f"Update the API key in Settings to restore AI explanations.")
 
     def _get_client(self):
         if self._client is not None:
@@ -162,6 +195,10 @@ class AIExplainer:
                 f"[No API key configured] Raw event: {event.summary}\n"
                 f"Set {self.config.ai_api_key_env} to get AI explanations."
             )
+        if self._auth_failed:
+            # Already rejected once this run -- don't spend a network call to
+            # be told the same thing again. See _auth_failed in __init__.
+            return self._auth_message(event.summary)
 
         prompt = event.as_prompt_block() + f"\nLocally-computed severity: {severity}"
         system_prompt = SYSTEM_PROMPT_WITH_INTEL if "threat_intel" in event.details else SYSTEM_PROMPT
@@ -181,6 +218,12 @@ class AIExplainer:
             # things like partial API keys, internal URLs, or proxy config in
             # their message text; there's no reason to surface that to whoever's
             # glancing at a notification.
+            if self._is_auth_error(e):
+                self._auth_failed = True
+                logger.error("AI provider rejected %s (HTTP %s) -- AI explanations "
+                             "disabled until the key is corrected in Settings.",
+                             self.config.ai_api_key_env, getattr(e, "status_code", "?"))
+                return self._auth_message(event.summary)
             logger.error("AI explainer failed for event %r: %s", event.summary, e)
             return f"[AI explainer unavailable -- see logs] Raw event: {event.summary}"
 
@@ -251,6 +294,8 @@ class AIExplainer:
         explain(); only the system prompt and the input block differ."""
         if not self.config.api_key:
             return f"[No AI summary -- {self.config.ai_api_key_env} is not set] {fallback}"
+        if self._auth_failed:
+            return self._auth_message(fallback, raw_event=False)
         try:
             client = self._get_client()
             if self.config.ai_provider == "anthropic":
@@ -270,6 +315,12 @@ class AIExplainer:
             )
             return self._nonempty(resp.choices[0].message.content, fallback)
         except Exception as e:
+            if self._is_auth_error(e):
+                self._auth_failed = True
+                logger.error("AI provider rejected %s (HTTP %s) -- AI summaries "
+                             "disabled until the key is corrected in Settings.",
+                             self.config.ai_api_key_env, getattr(e, "status_code", "?"))
+                return self._auth_message(fallback, raw_event=False)
             logger.error("AI summary failed (%s): %s", system_prompt[:32], e)
             return f"[AI summary unavailable -- see logs] {fallback}"
 
