@@ -25,6 +25,17 @@ dist/
 *.app
 *.dmg
 *.pkg
+# The macOS artifacts above were covered; the Windows ones were not.
+# windows-installer.iss writes OutputDir=output, i.e.
+# packaging/output/aegis-X.Y.Z-setup.exe -- roughly 100MB, and
+# packaging/release.command runs `git add -A`, so a local Windows build
+# followed by a release would have committed the installer into the repo.
+packaging/output/
+*.exe
+# Timestamped publish logs. Already caught by the generic `*.log` rule above,
+# but only incidentally -- named explicitly so anything else that lands in
+# here (a JSON run summary, a downloaded CI log) stays out too.
+packaging/release-logs/
 
 # --- Secrets / local env ---
 .env

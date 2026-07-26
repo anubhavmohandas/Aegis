@@ -38,8 +38,6 @@ import urllib.request
 from pathlib import Path
 from urllib.error import URLError
 
-import certifi
-
 from .version import __version__
 
 logger = logging.getLogger("aegis.updater")
@@ -58,7 +56,25 @@ RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 # certifi is already an install dependency (pulled in by anthropic/openai's
 # httpx), so use its CA bundle explicitly instead of trusting the platform
 # default to have one.
-_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+#
+# Built on first use rather than at import, and certifi is imported inside the
+# function for the same reason: this module's pure version-comparison helpers
+# (is_newer/_parse_version) have no business requiring a third-party package.
+# packaging/publish.command imports is_newer with a bare system python3 to
+# sanity-check the version being released -- `import certifi` at module scope
+# made that crash with ModuleNotFoundError, and because the script treated any
+# non-zero exit as "not newer", it refused to publish 2.1.3 over 2.1.2 with a
+# confidently wrong message. Nothing about comparing two version strings needs
+# a CA bundle; only the two functions that actually open a socket do.
+_SSL_CONTEXT: ssl.SSLContext | None = None
+
+
+def _ssl_context() -> ssl.SSLContext:
+    global _SSL_CONTEXT
+    if _SSL_CONTEXT is None:
+        import certifi
+        _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+    return _SSL_CONTEXT
 
 
 class UpdateError(Exception):
@@ -135,7 +151,7 @@ def check_for_update(timeout: int = 10) -> dict | None:
         RELEASES_API, headers={"Accept": "application/vnd.github+json", "User-Agent": "Aegis-updater"}
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CONTEXT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
             data = json.loads(resp.read())
     except (URLError, OSError, json.JSONDecodeError) as e:
         logger.warning("Update check failed: %s", e)
@@ -222,7 +238,7 @@ def download_update(download_url: str, asset_name: str) -> Path:
     dest_dir = Path(tempfile.mkdtemp(prefix="aegis-update-"))
     dest = dest_dir / safe_name
     req = urllib.request.Request(download_url, headers={"User-Agent": "Aegis-updater"})
-    with urllib.request.urlopen(req, timeout=120, context=_SSL_CONTEXT) as resp, open(dest, "wb") as f:
+    with urllib.request.urlopen(req, timeout=120, context=_ssl_context()) as resp, open(dest, "wb") as f:
         shutil.copyfileobj(resp, f)
     return dest
 

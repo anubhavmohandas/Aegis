@@ -72,7 +72,15 @@ datas = [
 # scan finds most of these, but plyer's per-OS backend is loaded by string
 # name at runtime and MUST be named explicitly or Windows notifications
 # silently fall through to the print fallback in the frozen build.
-hiddenimports = ["anthropic", "openai"]
+# certifi is named explicitly because core/updater.py now imports it inside
+# _ssl_context() rather than at module scope (so the pure version helpers stay
+# importable without it -- see the comment there). PyInstaller's bytecode scan
+# does find function-level imports, and httpx would drag certifi in anyway, but
+# what depends on this is the self-update TLS path in the FROZEN build: if
+# certifi's cacert.pem ever fails to get collected, every update check dies
+# with CERTIFICATE_VERIFY_FAILED, which is precisely the failure that comment
+# documents. One list entry is cheaper than re-learning that.
+hiddenimports = ["anthropic", "openai", "certifi"]
 
 # Never bundle the other platforms' collector packages or their native deps;
 # they can't import on this OS and only produce warnings/bloat.

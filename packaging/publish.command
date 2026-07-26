@@ -139,13 +139,28 @@ if not re.match(r'^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?\$', sys.argv[1]):
     sys.exit(1)
 " "$NEW_VERSION" || fail "'$NEW_VERSION' is not a valid version (expected X.Y.Z or X.Y.Z-suffix)"
 
+# Confirmed bug: this used to be a plain `|| fail "... is not newer ..."`, so
+# ANY non-zero exit became that message -- including the check never running.
+# core/updater.py imported certifi at module scope, this runs under a bare
+# system python3 that doesn't have it, and the resulting ModuleNotFoundError
+# was reported as "2.1.3 is not newer than 2.1.2", which is simply false. Same
+# bug class the updater itself already fixed (check_for_update's check_failed
+# distinction): a check that could not run must never be reported as a check
+# that ran and said no. 0 = newer, 1 = genuinely not newer, anything else =
+# the check itself broke, which is a different problem with a different fix.
+NEWER_RC=0
 python3 -c "
 import sys
 sys.path.insert(0, '.')
 from core.updater import is_newer
 sys.exit(0 if is_newer(sys.argv[1], sys.argv[2]) else 1)
-" "$NEW_VERSION" "$CURRENT_VERSION" \
-    || fail "$NEW_VERSION is not newer than $CURRENT_VERSION -- installs would never offer it as an update"
+" "$NEW_VERSION" "$CURRENT_VERSION" || NEWER_RC=$?
+
+case "$NEWER_RC" in
+    0) ;;
+    1) fail "$NEW_VERSION is not newer than $CURRENT_VERSION -- installs would never offer it as an update" ;;
+    *) fail "could not check whether $NEW_VERSION is newer than $CURRENT_VERSION (python3 exited $NEWER_RC -- see the traceback above). Nothing was published; fix the check, then re-run." ;;
+esac
 
 TAG="v$NEW_VERSION"
 if git rev-parse "$TAG" >/dev/null 2>&1 || git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
