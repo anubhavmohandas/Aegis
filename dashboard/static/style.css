@@ -379,9 +379,15 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   border-radius: var(--radius);
   color: var(--ink-2);
   background: transparent;
-  transition: color .15s, border-color .15s, background .15s;
+  transition: color .15s, border-color .15s, background .15s,
+              transform .12s cubic-bezier(.2, .8, .3, 1);
 }
 .btn:hover { color: var(--ink); border-color: var(--accent); background: var(--accent-dim); }
+/* Press feedback. Scaling DOWN on click (rather than up on hover) is what makes
+   a control feel physically pushed; hover stays a color change so the topbar
+   doesn't wobble as the pointer crosses it. */
+.btn:active { transform: scale(.96); }
+.btn[disabled]:active { transform: none; }
 .btn-ghost { border-color: transparent; color: var(--ink-3); }
 .btn-ghost:hover { border-color: var(--border-strong); background: none; color: var(--ink); }
 .btn-icon { padding: 7px 9px; display: inline-flex; align-items: center; }
@@ -429,9 +435,11 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   border: 1px solid var(--border);
   border-radius: 8px;
   text-align: left;
-  transition: border-color .15s, background .15s;
+  transition: border-color .15s, background .15s,
+              transform .15s cubic-bezier(.2, .8, .3, 1);
 }
-.theme-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+.theme-card:hover { border-color: var(--accent); background: var(--bg-hover); transform: translateY(-1px); }
+.theme-card:active { transform: scale(.98); }
 .theme-card.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .theme-swatch {
   display: flex; align-items: center; gap: 4px;
@@ -472,9 +480,12 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 /* ---------- stats band ---------- */
 
+/* The first column is wider than the other three: it carries the 24-hour
+   activity sparkline under its number (the stat-tile label/value/trend
+   contract), and 24 bars need the room to stay legible. */
 .stats-band {
   display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr)) minmax(240px, 1.6fr);
+  grid-template-columns: minmax(230px, 1.5fr) repeat(3, minmax(110px, 1fr)) minmax(240px, 1.6fr);
   gap: 10px;
   margin-bottom: 18px;
 }
@@ -486,7 +497,21 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   box-shadow: var(--shadow-card);
   padding: 12px 16px;
   animation: rise .4s ease both;
+  transition: border-color .18s ease, transform .18s cubic-bezier(.2, .8, .3, 1), box-shadow .18s ease;
 }
+/* Tiles are not clickable, so the hover cue stays a whisper -- a 1px lift and a
+   warmer border, enough to confirm the surface is live without implying a
+   button. */
+.stat-tile:hover, .severity-panel:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+/* The three short tiles centre their number against the taller activity and
+   severity panels beside them; the activity tile stays top-aligned because its
+   sparkline has to sit under the value. */
+.stat-tile { display: flex; flex-direction: column; justify-content: center; }
+.stat-tile-activity { justify-content: flex-start; }
 .stats-band > *:nth-child(2) { animation-delay: .04s; }
 .stats-band > *:nth-child(3) { animation-delay: .08s; }
 .stats-band > *:nth-child(4) { animation-delay: .12s; }
@@ -515,17 +540,59 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 .stat-value.alert { color: var(--sev-critical); }
 
-.severity-panel { display: flex; flex-direction: column; }
+/* ---------- 24h activity sparkline ---------- */
+
+/* One bar per hour, oldest left. Height encodes volume; color encodes the WORST
+   severity logged in that hour, so a quiet hour holding one critical can't look
+   like a quiet hour that holds nothing. Single series, so no legend box -- the
+   tile label names it, and the caption below carries the peak so the values are
+   readable without hovering. */
+.spark {
+  display: flex; align-items: flex-end; gap: 2px;   /* 2px surface gap between bars */
+  height: 32px; margin-top: 10px;
+}
+.spark-bar {
+  flex: 1 1 0; min-width: 0;
+  /* Rounded data-end, square at the baseline. 2px rather than the usual 4px:
+     these bars land near 6px wide, where a 4px radius rounds the top into a
+     lollipop instead of reading as a squared-off column. */
+  border-radius: 2px 2px 0 0;
+  background: var(--spark-tint, var(--sev-low));
+  min-height: 2px;                                  /* an empty hour still shows a baseline tick */
+  transition: height .5s cubic-bezier(.2, .8, .3, 1), opacity .3s ease, filter .12s ease;
+}
+.spark-bar.is-empty { background: var(--border); }
+.spark-bar:hover { filter: brightness(1.35); }
+/* The hour in progress is still filling up, so it reads as provisional. */
+.spark-bar.is-current { opacity: .55; }
+
+.spark-foot {
+  display: flex; justify-content: space-between; gap: 8px;
+  margin-top: 5px;
+  font-family: var(--font-mono); font-size: 10px; color: var(--ink-3);
+  white-space: nowrap;
+}
+.spark-peak { color: var(--ink-2); }
+
+.severity-panel { display: flex; flex-direction: column; justify-content: center; }
 .severity-bar {
   display: flex; gap: 2px;           /* 2px surface gap between fills */
-  height: 10px; margin: 7px 0 8px;
+  height: 12px; margin: 7px 0 9px;
 }
+/* Segments are built once and then only have their flex-grow updated, so a
+   changing distribution slides between shapes instead of being torn down and
+   rebuilt on every 4s poll. A zero-count severity collapses to nothing rather
+   than holding its 4px minimum open. */
 .severity-bar .seg {
   border-radius: 2px;
+  flex: 0 1 0;
   min-width: 4px;
-  transition: flex-grow .4s ease;
+  transition: flex-grow .5s cubic-bezier(.2, .8, .3, 1), min-width .5s cubic-bezier(.2, .8, .3, 1),
+              opacity .3s ease, filter .12s ease;
 }
-.severity-bar .seg.empty { background: var(--border); flex: 1; }
+.severity-bar .seg:hover { filter: brightness(1.3); }
+.severity-bar .seg.is-zero { min-width: 0; opacity: 0; }
+.severity-bar .seg.empty { background: var(--border); flex: 1 1 auto; min-width: 4px; }
 .severity-legend {
   display: flex; flex-wrap: wrap; gap: 4px 14px;
   font-family: var(--font-mono); font-size: 11px; color: var(--ink-2);
@@ -533,6 +600,21 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .severity-legend .key { display: inline-flex; align-items: center; gap: 6px; }
 .severity-legend .swatch { width: 8px; height: 8px; border-radius: 2px; }
 .severity-legend .count { color: var(--ink); font-weight: 600; }
+
+/* ---------- view transitions ---------- */
+
+/* Switching sidebar views used to be a bare `hidden` toggle -- the whole page
+   replaced itself between two frames, which reads as a jump cut rather than as
+   navigation. app.js re-adds this class on whichever view it just revealed
+   (forcing a reflow first, so the animation restarts on every switch). Settings
+   used to own a one-off `rise` for this; now every view enters the same way.
+   Kept short on purpose: long enough to show direction, short enough that it
+   never sits between the user and the data. */
+.view-enter { animation: view-in .2s cubic-bezier(.2, .8, .3, 1) both; }
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
 
 /* ---------- filters ---------- */
 
@@ -573,6 +655,7 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   transition: all .15s;
 }
 .chip:hover { color: var(--ink-2); border-color: var(--ink-3); }
+.chip:active { transform: scale(.95); }
 .chip.active { color: var(--badge-ink); background: var(--ink-2); border-color: var(--ink-2); }
 
 .chip-sev.active[data-value="low"]      { background: var(--sev-low);      border-color: var(--sev-low); }
@@ -617,13 +700,18 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   border: 1px solid transparent;
   border-left: 2px solid var(--sev-color, var(--border));
   border-radius: var(--radius);
-  transition: background .12s, border-color .12s;
+  transition: background .12s, border-color .12s,
+              transform .14s cubic-bezier(.2, .8, .3, 1);
 }
 .event-row:hover, .event-row.selected {
   background: var(--bg-hover);
   border-color: var(--border);
   border-left-color: var(--sev-color, var(--border-strong));
 }
+/* Nudges toward the severity rail it's hinged on, so the row reads as picked up
+   rather than merely tinted. 2px -- any more and a mouse crossing a dense list
+   makes the whole timeline ripple. */
+.event-row:hover { transform: translateX(2px); }
 .event-row.fresh { animation: fresh-flash 1.6s ease-out; }
 @keyframes fresh-flash {
   0% { background: var(--accent-dim); border-color: var(--accent); }
@@ -676,6 +764,18 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .badge-high     { background: var(--sev-high); }
 .badge-critical { background: var(--sev-critical); }
 
+/* Only CRITICAL breathes. Animating every severity would put the whole timeline
+   in motion and the signal would cancel itself out -- the point of the pulse is
+   that your eye is pulled to the one row that actually warrants it. Slow and
+   low-amplitude (a halo, not a flash) so a screen full of them is still
+   readable. Severity is never carried by this animation alone: the badge states
+   its level in text, as everywhere else in the app. */
+.badge-critical { animation: badge-pulse 2.4s ease-in-out infinite; }
+@keyframes badge-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sev-critical) 55%, transparent); }
+  50%      { box-shadow: 0 0 0 4px transparent; }
+}
+
 .event-main { min-width: 0; }
 .event-summary {
   display: block;   /* ellipsis is a no-op on inline spans -- long paths overflowed the row */
@@ -726,14 +826,49 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 @keyframes shimmer { to { background-position: -200% 0; } }
 
+/* Re-fetching an already-populated timeline holds the current render at reduced
+   opacity instead of blanking it back to skeletons. Skeletons are honest on a
+   cold load, where there is genuinely nothing to show; on a refilter they throw
+   away a screen the user is still reading and flash the layout. */
+/* The transition lives on .timeline, not on .is-refreshing -- declared inside
+   the modifier it would vanish with the class and the fade back to full opacity
+   would snap instead of easing. */
+.timeline { transition: opacity .18s ease; }
+.timeline.is-refreshing { opacity: .45; pointer-events: none; }
+
 .empty-state {
   display: flex; flex-direction: column; align-items: center; gap: 14px;
   padding: 70px 20px; color: var(--ink-3); text-align: center;
+  animation: view-in .32s cubic-bezier(.2, .8, .3, 1) both;
 }
 .empty-state svg { width: 46px; height: 46px; opacity: .5; }
 .empty-state .empty-title {
   font-family: var(--font-display); font-size: 13px; font-weight: 600;
   letter-spacing: .2em; text-transform: uppercase; color: var(--ink-2);
+}
+.empty-state .empty-detail { max-width: 42ch; line-height: 1.6; }
+
+/* "Nothing found" and "nothing happened" are opposite messages. The all-clear
+   state earns the accent color and a slow breathing shield; the no-match state
+   stays grey, because a filter hiding everything is not good news. */
+.empty-state.empty-clear svg { color: var(--accent); opacity: .85; animation: clear-breathe 3.6s ease-in-out infinite; }
+.empty-state.empty-clear .empty-title { color: var(--accent); }
+@keyframes clear-breathe {
+  0%, 100% { opacity: .8; transform: scale(1); }
+  50%      { opacity: 1;  transform: scale(1.04); }
+}
+/* Monitoring stopped is neither -- warn, and never claim to be watching. */
+.empty-state.empty-idle svg { color: var(--sev-medium); opacity: .8; animation: none; }
+.empty-state.empty-idle .empty-title { color: var(--sev-medium); }
+
+/* Fires for ~600ms whenever a poll actually brings in new events, so the header
+   registers arrivals even when the user is scrolled away from the top of the
+   list. */
+.live-indicator.bump .live-dot { animation: live-bump .6s cubic-bezier(.2, .8, .3, 1); }
+@keyframes live-bump {
+  0%   { transform: scale(1);   box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 70%, transparent); }
+  40%  { transform: scale(1.6); }
+  100% { transform: scale(1);   box-shadow: 0 0 0 9px transparent; }
 }
 
 .load-older-wrap { display: flex; justify-content: center; padding: 18px 0; }
@@ -1027,7 +1162,6 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 14px;
-  animation: rise .35s ease both;
 }
 
 .settings-card {
@@ -1036,7 +1170,9 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   border-radius: 10px;
   box-shadow: var(--shadow-card);
   padding: 22px 24px;
+  transition: border-color .18s ease, transform .18s cubic-bezier(.2, .8, .3, 1);
 }
+.settings-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
 
 .settings-title {
   font-family: var(--font-display);
@@ -1327,6 +1463,10 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .layout { padding: 16px 14px 40px; }
   .stats-band { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .stat-value { font-size: 21px; }
+  /* The sparkline caption is three nowrap items in a half-width tile -- drop
+     the axis ends and keep the peak, which is the one that carries a value. */
+  .spark-foot { justify-content: center; }
+  #spark-start, #spark-end { display: none; }
   .day-header { top: 0; position: static; }
   .event-row { grid-template-columns: 66px 1fr; gap: 4px 12px; padding: 10px; }
   .event-row .badge { grid-row: 2; grid-column: 1; min-width: 0; justify-self: start; font-size: 9px; }
@@ -1447,8 +1587,14 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   background: var(--bg-raised); border: 1px solid var(--border);
   border-left: 3px solid var(--sev-critical); border-radius: var(--radius);
   padding: 12px 14px; display: flex; flex-direction: column; gap: 7px;
+  transition: background .16s ease, border-color .16s ease,
+              transform .16s cubic-bezier(.2, .8, .3, 1);
 }
-.incident-card:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.incident-card:hover {
+  background: var(--bg-hover); border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+.incident-card:active { transform: translateY(0) scale(.995); }
 .incident-card.unreviewed { border-left-color: var(--sev-critical); background: color-mix(in srgb, var(--sev-critical) 6%, var(--bg-raised)); }
 .incident-card-head { display: flex; align-items: center; gap: 9px; }
 .incident-reason { font-family: var(--font-display); font-size: 14px; color: var(--ink); }
@@ -1470,3 +1616,30 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   gap: 10px; margin-bottom: 16px;
 }
 .daily-tiles .stat-label { white-space: nowrap; }
+
+/* ---------- reduced motion ---------- */
+
+/* Aegis runs unattended in the corner of someone's screen all day, so the
+   ambient loops (the heartbeat, the critical-badge halo, the boot sweep, the
+   breathing shield) are exactly the kind of motion a vestibular-sensitivity
+   setting exists to stop. Everything here is decoration over information that
+   is already carried by text and color, so it can all go without losing a
+   thing: transitions collapse to ~1 frame rather than 0 so state changes still
+   settle instead of teleporting, and the count-up tween is disabled in JS
+   (see prefersReducedMotion in app.js).
+
+   Deliberately NOT killed: .severity-bar/.spark-bar height and flex-grow, which
+   are handled by the near-zero duration above -- and .skeleton-row, whose
+   shimmer is the only thing distinguishing "loading" from "empty". */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .skeleton-row { animation: shimmer 1.2s linear infinite !important; animation-duration: 1.2s !important; }
+  .stat-tile:hover, .severity-panel:hover, .settings-card:hover,
+  .incident-card:hover, .theme-card:hover, .event-row:hover { transform: none; }
+  .btn:active, .chip:active, .theme-card:active, .incident-card:active { transform: none; }
+}

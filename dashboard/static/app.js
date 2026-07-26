@@ -115,7 +115,12 @@ const state = {
   unseenCount: 0,        // live arrivals while the user is scrolled down
   loading: false,
   consoleReachable: null,     // null = not checked yet; the dashboard API itself
-  monitor: { running: false, pid: null, uptimeSeconds: null },
+  // running: null = not polled yet, distinct from a confirmed false. The empty
+  // state has to tell those apart -- announcing "monitoring is stopped" during
+  // the first second of every launch, before /api/monitor/status has answered,
+  // would be a false alarm in the one place a security tool can least afford
+  // one. Everything else here treats null and false alike (both falsy).
+  monitor: { running: null, pid: null, uptimeSeconds: null },
   monitorBusy: false,         // a start/stop request is in flight
 };
 
@@ -174,6 +179,56 @@ function dayLabel(ts) {
 
 function prettyCategory(cat) {
   return String(cat).replaceAll("_", " ");
+}
+
+/* ---------- motion ---------- */
+
+/* Read live rather than cached: the OS-level setting can be toggled while the
+   window is open, and pywebview's WebKit view honours the change immediately. */
+function prefersReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/* Counts the stats-band numbers up to their new value instead of swapping the
+   text. On a monitor that polls every 4s this is what makes the number read as
+   a live meter rather than a field that occasionally blinks; the tile's
+   tabular-nums (style.css .stat-value) is what keeps the digits from jittering
+   as they roll.
+
+   The previous value is parked in a data attribute rather than read back out of
+   textContent, because mid-tween textContent is a half-way number, and every
+   later tween would then start from wherever the last one happened to be
+   interrupted. First paint counts up from 0 -- the dashboard spinning up. */
+const TWEEN_MS = 620;
+function tweenNumber(el, to) {
+  if (!el) return;
+  const from = el.dataset.tweenFrom === undefined ? 0 : Number(el.dataset.tweenFrom);
+  el.dataset.tweenFrom = String(to);
+  if (el._tween) cancelAnimationFrame(el._tween);
+
+  if (!Number.isFinite(from) || from === to || prefersReducedMotion()) {
+    el.textContent = String(to);
+    return;
+  }
+  const started = performance.now();
+  const step = (now) => {
+    const t = Math.min(1, (now - started) / TWEEN_MS);
+    const eased = 1 - Math.pow(1 - t, 3);          // easeOutCubic -- fast, then settles
+    el.textContent = String(Math.round(from + (to - from) * eased));
+    if (t < 1) el._tween = requestAnimationFrame(step);
+    else { el.textContent = String(to); el._tween = null; }
+  };
+  el._tween = requestAnimationFrame(step);
+}
+
+/* Restarts a CSS enter animation on an element that may already carry the
+   class -- without the forced reflow the browser coalesces remove+add into no
+   change at all and the animation silently never replays. */
+function replayAnimation(el, cls) {
+  if (!el) return;
+  el.classList.remove(cls);
+  void el.offsetWidth;
+  el.classList.add(cls);
 }
 
 /* ---------- API ---------- */
@@ -250,13 +305,13 @@ function renderStats(stats) {
   // Stop Monitoring, Quit and Settings is still the documented default.
   $("default-creds-banner").hidden = !stats.default_credentials;
 
-  $("stat-24h").textContent = stats.last_24h;
-  $("stat-total").textContent = stats.total;
-  $("stat-sources").textContent = Object.keys(stats.by_source).length;
+  tweenNumber($("stat-24h"), stats.last_24h);
+  tweenNumber($("stat-total"), stats.total);
+  tweenNumber($("stat-sources"), Object.keys(stats.by_source).length);
 
   const hicrit = (stats.by_severity.high || 0) + (stats.by_severity.critical || 0);
   const hicritEl = $("stat-hicrit");
-  hicritEl.textContent = hicrit;
+  tweenNumber(hicritEl, hicrit);
   hicritEl.classList.toggle("alert", hicrit > 0);
 
   // The closure line: one always-visible sentence answering "so... am I okay?"
@@ -264,26 +319,8 @@ function renderStats(stats) {
   // themselves. Same 24h-scoped stats the band above already shows.
   renderVerdictLine(stats);
 
-  const bar = $("severity-bar");
-  const legend = $("severity-legend");
-  bar.innerHTML = "";
-  legend.innerHTML = "";
-  const total = SEVERITY_ORDER.reduce((n, s) => n + (stats.by_severity[s] || 0), 0);
-  for (const sev of SEVERITY_ORDER) {
-    const count = stats.by_severity[sev] || 0;
-    if (count > 0) {
-      const seg = document.createElement("div");
-      seg.className = "seg";
-      seg.style.background = `var(--sev-${sev})`;
-      seg.style.flexGrow = count;
-      seg.title = `${sev}: ${count}`;
-      bar.appendChild(seg);
-    }
-    legend.insertAdjacentHTML("beforeend",
-      `<span class="key"><span class="swatch" style="background:var(--sev-${sev})"></span>` +
-      `${sev} <span class="count">${count}</span></span>`);
-  }
-  if (total === 0) bar.innerHTML = '<div class="seg empty" title="no events in the last 24 hours"></div>';
+  renderSparkline(stats.by_hour);
+  renderSeverityBar(stats.by_severity);
 
   const catSelect = $("category-select");
   if (catSelect.options.length === 1 && stats.categories.length) {
@@ -292,6 +329,96 @@ function renderStats(stats) {
         `<option value="${escapeHtml(cat)}">${escapeHtml(prettyCategory(cat))}</option>`);
     }
   }
+}
+
+/* 24 hourly bars: height = how many events, color = the worst severity in that
+   hour (server.py _hourly_activity). Volume alone would hide the case that
+   matters most to a watchdog — a near-silent hour containing one critical.
+
+   Bars are created once and then only have their height restyled, so the 4s
+   poll animates the chart instead of rebuilding it; a rebuild would also
+   restart the CSS height transition from scratch on every tick. */
+function renderSparkline(byHour) {
+  const spark = $("spark");
+  if (!spark || !byHour || !Array.isArray(byHour.buckets)) return;
+  const buckets = byHour.buckets;
+  const peak = Math.max(1, ...buckets.map((b) => b.count));
+
+  if (spark.children.length !== buckets.length) {
+    spark.innerHTML = "";
+    for (let i = 0; i < buckets.length; i++) spark.appendChild(document.createElement("div"));
+  }
+
+  let peakHour = null;
+  buckets.forEach((bucket, i) => {
+    const bar = spark.children[i];
+    const hour = new Date((byHour.start + i * 3600) * 1000);
+    const label = hour.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    // Floor at 6% so a single event in an otherwise busy day is still a visible
+    // mark rather than a hairline indistinguishable from an empty hour.
+    const pct = bucket.count ? Math.max(6, (bucket.count / peak) * 100) : 0;
+
+    bar.className = "spark-bar"
+      + (bucket.count ? "" : " is-empty")
+      + (i === buckets.length - 1 ? " is-current" : "");
+    bar.style.height = bucket.count ? `${pct}%` : "";
+    bar.style.setProperty("--spark-tint", `var(--sev-${bucket.worst || "low"})`);
+    bar.title = bucket.count
+      ? `${label} — ${bucket.count} event${bucket.count === 1 ? "" : "s"}`
+        + (bucket.worst ? ` · worst: ${bucket.worst}` : "")
+      : `${label} — no events`;
+    if (bucket.count === peak) peakHour = label;
+  });
+
+  // The peak is direct-labelled rather than left to hover: it's the one value
+  // that gives the whole chart its scale, and a title attribute is not a
+  // readable way to ship it. The quiet-day message rides the same element
+  // because the axis ends are the pair that get dropped on narrow windows.
+  const hasEvents = buckets.some((b) => b.count);
+  $("spark-peak").textContent = hasEvents ? `peak ${peak} · ${peakHour}` : "no activity · 24h";
+  $("spark-start").textContent = hasEvents ? "24h ago" : "";
+  $("spark-end").textContent = hasEvents ? "now" : "";
+}
+
+/* Severity distribution. Built once, then only flex-grow changes, so the split
+   slides between shapes on each poll (see .severity-bar .seg in style.css).
+   Rebuilding the nodes every time is what made this snap. */
+function renderSeverityBar(bySeverity) {
+  const bar = $("severity-bar");
+  const legend = $("severity-legend");
+
+  if (!bar.children.length) {
+    for (const sev of SEVERITY_ORDER) {
+      const seg = document.createElement("div");
+      seg.className = `seg seg-${sev}`;
+      seg.style.background = `var(--sev-${sev})`;
+      bar.appendChild(seg);
+    }
+    const empty = document.createElement("div");
+    empty.className = "seg empty";
+    empty.title = "no events in the last 24 hours";
+    bar.appendChild(empty);
+
+    legend.innerHTML = SEVERITY_ORDER.map((sev) =>
+      `<span class="key"><span class="swatch" style="background:var(--sev-${sev})"></span>` +
+      `${sev} <span class="count" data-sev="${sev}">0</span></span>`).join("");
+  }
+
+  let total = 0;
+  for (const sev of SEVERITY_ORDER) {
+    const count = bySeverity[sev] || 0;
+    total += count;
+    const seg = bar.querySelector(`.seg-${sev}`);
+    seg.style.flexGrow = String(count);
+    seg.classList.toggle("is-zero", count === 0);
+    seg.title = `${sev}: ${count}`;
+    // Optional: this runs on every 4s poll, and renderStats' caller treats a
+    // throw as "the console is unreachable" -- a missing legend node would
+    // light up CONSOLE OFFLINE over a cosmetic count.
+    const key = legend.querySelector(`.count[data-sev="${sev}"]`);
+    if (key) key.textContent = String(count);
+  }
+  bar.querySelector(".seg.empty").hidden = total > 0;
 }
 
 function renderVerdictLine(stats) {
@@ -419,17 +546,59 @@ function groupHtml(run, freshIds) {
     </details>`;
 }
 
+const SHIELD_PATH = `<path d="M12 2 L20 5.5 V11 C20 16.5 16.7 20.6 12 22 C7.3 20.6 4 16.5 4 11 V5.5 Z"
+  fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>`;
+
+/* Only the transient filters — the ones "Clear" resets. hideTrusted is
+   deliberately NOT one of them: it ships ON, so folding it in here would mean
+   the default install could essentially never reach the all-clear state, which
+   is the one message this whole branch exists to be able to show. It does still
+   hide rows, so the all-clear state below says so out loud rather than letting
+   "clean" quietly mean "clean, except for the part we filtered out". */
+function filtersNarrowing() {
+  const f = state.filters;
+  return Boolean(f.q || f.severity.size || f.source.size || f.category || f.rangeSeconds);
+}
+
+/* Three genuinely different situations, three different messages:
+   the filters hid everything · monitoring is off · nothing has happened. */
+function emptyStateHtml() {
+  if (filtersNarrowing()) {
+    return `
+      <div class="empty-state">
+        <svg viewBox="0 0 24 24">${SHIELD_PATH}</svg>
+        <span class="empty-title">No events match</span>
+        <span class="empty-detail">Nothing in the log fits these filters. Clear them to see
+          everything Aegis has recorded — the monitors are still watching either way.</span>
+      </div>`;
+  }
+  if (state.monitor && state.monitor.running === false) {
+    return `
+      <div class="empty-state empty-idle">
+        <svg viewBox="0 0 24 24">${SHIELD_PATH}</svg>
+        <span class="empty-title">Monitoring is stopped</span>
+        <span class="empty-detail">Nothing is being recorded right now. Start monitoring to begin
+          watching processes, USB devices, startup items and your folders.</span>
+      </div>`;
+  }
+  // Never let "clean" overstate itself while Hide Trusted is on.
+  const trustedNote = state.filters.hideTrusted
+    ? ` Trusted activity is hidden from this view — it's still being logged.`
+    : "";
+  return `
+    <div class="empty-state empty-clear">
+      <svg viewBox="0 0 24 24">${SHIELD_PATH}</svg>
+      <span class="empty-title">Your system looks clean</span>
+      <span class="empty-detail">Aegis is actively monitoring for suspicious activity. Anything
+        it sees — a new process, a USB device, a startup change — lands here.${trustedNote}</span>
+    </div>`;
+}
+
 function renderTimeline(freshIds = new Set()) {
   const timeline = $("timeline");
 
   if (!state.events.length) {
-    timeline.innerHTML = `
-      <div class="empty-state">
-        <svg viewBox="0 0 24 24"><path d="M12 2 L20 5.5 V11 C20 16.5 16.7 20.6 12 22 C7.3 20.6 4 16.5 4 11 V5.5 Z"
-          fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
-        <span class="empty-title">No events match</span>
-        <span>Adjust the filters, or wait — the monitors are still watching.</span>
-      </div>`;
+    timeline.innerHTML = emptyStateHtml();
     $("load-older-wrap").hidden = true;
     updateFooter();
     return;
@@ -502,7 +671,20 @@ function ingest(events) {
 
 async function reload() {
   state.loading = true;
-  $("timeline").innerHTML = '<div class="skeleton-row"></div>'.repeat(6);
+  const timeline = $("timeline");
+  const hadRows = state.events.length > 0;
+
+  // A cold load has nothing to hold, so skeletons are honest there. A refilter
+  // does have a screen the user is reading -- blanking it back to skeletons
+  // throws that away and jumps the layout. Dim and hold it instead, and only
+  // once the fetch has been slow enough to be worth acknowledging: against a
+  // local SQLite file most of these return in well under 120ms, where any
+  // loading affordance at all is just a flicker.
+  const dim = hadRows
+    ? setTimeout(() => timeline.classList.add("is-refreshing"), 120)
+    : null;
+  if (!hadRows) timeline.innerHTML = '<div class="skeleton-row"></div>'.repeat(6);
+
   state.events = [];
   state.byId.clear();
   state.maxId = 0;
@@ -517,13 +699,15 @@ async function reload() {
     renderTimeline();
   } catch {
     setConsoleReachable(false);
-    $("timeline").innerHTML = `
+    timeline.innerHTML = `
       <div class="empty-state">
         <span class="empty-title">Event store unreachable</span>
-        <span>Is dashboard/server.py still running?</span>
+        <span class="empty-detail">Is dashboard/server.py still running?</span>
       </div>`;
   } finally {
     state.loading = false;
+    if (dim) clearTimeout(dim);
+    timeline.classList.remove("is-refreshing");
   }
 }
 
@@ -558,6 +742,10 @@ async function poll() {
       state.events = fresh.events.concat(state.events);
       ingest(fresh.events);
       renderTimeline(new Set(fresh.events.map((e) => e.id)));
+      // The rows themselves flash (.fresh), but only if you happen to be
+      // looking at them. Kicking the header's live dot puts the arrival
+      // somewhere always on screen, whatever the scroll position.
+      pulseLive();
       if (window.scrollY > 300) {
         state.unseenCount += fresh.events.length;
         showPill();
@@ -610,6 +798,19 @@ async function refreshPendingExplanations() {
    /api/monitor/status, which detects both dashboard-launched AND
    independently-started (e.g. from a terminal) instances. */
 
+/* Kicks the header's live dot when events actually arrive. The class is
+   stripped again afterwards so the next arrival can replay it -- and so
+   renderMonitorPill, which rewrites the indicator's other state classes on
+   every poll, never finds a stale one left behind. */
+let livePulseTimer = null;
+function pulseLive() {
+  const el = $("live-indicator");
+  if (!el || prefersReducedMotion()) return;
+  clearTimeout(livePulseTimer);
+  replayAnimation(el, "bump");
+  livePulseTimer = setTimeout(() => el.classList.remove("bump"), 600);
+}
+
 function setConsoleReachable(ok) {
   state.consoleReachable = ok;
   if (ok) $("sync-time").textContent = `synced ${new Date().toLocaleTimeString()}`;
@@ -617,12 +818,18 @@ function setConsoleReachable(ok) {
 }
 
 async function refreshMonitorStatus() {
+  const wasRunning = state.monitor.running;
   try {
     state.monitor = await api("/api/monitor/status");
   } catch {
     return;  // setConsoleReachable already handles the unreachable case
   }
   renderMonitorPill();
+  // An empty timeline says something different depending on whether monitoring
+  // is actually on, so re-render it when that answer changes -- and only then.
+  // Rebuilding on every poll would restart the empty state's entrance
+  // animation every 4 seconds.
+  if (!state.events.length && state.monitor.running !== wasRunning) renderTimeline();
 }
 
 // The dispatcher stamps a heartbeat every 60s (core/dispatcher). Past this
@@ -1387,10 +1594,14 @@ async function switchView(view) {
       return;
     }
   }
-  $("view-console").hidden = view !== "console";
-  $("view-ask").hidden = view !== "ask";
-  $("view-incidents").hidden = view !== "incidents";
-  $("view-settings").hidden = view !== "settings";
+  // Reveal first, then replay the enter animation on whichever view is now
+  // visible -- a hidden element can't animate, and without the replay a repeat
+  // switch back to a view that already carries the class does nothing.
+  const views = { console: "view-console", ask: "view-ask",
+                  incidents: "view-incidents", settings: "view-settings" };
+  for (const [name, id] of Object.entries(views)) $(id).hidden = name !== view;
+  replayAnimation($(views[view]), "view-enter");
+
   document.querySelectorAll(".side-item[data-view]").forEach((t) =>
     t.classList.toggle("active", t.dataset.view === view));
   if (view === "incidents") loadIncidents();

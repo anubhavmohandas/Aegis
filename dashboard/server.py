@@ -367,6 +367,55 @@ def query_related(db_path: str, event_id: int) -> dict:
         conn.close()
 
 
+HOUR_BUCKETS = 24
+SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+def _hourly_activity(conn: sqlite3.Connection, since: float) -> dict:
+    """24 one-hour buckets ending with the hour in progress -- the series behind
+    the console's activity sparkline.
+
+    Buckets are aligned to wall-clock hour boundaries rather than to `since`
+    itself, so a bar means "the 14:00 hour" and not "14:37-15:37"; the frontend
+    labels them from `start` in local time. Each bucket carries the event count
+    (bar height) and the worst severity seen in it (bar color), which is why
+    this groups by severity instead of just counting -- a quiet hour containing
+    one critical has to be able to look different from a quiet hour that
+    doesn't. One extra GROUP BY on the same already-open read-only connection;
+    the 24h window is the same one every other number in this payload uses.
+
+    The boundary is the start of the current LOCAL hour, not `time.time() //
+    3600` -- epoch seconds divide into UTC hours, so in a zone offset by a half
+    or quarter hour (IST, Iran, parts of Australia) every bar would have
+    labelled itself 05:30, 06:30, ... instead of on the hour. Bucket width stays
+    a flat 3600s: across a DST change one bar's label can sit an hour off, which
+    self-corrects on the next boundary and is not worth calendar-walking 24
+    buckets to avoid."""
+    lt = time.localtime()
+    hour_start = int(time.mktime(
+        (lt.tm_year, lt.tm_mon, lt.tm_mday, lt.tm_hour, 0, 0, 0, 0, -1)))
+    base = hour_start - (HOUR_BUCKETS - 1) * 3600
+    buckets = [{"count": 0, "worst": None} for _ in range(HOUR_BUCKETS)]
+    rows = conn.execute(
+        "SELECT CAST((timestamp - ?) / 3600 AS INTEGER) AS bucket, severity, COUNT(*) "
+        "FROM events WHERE timestamp >= ? GROUP BY bucket, severity",
+        (base, max(since, base)),
+    ).fetchall()
+    for bucket, severity, count in rows:
+        # An event logged in the current second lands in bucket 24 when the
+        # hour ticks over between hour_start and the query; clamp rather than
+        # drop it, and ignore anything genuinely outside the window.
+        if bucket is None or bucket < 0:
+            continue
+        slot = buckets[min(bucket, HOUR_BUCKETS - 1)]
+        slot["count"] += count
+        if severity in SEVERITY_RANK and (
+            slot["worst"] is None or SEVERITY_RANK[severity] > SEVERITY_RANK[slot["worst"]]
+        ):
+            slot["worst"] = severity
+    return {"start": base, "buckets": buckets}
+
+
 def query_stats(db_path: str) -> dict:
     day_ago = time.time() - 86400
     conn = _connect_ro(db_path)
@@ -389,6 +438,7 @@ def query_stats(db_path: str) -> dict:
             "last_24h": last_24h,
             "by_severity": by_severity,
             "by_source": by_source,
+            "by_hour": _hourly_activity(conn, day_ago),
             "categories": categories,
             "latest": dict(latest) if latest else None,
             "server_time": time.time(),

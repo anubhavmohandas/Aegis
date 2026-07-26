@@ -139,9 +139,18 @@
 <div id="view-console">
 
   <section class="stats-band" id="stats-band" aria-label="Last 24 hours">
-    <div class="stat-tile">
+    <div class="stat-tile stat-tile-activity">
       <span class="stat-label">Events · 24h</span>
       <span class="stat-value" id="stat-24h">—</span>
+      <!-- One bar per hour, filled by renderSparkline(); the caption carries the
+           peak so every value isn't locked behind a hover. -->
+      <div class="spark" id="spark" role="img"
+           aria-label="Hourly event volume, last 24 hours"></div>
+      <div class="spark-foot">
+        <span id="spark-start">24h ago</span>
+        <span class="spark-peak" id="spark-peak"></span>
+        <span id="spark-end">now</span>
+      </div>
     </div>
     <div class="stat-tile">
       <span class="stat-label">High / Critical · 24h</span>
