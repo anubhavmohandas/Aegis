@@ -90,6 +90,9 @@ class AppConfig:
                                             # still AI-explained, logged, and persisted to the timeline.
     log_path: str = "events.log"
     db_path: str = "aegis_events.db"        # SQLite event history for the timeline UI
+    retention_days: int = 90                # age at which ordinary events are dropped from the event
+                                            # store; 0 keeps everything forever. Tamper incidents are
+                                            # NEVER pruned regardless -- see EventStore.prune_events.
     trusted_process_names: list[str] = field(default_factory=list)  # opt-in AI-call skip, see core/rule_engine.py
     trusted_process_hashes: list[str] = field(default_factory=list)  # sha256, harder to spoof than name -- see core/rule_engine.py
     trusted_usb_ids: list[str] = field(default_factory=list)        # opt-in AI-call skip, see core/rule_engine.py
@@ -182,6 +185,9 @@ def load_config(path: Path | None = None) -> AppConfig:
         notify_min_severity=_parse_min_severity(raw.get("notify_min_severity", "low")),
         log_path=raw.get("log_path", "events.log"),
         db_path=raw.get("db_path", "aegis_events.db"),
+        # Clamped at 0, not 1: 0 is the documented "keep forever" value, and a
+        # negative would otherwise mean "delete everything, continuously."
+        retention_days=max(0, _parse_int(raw, "retention_days", 90)),
         trusted_process_names=_parse_str_list(raw, "trusted_process_names"),
         trusted_process_hashes=_parse_str_list(raw, "trusted_process_hashes"),
         trusted_usb_ids=_parse_str_list(raw, "trusted_usb_ids"),

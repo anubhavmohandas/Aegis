@@ -40,6 +40,18 @@ notify_min_severity: low
 log_path: events.log
 db_path: aegis_events.db      # SQLite event history read by ui/timeline_app.py
 
+# How long ordinary events are kept in the event store. Aegis is built to sit
+# resident for weeks appending a row per event (Spotlight alone is ~1000/day on
+# a normal Mac), and nothing pruned it before -- the database and events.log
+# both grew forever, and every dashboard poll aggregates over the whole table.
+# A sweep runs a few times a day; events.log is separately capped at 5MB x 3
+# rotations (core/dispatcher.py). Set to 0 to keep everything forever.
+#
+# TAMPER INCIDENTS ARE NEVER PRUNED by this, whatever it's set to -- evidence of
+# someone trying to disable monitoring is the one record that must not quietly
+# age out. Deleting those stays a deliberate, password-gated action.
+retention_days: 90
+
 # Opt-in noise reduction (see core/rule_engine.py for why this is NOT a
 # built-in "known safe" list -- it only skips the AI call for things YOU
 # add here, e.g. your own dev tools that fire constantly).

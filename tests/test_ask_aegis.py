@@ -32,6 +32,15 @@ import core.config as core_config  # noqa: E402
 core_config.DEFAULT_CONFIG_PATH = _TMP / "config" / "config.yaml"
 core_config.ENV_FILE_PATH = _TMP / ".env"
 core_config.persistent_dir = lambda: _TMP
+# ...and the pop above is not enough on its own either. load_config() calls
+# _load_env_file() every time, whose `path` DEFAULT ARGUMENT bound to the real
+# repo .env when the function was defined -- so rebinding ENV_FILE_PATH two
+# lines up doesn't reach it, and every load_config() put the developer's key
+# straight back into os.environ. That made the /api/ask assertion below (whose
+# comment promises the offline fallback and no network hit) issue a live 30s AI
+# call against the test's own 10s client timeout. Harmless in production, where
+# this is only ever called with the module constant.
+core_config._load_env_file = lambda path=None: None
 
 import dashboard.server as srv  # noqa: E402
 
@@ -41,6 +50,11 @@ srv.CREDENTIALS_PATH = _TMP / "credentials.json"
 srv.ENV_PATH = _TMP / ".env"
 srv.PBKDF2_ITERATIONS = 1000
 srv._tamper_state.clear()
+# "admin" as a deliberately chosen password, not the shipped default: while the
+# seeded admin/admin is in place the server refuses every route but
+# change-password (PW_CHANGE_EXEMPT_PATHS), which /api/ask is not. That gate has
+# its own coverage in test_first_run_password.py.
+srv._save_credentials(srv._new_credentials("admin", "admin", is_default=False))
 
 DB = _TMP / "events.db"
 from core.database import EventStore  # noqa: E402

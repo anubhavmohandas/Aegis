@@ -64,7 +64,6 @@ def _dispatcher(store, tmp_log):
     d._recent_summaries = __import__("collections").deque()
     d._minute_bucket = __import__("collections").deque()
     d._stop = threading.Event()
-    d._log_lock = threading.Lock()
     d._last_heartbeat = time.time()
     d._explain_pool = ThreadPoolExecutor(max_workers=3)
     # This fixture bypasses __init__ (real config, AI client and EventStore are
@@ -73,6 +72,7 @@ def _dispatcher(store, tmp_log):
     # to the FakeStore during the test; the other two back the explain-backlog
     # gauge on the diagnostics page.
     d._last_metrics = float("inf")
+    d._last_retention = float("inf")   # never sweep the FakeStore mid-test
     d._explain_pending = 0
     d._explain_lock = threading.Lock()
     return d

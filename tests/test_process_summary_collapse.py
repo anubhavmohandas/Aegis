@@ -71,3 +71,17 @@ def test_group_key_is_pid_free_for_every_shipped_note():
             assert m.group(2) == note, f"note for {name!r} was split incorrectly"
             keys.add(m.group(1))
         assert keys == {name}, f"group key for {name!r} varies with PID: {keys}"
+
+
+if __name__ == "__main__":
+    # Every other file in tests/ has one of these; this one didn't, so
+    # `python tests/test_process_summary_collapse.py` exited 0 having run only
+    # the module-level asserts -- all five checks below silently never ran
+    # unless someone happened to invoke pytest (which no requirements file
+    # installed and no CI job called). See requirements-dev.txt.
+    test_plain_row_matches_and_has_no_note()
+    test_noted_row_splits_into_name_and_note()
+    test_application_launched_phrasing_also_matches()
+    test_process_name_containing_parens_survives()
+    test_group_key_is_pid_free_for_every_shipped_note()
+    print("ok: process-summary regex tolerates notes and groups PID-free")

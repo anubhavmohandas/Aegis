@@ -295,6 +295,17 @@ async function api(path) {
       location.replace("/login");        // session expired or missing
       throw new Error("unauthenticated");
     }
+    // Still on the seeded admin/admin: the server refuses every API but
+    // change-password until it's set (dashboard/server.py's
+    // PW_CHANGE_EXEMPT_PATHS). Surface the real reason here rather than
+    // letting each caller render its own "could not load" state.
+    if (res.status === 403) {
+      const why = await res.clone().json().catch(() => ({}));
+      if (why.password_change_required) {
+        openFirstRunPassword();
+        throw new Error("password change required");
+      }
+    }
     if (!res.ok) throw new Error(`${path} -> ${res.status}`);
     return await res.json();
   } finally {
@@ -2207,6 +2218,57 @@ async function installUpdate() {
   }
 }
 
+/* ---------- first-run password gate ---------- */
+
+/* The console is unusable until the seeded admin/admin is replaced — the server
+   403s every other API (dashboard/server.py PW_CHANGE_EXEMPT_PATHS), so this
+   modal is the UI for a gate that already holds rather than the gate itself.
+   No close button, no Escape, and the boot overlay is dismissed underneath it
+   so the user isn't staring at a splash screen behind a dialog. */
+function openFirstRunPassword() {
+  if (!$("firstpw-modal").hidden) return;         // already up; don't reset what they typed
+  const boot = $("boot");
+  if (boot && !boot.hidden) { boot.classList.add("done"); boot.hidden = true; }
+  $("firstpw-overlay").hidden = false;
+  $("firstpw-modal").hidden = false;
+  setTimeout(() => $("firstpw-new").focus(), 50);
+}
+
+async function saveFirstRunPassword() {
+  const next = $("firstpw-new").value;
+  const confirm = $("firstpw-confirm").value;
+  const note = $("firstpw-note");
+  const btn = $("firstpw-save");
+
+  if (next !== confirm) { note.textContent = "Passwords don't match."; return; }
+  if (next.length < 8) { note.textContent = "Password must be at least 8 characters."; return; }
+
+  btn.disabled = true;
+  note.textContent = "Saving…";
+  try {
+    const res = await fetch("/api/settings/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // The current password is still the default at this point — that's the
+      // whole reason this modal is up. change_password() verifies it anyway,
+      // so a machine where it's somehow already been changed just gets the
+      // ordinary "current password is incorrect" back.
+      body: JSON.stringify({ current_password: "admin", new_password: next }),
+    });
+    if (res.status === 401) { location.replace("/login"); return; }
+    const data = await res.json();
+    if (!res.ok) { note.textContent = data.error || "Could not set the password."; return; }
+    // The server rotated every session and handed this one a fresh cookie;
+    // reload so the console starts up cleanly with the APIs now open.
+    note.textContent = "Password set — loading Aegis…";
+    location.reload();
+  } catch {
+    note.textContent = "Request failed — is the dashboard server still running?";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 /* ---------- change password ---------- */
 
 async function changePassword() {
@@ -2391,6 +2453,11 @@ function bindSettings() {
     }
   });
   $("password-save").addEventListener("click", changePassword);
+  $("firstpw-save").addEventListener("click", saveFirstRunPassword);
+  // Enter submits from either field -- this dialog has no other action.
+  for (const id of ["firstpw-new", "firstpw-confirm"]) {
+    $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") saveFirstRunPassword(); });
+  }
 
   $("update-check-btn").addEventListener("click", (e) => {
     e.target.disabled = true;
@@ -2827,6 +2894,11 @@ async function init() {
   // depend on someone getting a key chord right over a support call.
   if (location.hash === "#diagnostics") openDiagnostics();
   try { renderStats(await api("/api/stats")); } catch { setConsoleReachable(false); }
+  // api() raises the first-run password modal on a 403 from the call above.
+  // Stop here when it's up: every remaining step below is an API the server is
+  // refusing, so carrying on just paints "unreachable" errors behind a dialog
+  // that already explains the real reason -- and starts a 4s poll doing it.
+  if (!$("firstpw-modal").hidden) return;
   await refreshMonitorStatus();
   refreshShield();
   await reload();

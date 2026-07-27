@@ -28,7 +28,49 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com).
 > self-update path are run and confirmed on real Windows hardware. Track that
 > run with `TEST_REPORT_TEMPLATE.md`.
 
+### Security
+- **The shipped `admin`/`admin` is now a gate, not a warning.** That one
+  password also unlocks Stop Monitoring, Quit, Settings and Delete Evidence, so
+  an install left on the default had every tamper protection open to anyone who
+  read the README — a banner was the only thing saying so. The server now
+  refuses **every** route except change-password and logout until it has been
+  replaced (`dashboard/server.py` `PW_CHANGE_EXEMPT_PATHS`), and the console
+  opens on a non-dismissable "set your password" dialog. Enforced server-side
+  on purpose: a first-run modal alone is decoration, since the same session
+  cookie still reaches `/api/events` and `/api/monitor/stop` from anything that
+  can make an HTTP request.
+- **`/api/monitor/restart` could switch monitoring off without the password.**
+  It was session-only, on the reasoning that "it ends with monitoring RUNNING."
+  It stops first, and a failed start is returned as JSON rather than raised — so
+  a caller just refused by `/api/monitor/stop` for a wrong password (403, tamper
+  attempt logged) could call restart instead and land on `running: false` with
+  no password, no lockout, no timeline entry and no evidence capture; repeated
+  calls could also manufacture monitoring gaps. Now behind the Settings unlock,
+  which is where the button already lives. Regression test:
+  `tests/test_first_run_password.py`.
+- **Changing the password now ends every existing session** and drops any
+  Settings unlock they held. A stolen cookie — the most likely reason to rotate
+  it — used to outlive the change. The caller gets a fresh cookie, so the flow
+  is unchanged for them.
+
 ### Added
+- **Event retention.** Nothing ever pruned the event store and nothing capped
+  `events.log`: both grew forever on a resident install (Spotlight alone is
+  ~1000 events/day on a normal Mac) while every 4s dashboard poll aggregated
+  over the whole table. Ordinary events now age out after `retention_days`
+  (90 by default; `0` keeps everything) via a sweep on the dispatcher loop, and
+  `events.log` rotates at 5MB × 3 through a stdlib `RotatingFileHandler` — the
+  same treatment `monitor.log` already had. **Tamper Incidents are never
+  pruned**, whatever the setting: evidence of someone disabling monitoring is
+  the one record that must not quietly age out.
+- **The test suite has a runner.** `pytest` appeared in no requirements file,
+  wasn't installed in the project venv, and no CI job ran `tests/` at all — a
+  tagged release could ship with the whole suite red. Added
+  `requirements-dev.txt` and a `tests` job that the release job now depends on,
+  covering both `pytest tests/` and the in-module self-checks pytest never
+  collects. `test_process_summary_collapse.py` was pytest-only with no
+  `__main__`, so running it directly exited 0 having executed none of its five
+  checks; it now runs either way like every other file.
 - **Threat enrichment (opt-in).** VirusTotal hash reputation (hash-only — the
   file is never uploaded; verdicts cached in SQLite, so repeats cost one
   lookup and work offline) plus offline MITRE ATT&CK annotations, attached to
@@ -51,6 +93,21 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com).
   process to your trusted list without leaving the timeline.
 
 ### Fixed
+- `tests/test_ask_aegis.py` made a real 30s AI call against its own 10s client
+  timeout whenever a provider key existed, despite clearing `*_API_KEY` and
+  redirecting `ENV_FILE_PATH`: `load_config()` calls `_load_env_file()`, whose
+  `path` default argument bound to the real repo `.env` at definition time, so
+  every call put the key straight back into `os.environ`.
+- "Test connection" (VirusTotal) leaked a SQLite handle per click — the
+  enricher's lazily-opened cache connection was abandoned on every early return.
+- `RuleEngine.__init__` called `_sip_enabled()` directly, bypassing the
+  `lru_cache`d `_sip_ok()` right above it, re-forking `csrutil status` on every
+  Stop/Start and every Settings save for an answer that can't change without a
+  reboot.
+- Dead code removed: `database.SCHEMA`, `secrets_store.delete_secret` /
+  `SecretsStore.delete`, `TrayApp.run_in_background`, and `TrayApp`'s
+  `on_open_dashboard` hook (never passed by any caller, so the menu item it
+  guarded could never appear); two unused imports.
 - **Windows evidence: active-window title could be wrong/empty on 64-bit
   Windows.** `evidence._active_window()` called `GetForegroundWindow` /
   `GetWindowTextW` via ctypes without declaring `restype`/`argtypes`, so the

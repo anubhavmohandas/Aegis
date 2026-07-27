@@ -16,7 +16,6 @@ main.py and the project's verification notes for a live run.
 from __future__ import annotations
 
 import logging
-import threading
 from queue import Queue
 
 import pyudev

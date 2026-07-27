@@ -1,0 +1,12 @@
+# Development/CI only -- not needed to run Aegis.
+#
+# tests/ was written to be runnable two ways: `python tests/test_x.py` (every
+# file has a __main__ that calls its own checks, so no framework is required to
+# reproduce one) and `pytest tests/` for the whole suite at once. Only the first
+# actually worked, because pytest appeared in no requirements file, wasn't
+# installed in the project venv, and no CI job ran it -- so the suite as a suite
+# had no runner, and a stale .pytest_cache recorded failures nobody could
+# reproduce. This file is the missing half.
+#
+#     pip install -r requirements-dev.txt && pytest tests/ -q
+pytest>=8.0

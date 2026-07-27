@@ -230,6 +230,23 @@ def _using_default_credentials() -> bool:
     return bool(_load_credentials().get("is_default"))
 
 
+# The only routes reachable while the seeded admin/admin is still in place (see
+# _password_change_required). Everything else -- every API, and therefore the
+# whole console -- is refused until the password has actually been changed.
+#
+# ENFORCED HERE, SERVER-SIDE, NOT AS A UI PROMPT. A "change your password"
+# modal the frontend chooses to show is decoration: the same session cookie
+# still opens /api/events, /api/settings/unlock and /api/monitor/stop to
+# anything that can make an HTTP request. The default password is the key to
+# every tamper gate in this app (Stop Monitoring, Quit, Settings, Delete
+# Evidence), so "we asked nicely on first login" is not a control. Refusing the
+# routes is.
+#
+# /api/logout stays open so someone who signed in and doesn't want to set a
+# password can still drop their session rather than being stuck.
+PW_CHANGE_EXEMPT_PATHS = {"/api/settings/password", "/api/logout"}
+
+
 def _save_credentials(creds: dict) -> None:
     CREDENTIALS_PATH.write_text(json.dumps(creds), encoding="utf-8")
     try:
@@ -907,6 +924,10 @@ def write_settings(body: dict) -> dict:
         # runtime paths aren't editable from the UI on purpose -- pass through
         "log_path": str(_passthrough("log_path", "events.log")),
         "db_path": str(_passthrough("db_path", "aegis_events.db")),
+        # No UI field, so pure passthrough -- without it, saving Settings would
+        # silently reset a hand-tuned retention window back to the default,
+        # exactly the way enrich_min_severity below would.
+        "retention_days": _lenient_int(_passthrough("retention_days", 90), 90),
         "trusted_process_names": _clean_str_list(body.get("trusted_process_names")),
         "trusted_process_hashes": _clean_str_list(body.get("trusted_process_hashes")),
         "trusted_usb_ids": _clean_str_list(body.get("trusted_usb_ids")),
@@ -1639,14 +1660,20 @@ def test_enrichment() -> dict:
 
     enricher = ThreatEnricher(_TestCfg())
     eicar = "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
-    result = enricher._vt_fetch(eicar)
-    if enricher._auth_failed:
-        return {"error": "VirusTotal rejected the API key (401) — check the key and Save again."}
-    if result is None:
-        return {"error": "Could not reach VirusTotal — network problem or free-tier quota exceeded."}
-    if result.get("status") != "known" or not result.get("detections"):
-        return {"error": "Unexpected VirusTotal reply — the EICAR test file should always be flagged."}
-    return {"ok": True, "detections": result["detections"], "engines_total": result["engines_total"]}
+    try:
+        result = enricher._vt_fetch(eicar)
+        if enricher._auth_failed:
+            return {"error": "VirusTotal rejected the API key (401) — check the key and Save again."}
+        if result is None:
+            return {"error": "Could not reach VirusTotal — network problem or free-tier quota exceeded."}
+        if result.get("status") != "known" or not result.get("detections"):
+            return {"error": "Unexpected VirusTotal reply — the EICAR test file should always be flagged."}
+        return {"ok": True, "detections": result["detections"], "engines_total": result["engines_total"]}
+    finally:
+        # The enricher opens its cache connection lazily; every early return
+        # above used to abandon one, so each click of "Test connection" leaked
+        # a sqlite handle for the life of the process.
+        enricher.close()
 
 
 def add_trusted(kind: str, value: str) -> dict:
@@ -1851,6 +1878,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _password_change_required(self, path: str) -> bool:
+        """True -- and the 403 has already been sent -- when the seeded
+        admin/admin is still in place and `path` is not one of the few routes
+        needed to change it (PW_CHANGE_EXEMPT_PATHS).
+
+        Called for authenticated requests only, so an unauthenticated caller
+        still gets the honest 401 rather than being told which state the
+        install is in. Static files and the console page itself are NOT gated:
+        the page has to load for its own change-password prompt to render, and
+        it can do nothing without the APIs this refuses."""
+        if not _using_default_credentials() or path in PW_CHANGE_EXEMPT_PATHS:
+            return False
+        self._send_json({
+            "error": "Set a dashboard password before using Aegis -- the default "
+                     "admin/admin also unlocks Stop Monitoring, Quit and Settings.",
+            "password_change_required": True,
+        }, status=403)
+        return True
+
     def _settings_open(self) -> bool:
         """Has this session unlocked Settings (see unlock_settings)?"""
         from core.config import load_config
@@ -1922,7 +1968,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/api/login":
                 self._handle_login()
-            elif parsed.path == "/api/settings/unlock":
+                return
+            # Seeded admin/admin still in place -> everything but the
+            # change-password and logout routes is refused. See
+            # PW_CHANGE_EXEMPT_PATHS for why this is a server-side gate.
+            if self._authed() and self._password_change_required(parsed.path):
+                return
+            if parsed.path == "/api/settings/unlock":
                 if not self._authed():
                     self._send_json({"error": "authentication required"}, status=401)
                     return
@@ -1979,6 +2031,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     status = 429      # lockout, not a malformed request
                 else:
                     status = 400 if result.get("error") else 200
+                if not result.get("error"):
+                    # Rotating the password must end every session that was
+                    # opened with the OLD one -- otherwise a stolen cookie (the
+                    # single most likely reason someone changes it) simply
+                    # outlives the change, and so does any Settings unlock it
+                    # already earned. The caller is the one person who has
+                    # proved they know the new password, so they get a fresh
+                    # token rather than being bounced to /login.
+                    _sessions.clear()
+                    _settings_unlock_until.clear()
+                    token = secrets.token_urlsafe(32)
+                    _sessions[token] = time.time() + SESSION_TTL
+                    self._send_json(result, status=status, extra={
+                        "Set-Cookie": f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "
+                                      f"Path=/; Max-Age={SESSION_TTL}"})
+                    return
                 self._send_json(result, status=status)
             elif parsed.path == "/api/monitor/start":
                 if not self._authed():
@@ -1988,10 +2056,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/monitor/restart":
                 # Stop + start so the pipeline is rebuilt against freshly
                 # loaded config -- how saved settings take effect without
-                # relaunching the app. Not password-gated like stop: it ends
-                # with monitoring RUNNING, so it can't be used to disable it.
+                # relaunching the app.
+                #
+                # Confirmed tamper-gate bypass this gate closes: restart used to
+                # need nothing but a session, on the reasoning that "it ends with
+                # monitoring RUNNING, so it can't be used to disable it." It
+                # doesn't always end that way. It stops FIRST, and start_monitor()
+                # reports a failed start as a JSON error rather than raising -- so
+                # a caller who was just refused by /api/monitor/stop for typing
+                # the wrong password (403, monitoring untouched, tamper attempt
+                # logged) could call this instead and land on monitoring=False
+                # with no password, no lockout, no timeline entry and no evidence
+                # capture. Even when the restart succeeds, an attacker with a
+                # session alone could cycle it to manufacture repeated monitoring
+                # gaps.
+                #
+                # Gated with the Settings unlock rather than a fresh password
+                # prompt because that is where the button already lives (the
+                # Restart Monitoring button sits in the Settings panel, which the
+                # user has necessarily just unlocked to save the settings they
+                # want applied) -- so this costs the real flow nothing, while a
+                # session on its own no longer reaches it.
                 if not self._authed():
                     self._send_json({"error": "authentication required"}, status=401)
+                    return
+                if not self._require_settings_unlock():
                     return
                 stop_monitor()
                 self._send_json(start_monitor())
@@ -2175,6 +2264,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         token = secrets.token_urlsafe(32)
         _prune_expired(_sessions)
         _sessions[token] = time.time() + SESSION_TTL
+        # A session is issued even when the seeded password is still in place --
+        # changing it requires one -- but every route except the change-password
+        # and logout pair is refused until that's done, so the console the
+        # browser lands on can do nothing else. See PW_CHANGE_EXEMPT_PATHS.
         self._send_json({"ok": True}, extra={
             "Set-Cookie": f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "
                           f"Path=/; Max-Age={SESSION_TTL}"})
@@ -2195,6 +2288,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif parsed.path.startswith("/api/"):
                 if not authed:
                     self._send_json({"error": "authentication required"}, status=401)
+                elif self._password_change_required(parsed.path):
+                    pass          # 403 already sent -- see PW_CHANGE_EXEMPT_PATHS
                 elif parsed.path == "/api/events":
                     self._send_json({"events": query_events(self.db_path, params)})
                 elif parsed.path == "/api/events/related":

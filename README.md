@@ -42,13 +42,15 @@ python desktop_app.py
 `desktop_app.py` is the real app: one window, the live event console, and a
 Settings page — nothing to configure by hand first.
 
-> **First run signs in with `admin` / `admin` — change it immediately**, from
-> Settings → Account. That one password is not just the dashboard login: it is
-> also the gate on **Stop Monitoring, Quit, and Settings**. Leave it at the
-> default and anyone who has read this README can walk up to your machine and
-> switch Aegis off. The dashboard shows a banner until you change it, and
-> repeated wrong attempts on a gated action are themselves logged as a
-> tamper Incident.
+> **First run signs in with `admin` / `admin`, then makes you replace it before
+> anything else works.** That one password is not just the dashboard login: it
+> is also the gate on **Stop Monitoring, Quit, Settings and Delete Evidence**,
+> so leaving it at the default would mean anyone who has read this README can
+> walk up to your machine and switch Aegis off. The server refuses every other
+> API until it's changed — this is a real gate, not a dismissable prompt — so
+> the console opens on a "set your password" dialog and nothing else loads
+> until you do. Change it again later from Settings → Account; repeated wrong
+> attempts on a gated action are themselves logged as a tamper Incident.
 
 Add your AI provider's API key from Settings → AI Explainer — it's encrypted at
 rest and, unlike the old `.env`-file approach, **survives every self-update**,
@@ -170,8 +172,14 @@ Read the ticks below, not the number above.
   self-updates (previously had to be re-entered after every update: the key
   was written next to the app's own code, which self-update replaces
   wholesale)
-- ✅ Changeable dashboard login password (Settings → Account) — no longer
-  fixed `admin`/`admin`
+- ✅ Mandatory first-run password — the shipped `admin`/`admin` gets you in
+  and nothing else: the server refuses every other route until you replace it,
+  so the password guarding Stop Monitoring, Quit, Settings and Delete Evidence
+  can never quietly stay at the documented default. Changeable again any time
+  from Settings → Account, and changing it ends every existing session
+- ✅ Event retention — the store ages ordinary events out after
+  `retention_days` (90 by default, `0` keeps everything) and `events.log`
+  rotates at 5MB × 3; tamper Incidents are never pruned by either
 - ✅ Self-update — checks GitHub Releases, downloads, and installs in place
   from Settings (packaged builds only); verified for real on macOS, Windows
   install path implemented per Inno Setup's documented behavior but not yet

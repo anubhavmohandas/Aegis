@@ -11,6 +11,42 @@ on:
     tags: ["v*"]
 
 jobs:
+  # Nothing ran tests/ before this job existed -- the two build jobs run
+  # validate_runtime.py (an import + HTTP smoke check), which is not the same
+  # thing, and pytest was in no requirements file at all. A tagged release
+  # could therefore ship with the whole suite red and nobody the wiser.
+  # macOS rather than ubuntu: several checks touch macOS-only paths
+  # (rule_engine's SIP branch, session_monitor's ioreg backend), and the ones
+  # that don't are platform-agnostic anyway.
+  tests:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-common.txt -r requirements-macos.txt -r requirements-dev.txt
+
+      - name: Test suite
+        run: pytest tests/ -q
+
+      # The module self-checks are the other half of this codebase's testing:
+      # each is the "one runnable check" behind a piece of non-trivial logic and
+      # lives in the module it guards, so pytest never collects them.
+      - name: Module self-checks
+        run: |
+          for m in core.rule_engine core.severity_engine core.enrichment \
+                   core.evidence core.process_notes core.session_monitor \
+                   core.database; do
+            echo "--- $m"
+            python -m "$m"
+          done
+
   windows:
     runs-on: windows-latest
     steps:
@@ -124,7 +160,7 @@ jobs:
   # with attached assets is the only thing an unauthenticated app can pull.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, macos]
+    needs: [tests, windows, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write  # softprops/action-gh-release needs this to create the release

@@ -169,7 +169,13 @@ class RuleEngine:
         self.trusted_process_names = {p.lower() for p in (trusted_process_names or [])}
         self.trusted_usb_ids = {u.lower() for u in (trusted_usb_ids or [])}
         self.trusted_process_hashes = {h.lower() for h in (trusted_process_hashes or [])}
-        self.suppress_platform_binaries = _sip_enabled()
+        # _sip_ok, not _sip_enabled: the cached wrapper exists precisely so the
+        # `csrutil status` subprocess runs once per process. Calling the raw
+        # function here bypassed it, and a new RuleEngine is built on every
+        # Dispatcher construction -- i.e. on every Stop/Start and every Settings
+        # save -- so this re-forked csrutil each time for an answer that cannot
+        # change without a reboot.
+        self.suppress_platform_binaries = _sip_ok()
 
     def evaluate(self, event: MonitorEvent) -> RuleVerdict:
         if event.category == EventCategory.PROCESS_STARTED:

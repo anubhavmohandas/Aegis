@@ -7,7 +7,6 @@ happens via notifications.
 
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -33,17 +32,18 @@ def _load_icon_image() -> Image.Image:
 
 
 class TrayApp:
-    def __init__(self, on_quit, on_open_dashboard=None):
+    # No "Open Dashboard" item: main.py's tray-only mode does not run the
+    # dashboard server (that's desktop_app.py, which has its own richer menu in
+    # _add_macos_menubar/_add_pystray_tray), so the optional on_open_dashboard
+    # hook this class used to accept was never passed by any caller and the
+    # menu item it guarded could never appear. Removed rather than left as
+    # dead flexibility.
+    def __init__(self, on_quit):
         self.on_quit = on_quit
-        self.on_open_dashboard = on_open_dashboard
-        items = [pystray.MenuItem("Aegis (running)", None, enabled=False)]
-        if on_open_dashboard:
-            items.append(pystray.MenuItem("Open Dashboard", self._open_dashboard, default=True))
-        items.append(pystray.MenuItem("Quit", self._quit))
-        self.icon = pystray.Icon("aegis", _load_icon_image(), "Aegis", menu=pystray.Menu(*items))
-
-    def _open_dashboard(self, icon, item):
-        self.on_open_dashboard()
+        self.icon = pystray.Icon("aegis", _load_icon_image(), "Aegis", menu=pystray.Menu(
+            pystray.MenuItem("Aegis (running)", None, enabled=False),
+            pystray.MenuItem("Quit", self._quit),
+        ))
 
     def _quit(self, icon, item):
         # on_quit may veto by returning False (main.py's password gate:
@@ -58,7 +58,3 @@ class TrayApp:
         # pystray needs the OS main thread on macOS -- call this from main(),
         # not from a background thread.
         self.icon.run()
-
-    def run_in_background(self):
-        # Fine on Windows; on macOS prefer run_blocking() from the main thread.
-        threading.Thread(target=self.icon.run, daemon=True).start()

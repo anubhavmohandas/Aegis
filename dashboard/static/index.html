@@ -586,6 +586,41 @@
   </div>
 </div>
 
+<!-- First-run gate. Shown when the server reports password_change_required,
+     i.e. credentials.json still holds the seeded admin/admin. Deliberately has
+     no close button and no cancel: the server refuses every other API until
+     this is done (dashboard/server.py PW_CHANGE_EXEMPT_PATHS), so a dismissable
+     dialog would only produce a console where nothing loads. -->
+<div class="drawer-overlay" id="firstpw-overlay" hidden></div>
+<div class="log-modal report-modal stoppw-modal" id="firstpw-modal" hidden
+     role="dialog" aria-modal="true" aria-labelledby="firstpw-title">
+  <div class="drawer-head">
+    <span class="drawer-title" id="firstpw-title">SET YOUR DASHBOARD PASSWORD</span>
+  </div>
+  <div class="drawer-body">
+    <p class="settings-desc">Aegis ships with <strong>admin / admin</strong> so the first sign-in works.
+       That same password is what unlocks Stop Monitoring, Quit, Settings and Delete Evidence — so until
+       you change it, every one of those protections is open to anyone who knows the default.
+       Set a real password to continue.</p>
+    <div class="field">
+      <label for="firstpw-new">New password</label>
+      <input id="firstpw-new" class="text-input" type="password" autocomplete="new-password"
+             aria-describedby="firstpw-hint">
+      <span class="settings-note" id="firstpw-hint" style="display:block; margin-top:6px;">At least 8 characters.
+        Store it somewhere you won't lose it — there is no recovery, and resetting means deleting
+        credentials.json from the Aegis data folder.</span>
+    </div>
+    <div class="field">
+      <label for="firstpw-confirm">Confirm new password</label>
+      <input id="firstpw-confirm" class="text-input" type="password" autocomplete="new-password">
+    </div>
+    <span class="settings-note" id="firstpw-note" role="status" aria-live="polite"></span>
+  </div>
+  <div class="settings-actions report-modal-actions">
+    <button class="btn btn-primary" id="firstpw-save">Set Password &amp; Continue</button>
+  </div>
+</div>
+
 <div class="drawer-overlay" id="stoppw-overlay" hidden></div>
 <div class="log-modal report-modal stoppw-modal" id="stoppw-modal" hidden aria-label="Confirm stop monitoring">
   <div class="drawer-head">

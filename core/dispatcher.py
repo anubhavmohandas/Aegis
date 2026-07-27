@@ -56,6 +56,8 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from functools import lru_cache
+from logging.handlers import RotatingFileHandler
 from queue import Empty, Queue
 
 from .ai_explainer import AIExplainer
@@ -109,6 +111,47 @@ METRICS_INTERVAL_SECONDS = 5
 # can't build an enormous prompt.
 AWAY_RECAP_EVENT_CAP = 300
 
+# Retention sweep for the SQLite event store (config.retention_days; 0 keeps
+# everything). Runs on the same loop as the heartbeat, at a deliberately lazy
+# cadence -- the cutoff moves by a day at a time, so checking it four times a
+# day is already far more often than it can matter, and the DELETE holds the
+# store's write lock while it runs.
+RETENTION_INTERVAL_SECONDS = 6 * 3600
+
+# Size cap for the flat audit log. Nothing capped it before: this app is built
+# to sit resident for weeks appending a line per event, while monitor.log
+# beside it was already rotated (desktop_app._wire_monitor_log). 5MB x 3 is a
+# few hundred thousand events of history at ~90 bytes a line.
+EVENT_LOG_MAX_BYTES = 5 * 1024 * 1024
+EVENT_LOG_BACKUPS = 3
+
+
+@lru_cache(maxsize=8)
+def _event_log(path: str) -> logging.Logger:
+    """The append-only flat audit trail at `path`, size-capped.
+
+    RotatingFileHandler rather than the previous open/write/close per event: it
+    carries its own lock (so the dispatcher no longer needs one of its own) and
+    it caps the file, which nothing did.
+
+    lru_cache is the "attach the handler exactly once per path" guard, and it is
+    load-bearing rather than an optimisation: a Settings save builds a whole new
+    Dispatcher (see desktop_app.MonitorPipeline.start), and adding a fresh
+    handler to the same logger each time would write every line once per restart
+    the app had ever done. Keyed on the path so a changed log_path gets its own
+    logger instead of silently reusing the old file's handler. A raise (missing
+    directory, unwritable path) is not cached, so the next event retries."""
+    log = logging.getLogger(f"aegis.eventlog.{path}")
+    log.propagate = False          # its own file -- not the root console/monitor log
+    log.setLevel(logging.INFO)
+    handler = RotatingFileHandler(path, encoding="utf-8",
+                                  maxBytes=EVENT_LOG_MAX_BYTES,
+                                  backupCount=EVENT_LOG_BACKUPS)
+    handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s",
+                                           datefmt="%Y-%m-%d %H:%M:%S"))
+    log.addHandler(handler)
+    return log
+
 
 def _lid_closed_during(start_ts: float, end_ts: float) -> bool:
     """True if the Mac slept because the lid was shut inside [start_ts, end_ts].
@@ -154,9 +197,9 @@ class Dispatcher:
         self._recent_summaries: deque[tuple[str, float]] = deque()
         self._minute_bucket: deque[float] = deque()
         self._stop = threading.Event()
-        self._log_lock = threading.Lock()
         self._last_heartbeat = 0.0
         self._last_metrics = 0.0
+        self._last_retention = 0.0
         self._explain_pending = 0
         self._explain_lock = threading.Lock()
         # Explanations run here, not on the queue-draining thread. Small on
@@ -171,6 +214,7 @@ class Dispatcher:
         while not self._stop.is_set():
             self._heartbeat()
             self._publish_metrics()
+            self._enforce_retention()
             try:
                 event = self.in_queue.get(timeout=1)
             except Empty:
@@ -521,6 +565,30 @@ class Dispatcher:
         except Exception as e:
             logger.debug("Metrics publish failed: %s", e)
 
+    def _enforce_retention(self) -> None:
+        """Age ordinary events out of the store (config.retention_days).
+
+        Same shape as _heartbeat/_publish_metrics: a cheap clock check on the
+        loop that already wakes once a second, doing real work only when the
+        interval has elapsed. Failures are logged and dropped -- a locked or
+        full database must cost us a sweep, never the queue-draining loop.
+
+        Tamper incidents are exempt by construction (see EventStore.prune_events)."""
+        days = getattr(self.config, "retention_days", 0)
+        if not days:
+            return  # 0 = keep forever
+        now = time.time()
+        if now - self._last_retention < RETENTION_INTERVAL_SECONDS:
+            return
+        self._last_retention = now
+        try:
+            removed = self.store.prune_events(now - days * 86400)
+            if removed:
+                logger.info("Retention: removed %d event(s) older than %d days "
+                            "(tamper incidents are never pruned).", removed, days)
+        except Exception as e:
+            logger.warning("Retention sweep failed: %s", e)
+
     def _check_monitoring_gap(self) -> None:
         """On startup, compare now against the last heartbeat. A large gap
         means Aegis wasn't running for that stretch -- surface it as an event
@@ -574,11 +642,13 @@ class Dispatcher:
         # abort the rest of the pipeline for this event: SQLite (_persist) is
         # the redundant second trail, same reasoning as _persist's own guard
         # in the other direction.
+        #
+        # Line format is byte-for-byte what the hand-rolled open/write produced
+        # ("<ts> | <source> | <summary>"); _event_log just adds the size cap and
+        # its own lock, which is why the dispatcher no longer keeps a _log_lock.
         try:
-            with self._log_lock:
-                with open(self.config.log_path, "a", encoding="utf-8") as f:
-                    f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | {event.source} | {event.summary}\n")
-        except OSError as e:
+            _event_log(self.config.log_path).info("%s | %s", event.source, event.summary)
+        except (OSError, ValueError) as e:
             logger.error("Failed to append to the flat event log %s: %s", self.config.log_path, e)
 
     def _persist(self, event: MonitorEvent, severity: str, explanation: str | None, ai_skipped: bool,

@@ -139,11 +139,6 @@ class SecretsStore:
         values[name] = value
         self._save_all(values)
 
-    def delete(self, name: str) -> None:
-        values = self._load_all()
-        if values.pop(name, None) is not None:
-            self._save_all(values)
-
 
 _store: SecretsStore | None = None
 _store_dir: Path | None = None
@@ -166,7 +161,3 @@ def get_secret(name: str) -> str | None:
 
 def set_secret(name: str, value: str) -> None:
     _get_store().set(name, value)
-
-
-def delete_secret(name: str) -> None:
-    _get_store().delete(name)

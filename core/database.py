@@ -66,9 +66,6 @@ CREATE INDEX IF NOT EXISTS idx_events_source ON events(source);
 CREATE INDEX IF NOT EXISTS idx_events_severity ON events(severity);
 """
 
-# Kept for anyone still importing it; the two halves above are what actually run.
-SCHEMA = _TABLES + _INDEXES
-
 # Additive migrations for databases created by an older Aegis -- avoids forcing
 # anyone to delete their event history when they pull an update.
 _MIGRATIONS = [
@@ -204,6 +201,25 @@ class EventStore:
             cols = [d[0] for d in self._conn.execute("SELECT * FROM events LIMIT 0").description]
             return [dict(zip(cols, row)) for row in rows]
 
+    def prune_events(self, cutoff: float) -> int:
+        """Delete events older than `cutoff` (unix seconds); returns the count.
+
+        INCIDENTS ARE DELIBERATELY NOT TOUCHED. An ordinary process/USB/file
+        event is worth a few months; a tamper incident is the one record whose
+        whole purpose is to still be there long after the fact, and a retention
+        policy that quietly ages out the evidence of someone trying to disable
+        monitoring would defeat core/evidence.py entirely. Deleting those stays
+        a deliberate, password-gated act (see delete_incidents).
+
+        Nothing pruned the store at all before this: the dispatcher appends
+        forever, and on a normal Mac Spotlight alone accounts for ~1000 events a
+        day -- while /api/stats runs six full-table aggregates on every 4s
+        dashboard poll against whatever that has grown into."""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM events WHERE timestamp < ?", (cutoff,))
+            self._conn.commit()
+            return cur.rowcount
+
     # --- meta (heartbeat & friends) --------------------------------------
 
     def set_meta(self, key: str, value: str) -> None:
@@ -264,3 +280,30 @@ class EventStore:
     def close(self):
         with self._lock:
             self._conn.close()
+
+
+if __name__ == "__main__":
+    # Self-check for prune_events -- the only method here that DELETES, so the
+    # one worth a runnable guard: it must take old events, leave recent ones,
+    # and never touch incidents.
+    import tempfile
+
+    store = EventStore(str(Path(tempfile.mkdtemp()) / "t.db"))
+    now = time.time()
+    old, recent = now - 100 * 86400, now - 1 * 86400
+    store.insert(source="process", category="process_started", summary="old",
+                 details={}, confidence="certain", timestamp=old)
+    store.insert(source="process", category="process_started", summary="recent",
+                 details={}, confidence="certain", timestamp=recent)
+    store.insert_incident(reason="old tamper attempt", attempts=3, username="u",
+                          hostname="h", artifacts={}, context={}, timestamp=old)
+
+    cutoff = now - 90 * 86400
+    assert store.prune_events(cutoff) == 1
+    assert [r["summary"] for r in store.recent(10)] == ["recent"]
+    # The point of the exemption: evidence older than the retention window is
+    # exactly the evidence you still need.
+    assert len(store.list_incidents()) == 1, "prune_events must never touch incidents"
+    assert store.prune_events(cutoff) == 0, "a second sweep has nothing left to do"
+    store.close()
+    print("database self-check: OK")

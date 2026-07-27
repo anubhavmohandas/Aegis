@@ -41,6 +41,12 @@ srv.MONITOR_STATE_FILE = _TMP / ".aegis_monitor.json"
 srv.PBKDF2_ITERATIONS = 1000          # the gate is what's under test, not PBKDF2's cost
 srv._settings_unlock_until.clear()
 srv._tamper_state.clear()
+# Seed "admin" as a DELIBERATELY CHOSEN password (is_default=False) rather than
+# letting _load_credentials seed the shipped default. The server refuses every
+# route but change-password while the seeded admin/admin is still in place (see
+# PW_CHANGE_EXEMPT_PATHS) -- correct behaviour, and covered by
+# test_first_run_password.py, but it isn't what this file exercises.
+srv._save_credentials(srv._new_credentials("admin", "admin", is_default=False))
 
 DB = _TMP / "events.db"
 from core.database import EventStore  # noqa: E402
