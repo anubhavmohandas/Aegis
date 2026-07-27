@@ -5,10 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Aegis — Memory</title>
 <link rel="icon" type="image/png" href="favicon.png">
-<script>
-  // apply the saved theme before first paint so there's no flash
-  document.documentElement.dataset.theme = localStorage.getItem("aegis-theme") || "obsidian";
-</script>
+<!-- Applies the saved theme before first paint. External, not inline, so the
+     Content-Security-Policy can forbid inline script -- see theme-boot.js. -->
+<script src="theme-boot.js"></script>
 <!-- Fonts are self-hosted in style.css (@font-face -> fonts/*.woff2), not
      fetched from fonts.googleapis.com. See the comment at the top of style.css. -->
 <link rel="stylesheet" href="style.css">

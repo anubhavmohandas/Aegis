@@ -92,6 +92,53 @@ MIME = {
 VALID_SEVERITIES = {"low", "medium", "high", "critical"}
 VALID_SOURCES = {"process", "usb", "startup", "folder", "session", "tamper"}
 
+# Sent on EVERY response (see _send). The timeline renders text that Aegis did
+# not write: process names, file paths and folder names chosen by whoever
+# touched the machine, plus AI explanations generated from that same text. The
+# frontend escapes all of it (escapeHtml, then a markdown whitelist in
+# renderMarkdownLite), and that is the actual defence -- but it is a single
+# discipline applied by hand across ~2800 lines of string-built HTML, where one
+# missed call is a stored XSS. This is the second layer, so a miss is inert
+# rather than exploitable.
+#
+# default-src 'none' then enumerate: anything not listed is refused, so a future
+# feature that reaches for a CDN fails loudly here instead of silently adding a
+# third party to a local-only console.
+#
+#   script-src 'self'  -- no 'unsafe-inline'. That is the whole point of the
+#     directive, so the three inline <script> blocks that used to live in
+#     index.html/login.html moved into theme-boot.js and login.js rather than
+#     the policy being widened to keep them. pywebview's window.pywebview bridge
+#     is unaffected: it arrives via WKWebView.evaluateJavaScript (webview/util.py
+#     inject_pywebview -> window.run_js), and host-evaluated script is not
+#     governed by page CSP.
+#   style-src adds 'unsafe-inline' -- unavoidable: the theme picker and the
+#     severity bars set style="..." attributes from real values. Inline style is
+#     a far weaker vector than inline script, and buying it back would mean
+#     hashing every generated attribute.
+#   img-src allows blob: for the PDF/CSV export path (app.js saveResponseAsFile
+#     builds an object URL).
+#   frame-ancestors 'none' replaces X-Frame-Options; base-uri 'none' stops an
+#     injected <base> from repointing every relative URL on the page.
+CSP = (
+    "default-src 'none'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' blob:; "
+    "font-src 'self'; "
+    "connect-src 'self'; "
+    "form-action 'self'; "
+    "base-uri 'none'; "
+    "frame-ancestors 'none'"
+)
+SECURITY_HEADERS = {
+    "Content-Security-Policy": CSP,
+    # The static handler guesses Content-Type from the file suffix; nosniff
+    # stops a browser second-guessing it and executing something as script.
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+
 # --- auth -------------------------------------------------------------------
 # A single operator account (this is a localhost-only, one-user console, not
 # a multi-tenant service), in-memory sessions (restart logs everyone out),
@@ -239,7 +286,13 @@ def change_password(current_password: str, new_password: str) -> dict:
 # The `fonts/` prefix is public for the same reason style.css is -- the login
 # page references those woff2 files, and gating them would just redirect the
 # font requests to /login and render the sign-in screen in fallback type.
-PUBLIC_FILES = {"login.html", "style.css", "favicon.png"}
+#
+# login.js and theme-boot.js are here because the CSP forbids inline script
+# (see SECURITY_HEADERS): the code that used to be inline in login.html is now
+# fetched, so gating it would 302 the sign-in form's own handler to /login and
+# leave a page whose button does nothing. Neither file is secret -- login.js
+# posts the form to /api/login, theme-boot.js reads a localStorage key.
+PUBLIC_FILES = {"login.html", "login.js", "theme-boot.js", "style.css", "favicon.png"}
 PUBLIC_PREFIXES = ("assets/", "fonts/")
 
 # Columns exposed to the UI -- everything in the events table. details_json is
@@ -1763,6 +1816,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for header, value in SECURITY_HEADERS.items():
+            self.send_header(header, value)
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()

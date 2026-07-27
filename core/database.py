@@ -11,10 +11,13 @@ the audit trail even if this layer breaks.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
 from pathlib import Path
+
+logger = logging.getLogger("aegis.database")
 
 # Version tag embedded INSIDE every persisted details_json blob (not on the
 # MonitorEvent dataclass -- that object never crosses a process boundary,
@@ -23,7 +26,9 @@ from pathlib import Path
 # would make old rows ambiguous to a future reader of the timeline.
 DETAILS_SCHEMA_VERSION = 1
 
-SCHEMA = """
+# Tables and indexes are deliberately SEPARATE scripts, applied either side of
+# _MIGRATIONS -- see _init_schema for the bug that ordering fixes.
+_TABLES = """
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp REAL NOT NULL,
@@ -37,9 +42,6 @@ CREATE TABLE IF NOT EXISTS events (
     risk_hint TEXT,
     ai_skipped INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_events_source ON events(source);
-CREATE INDEX IF NOT EXISTS idx_events_severity ON events(severity);
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -58,8 +60,17 @@ CREATE TABLE IF NOT EXISTS incidents (
 );
 """
 
-# Additive migration for DBs created before `severity` existed -- avoids
-# forcing anyone to delete their event history when they pull this update.
+_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_events_source ON events(source);
+CREATE INDEX IF NOT EXISTS idx_events_severity ON events(severity);
+"""
+
+# Kept for anyone still importing it; the two halves above are what actually run.
+SCHEMA = _TABLES + _INDEXES
+
+# Additive migrations for databases created by an older Aegis -- avoids forcing
+# anyone to delete their event history when they pull an update.
 _MIGRATIONS = [
     "ALTER TABLE events ADD COLUMN severity TEXT NOT NULL DEFAULT 'medium'",
 ]
@@ -76,13 +87,71 @@ class EventStore:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True) if Path(db_path).parent != Path(".") else None
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.executescript(SCHEMA)
+        self._enable_wal()
+        self._init_schema()
+
+    def _init_schema(self) -> None:
+        """Tables, then migrations, then indexes -- in that order, deliberately.
+
+        Confirmed bug this fixes: the whole schema (tables AND indexes) used to
+        run as one executescript BEFORE the migrations. On a database created by
+        a version of Aegis predating the `severity` column, that script reached
+        `CREATE INDEX ... ON events(severity)`, raised `no such column:
+        severity`, and the exception escaped __init__ -- so the ALTER TABLE
+        directly below that was supposed to add the column never ran. The
+        migration list could not fix the very situation it exists for: opening
+        an old event store crashed the app at startup, and the comment promising
+        nobody has to delete their history was describing code that could never
+        execute.
+
+        Indexes have to come after the migrations because an index can only be
+        built on a column that already exists; migrations have to come after the
+        tables because ALTER TABLE needs something to alter. Hence three steps
+        instead of one."""
+        self._conn.executescript(_TABLES)
         for migration in _MIGRATIONS:
             try:
                 self._conn.execute(migration)
             except sqlite3.OperationalError:
                 pass  # column already exists -- fine, this runs on every startup
+        self._conn.executescript(_INDEXES)
         self._conn.commit()
+
+    def _enable_wal(self) -> None:
+        """Switch the store to write-ahead logging.
+
+        There is exactly one writer (the dispatcher) and one reader (the
+        dashboard, which opens this same file `mode=ro`) -- the case WAL exists
+        for. Under the default rollback journal a commit takes an exclusive
+        lock, so the dashboard's 4s poll could land on SQLITE_BUSY and spend up
+        to its 5s timeout waiting; worse, a `mode=ro` connection cannot replay a
+        hot journal, so an unclean writer exit could leave the dashboard unable
+        to open a database a writable connection would have recovered
+        automatically.
+
+        Verified rather than assumed: with WAL on, a `mode=ro` reader sees
+        commits made after it connected AND reads without blocking while a
+        write transaction is open. The mode is a property of the file, so it
+        persists -- existing databases are upgraded in place on the next start.
+
+        Failure is non-fatal on purpose. WAL needs the -shm wal-index in shared
+        memory, which some network filesystems don't provide; there the PRAGMA
+        is a silent no-op (SQLite stays in the old mode rather than raising) and
+        rarely it errors outright. Either way the store still works exactly as
+        it did before, so this logs the shortfall instead of refusing to start
+        -- but it does log it, because degrading silently is the failure mode
+        this codebase treats as the actual bug."""
+        try:
+            mode = self._conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+        except sqlite3.Error as e:
+            logger.warning("Could not enable WAL on %s (%s) -- continuing with the "
+                           "default journal; dashboard reads may briefly block on writes.",
+                           self.db_path, e)
+            return
+        if str(mode).lower() != "wal":
+            logger.warning("WAL was refused on %s (still %r) -- likely a filesystem without "
+                           "shared-memory support. Continuing; dashboard reads may briefly "
+                           "block on writes.", self.db_path, mode)
 
     def insert(self, *, source: str, category: str, summary: str, details: dict,
                confidence: str, severity: str = "medium", explanation: str | None = None,

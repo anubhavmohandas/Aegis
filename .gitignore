@@ -59,7 +59,18 @@ aegis_events.db
 events.log
 *.db
 *.db-journal
+# WAL sidecars (core/database.py enables journal_mode=WAL) -- these live beside
+# the .db and are not matched by the *.db rule above.
+*.db-wal
+*.db-shm
 *.log
+
+# Personal interview/study notes. Deliberately NOT published: it is prep
+# material rather than user documentation, and its security section is a list
+# of known-unfixed gaps that belongs in SECURITY.md (curated) rather than in
+# docs/ (where users read). The architecture half is already public in
+# ARCHITECTURE.md and docs/DECISIONS.md.
+docs/INTERVIEW.md
 .aegis_monitor.json
 config/config.yaml.orig
 

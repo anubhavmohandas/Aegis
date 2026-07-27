@@ -6,6 +6,12 @@
 <p align="center"><b>AI-powered desktop security assistant for Windows, macOS, and Linux.</b></p>
 
 <p align="center">
+  <a href="https://aegis-nyx.netlify.app"><b>aegis-nyx.netlify.app</b></a> ·
+  <a href="https://github.com/anubhavmohandas/Aegis/releases">Download</a> ·
+  <a href="ARCHITECTURE.md">Architecture</a>
+</p>
+
+<p align="center">
 Your computer records everything it does and explains none of it —
 <b>Aegis watches the parts that matter and tells you, in plain English,
 what just happened on your machine and whether you should care.</b>
@@ -34,11 +40,19 @@ python desktop_app.py
 ```
 
 `desktop_app.py` is the real app: one window, the live event console, and a
-Settings page — nothing to configure by hand first. Sign in with `admin` /
-`admin` on first run and change the password from Settings → Account. Add
-your AI provider's API key there too (Settings → AI Explainer) — it's
-encrypted at rest and, unlike the old `.env`-file approach, **survives every
-self-update**, so you only ever type it once.
+Settings page — nothing to configure by hand first.
+
+> **First run signs in with `admin` / `admin` — change it immediately**, from
+> Settings → Account. That one password is not just the dashboard login: it is
+> also the gate on **Stop Monitoring, Quit, and Settings**. Leave it at the
+> default and anyone who has read this README can walk up to your machine and
+> switch Aegis off. The dashboard shows a banner until you change it, and
+> repeated wrong attempts on a gated action are themselves logged as a
+> tamper Incident.
+
+Add your AI provider's API key from Settings → AI Explainer — it's encrypted at
+rest and, unlike the old `.env`-file approach, **survives every self-update**,
+so you only ever type it once.
 
 Prefer a headless/background process with no window (e.g. a server, or a
 machine you SSH into)? `python main.py` runs the same monitors as a system-tray
@@ -118,9 +132,10 @@ moment there is a real build to record.
 
 ## Status — v2.1.3
 
-Versioning tracks validation, not features: **alpha** = features done, macOS
-validated; **beta** = Windows also validated on real hardware; **2.0.0** =
-public release.
+Versioning tracks validation, not features — but the version number is not the
+claim, this list is. A release going out does not mean a platform got proven on
+hardware; macOS is validated, Windows and Linux are implemented and unproven.
+Read the ticks below, not the number above.
 
 - ✅ Multi-provider AI (OpenAI-compatible + Anthropic)
 - ✅ macOS validation on real hardware — process, folder, USB, notifications;
@@ -177,11 +192,31 @@ public release.
   not yet run on real Windows hardware
   ([`TEST_REPORT_TEMPLATE.md`](TEST_REPORT_TEMPLATE.md))
 - 🔲 Linux validation — implemented, not yet run on real Linux hardware
-- 🔲 Signed releases, screenshots & demo
+- ✅ Screenshots & demo — macOS only, rebuilt from source recordings by
+  [`website/build-media.sh`](website/build-media.sh); Windows shots wait on a
+  real Windows build
+- 🔲 Signed releases
 
 Full verification log, architecture, and every known gap:
 **[`ARCHITECTURE.md`](ARCHITECTURE.md)**. Engineering decisions:
-**[`docs/DECISIONS.md`](docs/DECISIONS.md)**.
+**[`docs/DECISIONS.md`](docs/DECISIONS.md)**. Release history:
+**[`CHANGELOG.md`](CHANGELOG.md)**.
+
+## Tests
+
+Framework-free by design — every check in `tests/` is a standalone script, so
+run one directly:
+
+```
+python tests/test_explain_is_async.py
+```
+
+CI ([`.github/workflows/build.yml`](.github/workflows/build.yml)) runs
+`packaging/validate_runtime.py` and builds on macOS and Windows runners.
+
+## License
+
+[MIT](LICENSE).
 
 ---
 
