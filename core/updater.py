@@ -163,9 +163,15 @@ def check_for_update(timeout: int = 10) -> dict | None:
 
     asset = _pick_asset(data.get("assets", []))
     if asset is None:
+        # Not None: returning None here meant "you're on the latest version" --
+        # the exact dishonesty the UpdateError/check_failed split above exists
+        # to prevent. A newer release DOES exist, this platform just has nothing
+        # to download (only .dmg and Windows setup .exe are published, so every
+        # Linux install hit this and was told it was current).
         logger.warning("Newer release %s exists but has no downloadable asset for %s",
                         tag, platform.system())
-        return None
+        raise UpdateError(f"{tag} is available, but Aegis publishes no {platform.system()} "
+                          "build to install -- update your checkout with `git pull` instead.")
 
     # Confirmed bug (the real v2.1.1 release): the tag was pushed from a
     # commit where core/version.py still read 2.1.0, so GitHub advertised

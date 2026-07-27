@@ -90,7 +90,8 @@ The green-accent/slate/Inter repaint is preserved in this file's git history
   and retro labels either way.
 - Severity chip colors (`--sev-low/med/high/crit`) were never touched —
   functional status colors, not brand identity.
-- Logo assets (`assets/logo.png`, `assets/tray_icon.png`, `assets/aegis.ico`)
+- Logo assets (`assets/tray_icon.png`, `assets/aegis.ico`; the site's copy of
+  `logo.png` was a byte-identical duplicate of the repo-root one and is gone)
   were never regenerated in either direction — moot now since the palette is
   back to what the logo was originally derived from, so there's no mismatch
   to flag anymore.

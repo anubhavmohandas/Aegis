@@ -4,3 +4,31 @@ pyudev>=0.24
 # by default -- part of systemd). Not relevant to the client's requested
 # scope (Windows + macOS); included because it's the collector set that
 # could actually be verified end-to-end in a Linux sandbox during development.
+
+qtpy
+# pywebview's window needs a GUI backend, and on Linux it has exactly two:
+# GTK (PyGObject + WebKitGTK -- apt packages a plain venv cannot see) or Qt.
+# PySide6 is already in requirements-common and ships QtWebEngineWidgets, and
+# qtpy is the thin shim `webview.platforms.qt` actually imports. Without this
+# line `python desktop_app.py` dies at start() with "You must have either QT
+# or GTK with Python extensions installed" -- verified: adding qtpy alone makes
+# that import resolve to PySide6/qtwebengine.
+
+# Not pip-installable -- install with apt (Debian/Kali/Ubuntu):
+#
+#   sudo apt install python3-tk libnotify-bin
+#
+#   python3-tk    -- backs the Stop Monitoring / Quit password prompt
+#                    (desktop_app._prompt_password_tk). Debian-family pythons
+#                    ship WITHOUT tkinter, and the tamper gate fails closed:
+#                    with no dialog available the window refuses to close and
+#                    the only way out is killing the process (or turning off
+#                    tamper protection in Settings first).
+#   libnotify-bin -- desktop popups via plyer; only matters with
+#                    notify_enabled: true. Without it notifications fall back
+#                    to a printed line, nothing else breaks.
+#
+# QtWebEngine also needs the usual Chromium runtime libs (libnss3,
+# libxkbcommon-x11-0, libxcomposite1, libxdamage1, libasound2t64). A normal
+# Kali/GNOME/XFCE desktop already has them; a minimal or headless install
+# doesn't -- `python main.py` (tray/headless, no window) works there instead.

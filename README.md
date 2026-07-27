@@ -42,6 +42,12 @@ python desktop_app.py
 `desktop_app.py` is the real app: one window, the live event console, and a
 Settings page — nothing to configure by hand first.
 
+On Debian-family Linux (Kali, Ubuntu, …) add the one system package pip can't
+provide: `sudo apt install python3-tk` — tkinter backs the password prompt that
+gates Stop Monitoring and Quit, and without it that gate fails closed, so the
+window refuses to close. `libnotify-bin` too if you turn desktop popups on.
+[`requirements-linux.txt`](requirements-linux.txt) lists the rest.
+
 > **First run signs in with `admin` / `admin`, then makes you replace it before
 > anything else works.** That one password is not just the dashboard login: it
 > is also the gate on **Stop Monitoring, Quit, Settings and Delete Evidence**,
@@ -199,7 +205,11 @@ Read the ticks below, not the number above.
 - 🔲 Windows **packaged build**, installer, and self-update — implemented,
   not yet run on real Windows hardware
   ([`TEST_REPORT_TEMPLATE.md`](TEST_REPORT_TEMPLATE.md))
-- 🔲 Linux validation — implemented, not yet run on real Linux hardware
+- 🔲 Linux validation — collectors (psutil diff / pyudev netlink / XDG
+  autostart), dashboard and desktop window are implemented and run from source;
+  not yet run on real Linux hardware. No packaged build and no self-update on
+  Linux — "Check for Updates" now says that outright instead of reporting
+  you're on the latest version
 - ✅ Screenshots & demo — macOS only, rebuilt from source recordings by
   [`website/build-media.sh`](website/build-media.sh); Windows shots wait on a
   real Windows build
