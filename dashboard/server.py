@@ -57,6 +57,7 @@ if str(REPO_ROOT) not in sys.path:
 from core.config import persistent_dir, _is_frozen  # noqa: E402 -- needs REPO_ROOT on sys.path first
 from core.metrics import METRICS, rss_mb  # noqa: E402
 from core.secrets_store import get_secret, set_secret  # noqa: E402
+from core.signals import annotate  # noqa: E402
 
 ASSETS_DIR = REPO_ROOT / "assets"                       # brand logo lives with the app assets
 logger_srv = logging.getLogger("aegis.dashboard")
@@ -410,7 +411,12 @@ def query_events(db_path: str, params: dict, limit_cap: int = 1000) -> list[dict
                 f"ORDER BY timestamp DESC, id DESC LIMIT ?",
                 (*args, limit),
             ).fetchall()
-        return [dict(row) for row in rows]
+        # Each row carries the signals that fired on it and how well they
+        # corroborate. Derived here, from core/signals.py, rather than in the
+        # browser: the rules belong next to the severity engine they explain,
+        # and duplicating them into app.js is what the drift test used to
+        # police. Cheap -- a few string tests per row, no extra queries.
+        return [annotate(dict(row)) for row in rows]
     finally:
         conn.close()
 
@@ -1750,7 +1756,11 @@ def monitor_log_tail(max_lines: int = 200) -> str:
 
 def export_csv(events: list[dict]) -> str:
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=EVENT_COLUMNS)
+    # extrasaction: rows now arrive with the derived signals/confidence attached
+    # (core/signals.py, via query_events). The export is the stored record --
+    # the columns that are actually in the table -- so the derived fields are
+    # dropped here rather than widening the CSV with two nested structures.
+    writer = csv.DictWriter(buf, fieldnames=EVENT_COLUMNS, extrasaction="ignore")
     writer.writeheader()
     writer.writerows(events)
     return buf.getvalue()

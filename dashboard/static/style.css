@@ -969,8 +969,75 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   color: var(--ink-2); padding: 2px 8px;
 }
 
+/* Still used by the incident drawer, which has no AI panel to lead with. */
 .drawer-summary { font-size: 16px; font-weight: 600; line-height: 1.4; margin-bottom: 6px; }
 .drawer-time { font-family: var(--font-mono); font-size: 12px; color: var(--ink-3); margin-bottom: 18px; }
+
+/* The event drawer's lede: verdict, headline, then one quiet line of identity.
+   The metadata used to open the drawer as a wrapped grid of bordered badges,
+   which is the first thing the eye lands on and the last thing that matters
+   here -- it is chrome, so it now reads as chrome. */
+.drawer-lede { margin-bottom: 16px; }
+.lede-verdict {
+  --sev: var(--ink-3);
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin-bottom: 9px;
+}
+.lede-verdict.sev-critical { --sev: var(--sev-critical); }
+.lede-verdict.sev-high     { --sev: var(--sev-high); }
+.lede-verdict.sev-medium   { --sev: var(--sev-medium); }
+.lede-verdict.sev-low      { --sev: var(--sev-low); }
+.lede-sev {
+  font-family: var(--font-display);
+  font-size: 11px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase;
+  color: var(--sev);
+  border: 1px solid color-mix(in srgb, var(--sev) 55%, transparent);
+  background: color-mix(in srgb, var(--sev) 12%, transparent);
+  border-radius: 3px; padding: 3px 9px;
+}
+/* A count of signals that actually fired -- not a 0-100 score. See openDrawer. */
+.lede-signals { font-size: 12px; color: var(--ink-3); }
+
+/* Confidence sits next to severity because it qualifies it, and it is
+   deliberately quieter: severity is the verdict, this is how well the evidence
+   backs it. Three bars rather than a word alone -- the level is a rank, and a
+   rank reads faster as a shape than as text. Never tinted by severity: a
+   low-confidence critical must not borrow critical's red and read as more
+   certain than it is. */
+.lede-conf {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--ink-3);
+  text-transform: lowercase;
+  cursor: help;
+}
+.conf-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 10px; }
+.conf-bars i {
+  width: 3px; border-radius: 1px;
+  background: var(--border-strong);
+}
+.conf-bars i:nth-child(1) { height: 4px; }
+.conf-bars i:nth-child(2) { height: 7px; }
+.conf-bars i:nth-child(3) { height: 10px; }
+.conf-lvl-low   .conf-bars i:nth-child(1),
+.conf-lvl-medium .conf-bars i:nth-child(-n+2),
+.conf-lvl-high  .conf-bars i { background: currentColor; }
+.conf-lvl-high   { color: var(--ink-2); }
+.conf-lvl-medium { color: var(--ink-3); }
+.conf-lvl-low    { color: var(--sev-medium); }
+.lede-title {
+  font-size: 20px; font-weight: 650; line-height: 1.3;
+  letter-spacing: -.01em;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+.lede-meta {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
+  font-size: 11.5px; color: var(--ink-3);
+}
+.lede-meta .event-icon { width: 15px; height: 15px; }
+.lede-meta > span + span::before {
+  content: "·"; margin-right: 10px; color: var(--border-strong);
+}
 
 /* The AI summary, above the tabs and deliberately the loudest thing in the
    drawer: accent-tinted surface, accent left edge, larger type than the
@@ -981,19 +1048,24 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   border-left: 3px solid var(--accent);
   background: color-mix(in srgb, var(--accent) 7%, transparent);
   border-radius: var(--radius);
-  padding: 14px 16px 16px;
-  margin-bottom: 14px;
+  padding: 20px 22px 22px;
+  margin-bottom: 16px;
 }
 .ai-panel-title {
-  display: flex; align-items: center; gap: 7px;
+  display: flex; align-items: center; gap: 8px;
   font-family: var(--font-display);
-  font-size: 10px; font-weight: 700; letter-spacing: .22em; text-transform: uppercase;
+  font-size: 12px; font-weight: 700; letter-spacing: .24em; text-transform: uppercase;
   color: var(--accent);
-  margin-bottom: 10px;
+  margin-bottom: 14px;
 }
-.ai-panel-title svg { width: 14px; height: 14px; }
-.ai-panel .explanation { font-size: 14.5px; color: var(--ink-2); }
-.ai-panel .expl-headline { font-size: 16px; margin-bottom: 7px; }
+.ai-panel-title svg { width: 16px; height: 16px; }
+/* Deliberately the largest body text in the drawer -- larger than the event
+   headline above it. The forensic tables below run at 12.5px, so the analysis
+   outweighs its own evidence by a wide enough margin to be the obvious place
+   to start reading. */
+.ai-panel .explanation { font-size: 15px; line-height: 1.7; color: var(--ink-2); }
+.ai-panel .expl-headline { font-size: 18px; line-height: 1.35; margin-bottom: 10px; }
+.ai-panel .explanation p + p, .ai-panel .explanation ul { margin-top: 11px; }
 /* Nothing to read yet -- drop the accent so an empty panel doesn't shout. */
 .ai-panel-pending {
   border-color: var(--border); border-left-color: var(--border-strong);
@@ -1022,6 +1094,62 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   margin-bottom: 5px;
 }
 .rec-action p { font-size: 13px; line-height: 1.6; color: var(--ink-2); }
+
+/* The triggers behind the recommendation. Indented and quieter than the advice
+   itself: it is the supporting evidence, and a user who already trusts the
+   call should be able to skip it in one glance. */
+.rec-why {
+  margin-top: 11px; padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--rec-color) 25%, transparent);
+}
+.rec-why-label {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 9.5px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 7px;
+}
+.rec-why ul { list-style: none; display: flex; flex-direction: column; gap: 5px; }
+.rec-why li {
+  position: relative; padding-left: 15px;
+  font-size: 12.5px; line-height: 1.55; color: var(--ink-3);
+}
+.rec-why li b { color: var(--ink-2); font-weight: 600; }
+.rec-why li b::after { content: " — "; font-weight: 400; color: var(--ink-3); }
+.rec-why li::before {
+  content: ""; position: absolute; left: 2px; top: .55em;
+  width: 5px; height: 5px; border-radius: 50%; background: var(--ink-3);
+}
+.rec-why li.why-bad::before  { background: var(--sev-critical); }
+.rec-why li.why-warn::before { background: var(--sev-medium); }
+.rec-why li.why-ok::before   { background: var(--accent); }
+
+/* Every dimension Aegis weighs, and where this event landed on each. Presented
+   as state, never as absence: a row reading "Reputation · Not queried" says the
+   product checked and can tell you the answer is missing, where the floating
+   italic "No threat-intelligence lookup for this event" it replaced read as an
+   error the product was apologising for. */
+.signal-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.signal-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.signal-table .sig-k {
+  font-family: var(--font-display);
+  font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-3);
+  width: 40%; white-space: nowrap;
+}
+.signal-table .sig-v { color: var(--ink-2); }
+.sig-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  margin-right: 8px; vertical-align: middle;
+  background: var(--border-strong);
+}
+.signal-table tr.sig-bad  .sig-v { color: var(--sev-critical); }
+.signal-table tr.sig-bad  .sig-dot { background: var(--sev-critical); }
+.signal-table tr.sig-warn .sig-dot { background: var(--sev-medium); }
+.signal-table tr.sig-ok   .sig-dot { background: var(--accent); }
+/* "Not checked" stays grey and hollow -- it must never read as a pass. */
+.signal-table tr.sig-none .sig-v { color: var(--ink-3); }
+.signal-table tr.sig-none .sig-dot { background: transparent; border: 1px solid var(--border-strong); }
 
 /* Tabbed evidence: Forensics / Raw / Related. */
 .drawer-tabs {
@@ -1071,14 +1199,6 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 .explanation p + p, .explanation ul { margin-top: 8px; }
 .explanation ul { padding-left: 18px; }
-
-.risk-hint {
-  border: 1px solid color-mix(in srgb, var(--sev-medium) 55%, transparent);
-  background: color-mix(in srgb, var(--sev-medium) 9%, transparent);
-  border-radius: var(--radius);
-  padding: 10px 12px;
-  font-size: 13px; color: var(--ink-2);
-}
 
 .vt-test-row { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
 .vt-test-result { font-size: 12.5px; color: var(--ink-2); }

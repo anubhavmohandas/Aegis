@@ -3,6 +3,13 @@
 # screen recordings in website/Videos/. Only the generated outputs are needed to
 # serve the site or render the README; Videos/ is the master.
 #
+# STALE AS OF THE DRAWER REDESIGN -- see RESHOOT.md next to this file. Both
+# remaining takes predate it: they show the AI behind an "AI EXPLANATION" tab
+# that no longer exists (the analysis is now a panel above the tab strip), so
+# `incident.mp4`, `macos-explain.png` and cut [b] of the README GIF all
+# demonstrate a click on a control the app does not have. Every timestamp below
+# is keyed to those takes and none of them survive a re-record.
+#
 # ONLY "Dashboard Aegis.mov" and "Ask Aegis.mov" may be used. The older
 # Dashboard.mov / Daily Brief.mov / Report Generation.mov predate the Ask Aegis
 # nav item -- every frame of them shows a sidebar the app no longer has, so no

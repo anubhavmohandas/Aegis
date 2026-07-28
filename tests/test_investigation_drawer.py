@@ -19,6 +19,19 @@ something, so each one has a way to be confidently wrong:
    groups renders twice, and a label drifting away from the real key name
    renders nothing at all while looking like it worked.
 
+4. The drawer says WHY an event scored the way it did. Those rules used to be
+   mirrored into app.js and policed by a drift test; they now live once in
+   core/signals.py, which app.js renders rather than re-derives. So the checks
+   here are the seam instead: every code Python emits has wording in the
+   browser, no wording is dead, and no copy of the heuristics has crept back.
+   The JS fixtures below are annotated by the real core/signals.py, so the
+   drawer assertions exercise both halves at once.
+
+5. Confidence qualifies severity without inventing precision. It is a rank over
+   the signals that actually fired -- so "high risk, one lone heuristic" must
+   not read identically to "high risk, three signals agreeing", and neither may
+   render as a percentage or a 0-100 score.
+
 No framework: `python tests/test_investigation_drawer.py`.
 """
 import json
@@ -140,6 +153,42 @@ def _fact_groups():
     return groups
 
 
+SIGNALS_PY = (ROOT / "core/signals.py").read_text(encoding="utf-8")
+
+
+def test_every_signal_python_emits_has_wording_in_the_drawer():
+    """core/signals.py decides WHICH signals fired; app.js decides how each one
+    reads. That split is what replaced the old mirrored heuristic tables, and it
+    holds only while every code has copy on the other side.
+
+    A code with no entry in SIGNAL_COPY does not crash -- it renders as an
+    unlabelled "Signal" row with the raw code as its status, and produces no
+    "Why" line at all. So a high-severity event would explain itself with a row
+    reading `suspicious_path` and no reason. Visible, but only if someone looks;
+    this makes it fail in CI instead."""
+    py_codes = set(re.findall(r'_sig\(\s*"(\w+)"', SIGNALS_PY))
+    assert len(py_codes) > 10, f"signals.py parsed only {py_codes} -- its shape changed"
+
+    block = re.search(r"^const SIGNAL_COPY = \{\n(.*?)^\};$", APP_JS, re.MULTILINE | re.DOTALL)
+    assert block, "SIGNAL_COPY literal not found in app.js"
+    js_codes = set(re.findall(r"^  (\w+): \{", block.group(1), re.MULTILINE))
+
+    assert not (py_codes - js_codes), (
+        f"emitted by core/signals.py with no wording in app.js: {sorted(py_codes - js_codes)}")
+    assert not (js_codes - py_codes), (
+        f"worded in app.js but never emitted -- dead copy: {sorted(js_codes - py_codes)}")
+
+
+def test_the_browser_holds_no_copy_of_the_severity_rules():
+    """The rules moved to core/signals.py precisely so there is one of them. A
+    reintroduced table in app.js is the exact regression this file used to spend
+    a drift test defending against."""
+    for gone in ("SUSPICIOUS_PATH_FRAGMENTS", "EXECUTABLE_EXTENSIONS", "LOLBIN_NAMES"):
+        assert gone not in APP_JS, (
+            f"{gone} is back in app.js -- the severity heuristics belong in "
+            "core/signals.py, which app.js renders rather than re-derives")
+
+
 def test_no_fact_key_is_claimed_by_two_groups():
     seen = {}
     for title, fields in _fact_groups().items():
@@ -257,6 +306,18 @@ eq(api.recommendedAction({ severity: "low", source: "tamper" }, {}).cls, "bad", 
 eq(api.recommendedAction({ severity: "low", source: "process" },
    { threat_intel: { vt: { detections: 0, suspicious: 2 } } }).cls, "warn", "suspicious");
 eq(api.recommendedAction({ severity: "high", source: "process" }, {}).cls, "warn", "high severity");
+// Same severity, different strength of case -> different instruction. A high
+// resting on one lone heuristic must not be phrased like one with three
+// signals behind it; that is what teaches people to ignore the drawer.
+var thin = api.recommendedAction({ severity: "high", source: "process",
+  verdict_confidence: { level: "low", corroborating: 1, hard: 1, polled: false } }, {});
+var solid = api.recommendedAction({ severity: "high", source: "process",
+  verdict_confidence: { level: "high", corroborating: 3, hard: 2, polled: false } }, {});
+eq(thin.cls, "warn", "low-confidence high is still a warn");
+has(thin.text, "nothing else corroborates", "a thin case says so");
+if (thin.text === solid.text)
+  failures.push("high/low-confidence and high/high-confidence must not read identically");
+lacks(solid.text, "corroborates", "a corroborated verdict does not hedge");
 eq(api.recommendedAction({ severity: "low", source: "process",
    risk_hint: "os_platform_binary" }, {}).cls, "ok", "verified Apple binary");
 // Zero detections is not a clean bill of health -- same rule tiVerdict follows.
@@ -285,19 +346,46 @@ lacks(sparse, ">Path<", "empty string must not render");
 has(api.factsHtml({ name: "<img src=x onerror=alert(1)>" }), "&lt;img", "fact values are escaped");
 
 // --- openDrawer: the AI summary must lead, and lead the tabs ---------------
-var ev = { id: 42, severity: "critical", source: "process", category: "process_exec",
-  summary: "New process: curl (PID 900)", timestamp: 1770000000, confidence: "certain",
-  explanation: "Unknown app launched from Downloads.\n\nA program in your Downloads folder ran.",
-  details_json: JSON.stringify({ name: "curl", pid: 900, parent_pid: 1, exe: "/tmp/curl",
-                                 sha256: "abc123" }) };
+// The fixtures come through core/signals.py, exactly as the server serves
+// them, so these assertions exercise both halves of the split at once: the
+// codes Python chose AND the words app.js puts on them.
+var FIX = FIXTURES;
+var ev = FIX.proc;
 api.state.byId = new Map([[42, ev]]);
 api.state.events = [ev];
 api.openDrawer(42);
 var body = els["drawer-body"].innerHTML;
 
-has(body, "AI Summary", "the AI section is titled and present");
+has(body, "AI Analysis", "the AI section is titled and present");
 has(body, "Unknown app launched from Downloads.", "the explanation itself is rendered");
 has(body, "Recommended action", "recommended action is present");
+
+// The lede leads with the verdict; the identity metadata is demoted below the
+// headline and above the AI, never a badge grid opening the drawer.
+var ledeAt = body.indexOf("drawer-lede"), metaAt = body.indexOf("lede-meta");
+var panelAt = body.indexOf("ai-panel");
+if (!(ledeAt > -1 && ledeAt < panelAt)) failures.push("the lede must come before the AI panel");
+if (!(metaAt > body.indexOf("lede-title") && metaAt < panelAt))
+  failures.push("identity metadata belongs under the headline, above the AI panel");
+lacks(body, "drawer-badges", "the old badge grid must be gone from the event drawer");
+has(body, "critical risk", "severity stated as a verdict");
+// A count of signals that fired -- never a fabricated 0-100 score.
+has(body, "signals raised", "signal count shown");
+if (/\b\d{1,3}\s*\/\s*100\b/.test(body))
+  failures.push("a 0-100 risk score is fabricated precision -- severity has four levels");
+
+// "Why" must cite the actual triggers behind the recommendation.
+has(body, "Recommended action", "recommendation");
+has(body, "rec-why", "why block present");
+has(body, "Temp / Downloads", "the Downloads path that raised this is named");
+
+// The signal table replaces the floating italic apologies.
+has(body, "Signal check", "signal table heading");
+has(body, "Reputation", "reputation dimension always listed");
+has(body, "Not queried", "unchecked dimension reads as state, not error");
+has(body, "Signature", "signature dimension listed");
+lacks(body, "No threat-intelligence lookup", "the apologetic wording is gone");
+lacks(body, "Trust: unknown", "the apologetic wording is gone");
 // Dominance is structural, not just stylistic: the AI panel has to come before
 // the tab strip, because anything inside a tab is invisible until clicked --
 // which is exactly the bug this change exists to fix.
@@ -312,12 +400,56 @@ lacks(body, 'data-tab="ai"', "the AI must no longer be hidden behind a tab");
 has(body, "critical", "severity shown");
 lacks(body, ">Network<", "no network data on this event -- section must be absent");
 
+// A genuinely malicious event: the Why must cite the real triggers, and the
+// signal table must show the same numbers the recommendation quotes.
+var mal2 = FIX.malicious;
+api.state.byId.set(7, mal2);
+api.openDrawer(7);
+var mbody = els["drawer-body"].innerHTML;
+has(mbody, "41 of 72 engines flag it", "signal table cites the real detection ratio");
+has(mbody, "Flagged malicious by 41 VirusTotal engines", "why cites the detections");
+has(mbody, "Matches T1204 User Execution", "why cites the MITRE technique");
+has(mbody, "An executable .exe file appeared", "why cites the file type");
+has(mbody, "3 signals raised", "signal count matches the why list");
+// Signals the event does not have must not be invented into the why.
+lacks(mbody, "Signature", "a folder event has no signature dimension to check");
+
+// An all-clear verdict must justify itself too, from the lowering signals.
+var trusted = FIX.trusted;
+api.state.byId.set(8, trusted);
+api.openDrawer(8);
+var tbody = els["drawer-body"].innerHTML;
+has(tbody, "no risk signals raised", "nothing fired");
+has(tbody, "Verified system binary", "the lowering signal is stated");
+has(tbody, "rec-why", "an all-clear still shows why");
+has(tbody, "SIP prevents anyone from modifying", "why cites the integrity property");
+// An all-clear is only as good as what cleared it: SIP is a strong reason, so
+// this must read as a confident all-clear, not merely a quiet one.
+has(tbody, "high confidence", "a SIP-backed all-clear is confident");
+
+// --- confidence: stated next to severity, and never as an invented number --
+has(body, "confidence", "confidence is shown alongside severity");
+has(mbody, "high confidence", "three agreeing signals -> high confidence");
+has(mbody, "3 corroborating signals", "confidence cites the count, not a score");
+if (/confidence[^<]*\b\d{1,3}\s*%/.test(mbody))
+  failures.push("confidence is a rank over a handful of booleans -- a percentage is invented");
+// Detection method is folded into confidence and listed as a signal row; the
+// old chip meant something different by the same word, right next to it.
+has(mbody, ">Detection<", "detection method survives as a signal row");
+lacks(body, 'class="conf conf-certain"', "the real-time/polled chip is gone from the drawer lede");
+
 // A not-yet-explained event dims the panel instead of showing an empty accent box.
-var pending = { id: 43, severity: "low", source: "usb", category: "usb_insert",
-  summary: "USB inserted", timestamp: 1770000000, details_json: "{}" };
+var pending = FIX.pending;
 api.state.byId.set(43, pending);
 api.openDrawer(43);
-has(els["drawer-body"].innerHTML, "ai-panel-pending", "unexplained events dim the AI panel");
+var pbody = els["drawer-body"].innerHTML;
+has(pbody, "ai-panel-pending", "unexplained events dim the AI panel");
+// Nothing raised AND nothing cleared it. That is a real state and the most
+// common one in a live store -- it must read as unverified coverage, not as a
+// verified all-clear borrowing confidence it never earned.
+has(pbody, "no risk signals raised", "nothing fired");
+has(pbody, "low confidence", "an unbacked all-clear does not claim to be checked");
+has(pbody, "nothing verified it either", "and says which kind of low it is");
 
 // --- empty state: claims coverage only when the pipeline reports it --------
 api.state.events = [];
@@ -342,6 +474,53 @@ else print("PASSED");
 """
 
 
+def _fixtures() -> dict:
+    """The drawer's test events, annotated by the real core/signals.py -- the
+    same call dashboard/server.py makes on every row it serves. Hand-written
+    signal arrays here would test app.js against a guess at what Python emits,
+    which is the drift this whole change exists to remove."""
+    from core.signals import annotate
+
+    events = {
+        "proc": {
+            "id": 42, "severity": "critical", "source": "process",
+            "category": "process_started", "summary": "New process: curl (PID 900)",
+            "timestamp": 1770000000, "confidence": "certain",
+            "explanation": "Unknown app launched from Downloads.\n\n"
+                           "A program in your Downloads folder ran.",
+            "details_json": json.dumps({"name": "curl", "pid": 900, "parent_pid": 1,
+                                        "exe": "/tmp/curl", "sha256": "abc123"}),
+        },
+        "malicious": {
+            "id": 7, "severity": "critical", "source": "folder",
+            "category": "file_created", "summary": "New file: invoice.exe",
+            "timestamp": 1770000000, "confidence": "certain",
+            "explanation": "Executable dropped in Downloads.\n\n"
+                           "A program appeared in a folder you watch.",
+            "details_json": json.dumps({
+                "path": "/Users/me/Downloads/invoice.exe", "sha256": "deadbeef",
+                "threat_intel": {
+                    "vt": {"status": "ok", "detections": 41, "engines_total": 72,
+                           "family": "Emotet"},
+                    "mitre": [{"id": "T1204", "name": "User Execution"}]}}),
+        },
+        "trusted": {
+            "id": 8, "severity": "low", "source": "process",
+            "category": "process_started", "summary": "New process: ioreg (PID 12)",
+            "timestamp": 1770000000, "confidence": "certain",
+            "risk_hint": "os_platform_binary",
+            "explanation": "System tool ran.\n\nRoutine.",
+            "details_json": json.dumps({"name": "ioreg", "pid": 12,
+                                        "exe": "/usr/sbin/ioreg"}),
+        },
+        "pending": {
+            "id": 43, "severity": "low", "source": "usb", "category": "usb_connected",
+            "summary": "USB inserted", "timestamp": 1770000000, "details_json": "{}",
+        },
+    }
+    return {k: annotate(v) for k, v in events.items()}
+
+
 def test_drawer_and_stat_logic_executes_correctly():
     import subprocess
     import tempfile
@@ -349,7 +528,9 @@ def test_drawer_and_stat_logic_executes_correctly():
     if not JSC.exists():
         print("skip (no JavaScriptCore shell -- macOS only)")
         return
-    harness = _JS_HARNESS.replace("SRC", json.dumps(str(ROOT / "dashboard/static/app.js")))
+    harness = (_JS_HARNESS
+               .replace("SRC", json.dumps(str(ROOT / "dashboard/static/app.js")))
+               .replace("FIXTURES", json.dumps(_fixtures())))
     with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
         fh.write(harness)
         path = fh.name

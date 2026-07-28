@@ -15,6 +15,9 @@ Aegis/
     ai_explainer.py    Claude/OpenAI plain-English explanation
     rule_engine.py     opt-in allowlist gate (skip AI call for user-trusted items)
     severity_engine.py  local low/medium/high/critical heuristic (runs before the AI call)
+    signals.py         WHICH heuristics fired on an event + how well they corroborate
+                       (the severity engine records only its verdict); derived on read
+                       by the dashboard, rendered — never re-derived — by app.js
     enrichment.py      opt-in VirusTotal hash lookup + local MITRE ATT&CK annotations,
                        attached to the event BEFORE the AI runs (see "Threat enrichment")
     database.py        SQLite event history (read by ui/timeline_app.py)

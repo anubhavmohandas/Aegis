@@ -1458,6 +1458,149 @@ function threatIntelHtml(details) {
     </div>`;
 }
 
+/* ---------- signal check ---------- */
+
+/* Wording for the signal codes core/signals.py emits.
+
+   The split is the whole point: Python decides WHICH signals fired and what
+   each one weighs, this decides how it reads. Nothing here re-implements a
+   rule, so nothing here can drift out of agreement with the severity engine
+   the way the old mirrored path/extension/LOLBin tables could. A code with no
+   entry below renders as a visibly unlabelled row rather than a wrong one, and
+   tests/test_investigation_drawer.py fails if one ever ships that way.
+
+   `label` is the dimension being checked, `status` where this event landed on
+   it, `why` the sentence that appears under the recommendation when this
+   signal is one of the ones that moved the verdict. `status` and `why` may be
+   functions of the signal when it carries numbers (detection counts, a tool
+   name, a technique list). No `why` means the signal is real but not worth
+   citing as a reason -- see the "none" states below. */
+const SIGNAL_COPY = {
+  system_binary: { label: "Signature", status: "Verified system binary",
+    why: "Apple-signed and in a directory SIP prevents anyone from modifying" },
+  aegis_child: { label: "Signature", status: "Started by Aegis",
+    why: "This process is one of Aegis's own" },
+  unsigned: { label: "Signature", status: "Not verified",
+    why: "Not a SIP-protected system binary — normal for third-party software" },
+  user_trusted: { label: "Trust list", status: "On your Trust List",
+    why: "You marked this trusted" },
+  not_trusted: { label: "Trust list", status: "Not listed" },
+
+  vt_not_queried: { label: "Reputation", status: "Not queried" },
+  vt_unknown_hash: { label: "Reputation", status: "No engine has seen this file",
+    why: "Unknown to VirusTotal — brand-new files start here" },
+  vt_malicious: { label: "Reputation",
+    status: (s) => `${s.n} of ${s.total || "?"} engines flag it`,
+    why: (s) => `Flagged malicious by ${s.n} VirusTotal engine${s.n === 1 ? "" : "s"}` },
+  vt_suspicious: { label: "Reputation",
+    status: (s) => `${s.n} engine${s.n === 1 ? "" : "s"} call it suspicious`,
+    why: (s) => `Called suspicious by ${s.n} VirusTotal engine${s.n === 1 ? "" : "s"}` },
+  // Not a pass, and deliberately unquotable as a reason -- see tiVerdict.
+  vt_clean: { label: "Reputation", status: "No detections" },
+
+  mitre: { label: "MITRE ATT&CK",
+    status: (s) => s.techniques.map((t) => t.id).join(", "),
+    why: (s) => `Matches ${s.techniques.map((t) => `${t.id} ${t.name}`).join(", ")}` },
+  mitre_none: { label: "MITRE ATT&CK", status: "None mapped" },
+
+  suspicious_path: { label: "Execution path", status: "Temp / Downloads",
+    why: "Ran from a temp or Downloads folder, where software is not normally installed" },
+  system_path: { label: "Execution path", status: "System directory" },
+  path_ordinary: { label: "Execution path", status: "Unremarkable" },
+  path_unknown: { label: "Execution path", status: "Unknown" },
+  lolbin: { label: "Tooling", status: (s) => `Dual-use tool (${s.name})`,
+    why: (s) => `${s.name} is a legitimate tool that is also routinely used by malware` },
+
+  executable_drop: { label: "File type", status: (s) => `Executable (${s.ext})`,
+    why: (s) => `An executable ${s.ext} file appeared in a folder you watch` },
+  not_executable: { label: "File type", status: "Not executable" },
+
+  persistence: { label: "Persistence", status: "Startup entry added",
+    why: "Something arranged to run automatically at login — a classic malware behaviour" },
+  tamper: { label: "Tamper", status: "Aegis itself was targeted",
+    why: "Someone tried to stop monitoring or change Aegis's own settings" },
+  monitoring_gap: { label: "Coverage", status: "Aegis was not watching",
+    why: "Monitoring was offline for this period, so nothing was recorded" },
+
+  realtime: { label: "Detection", status: "Real-time" },
+  polled: { label: "Detection", status: "Polled" },
+};
+
+/* Every dimension Aegis weighed, worded.
+
+   `state` comes from Python and drives the tint and the two audiences:
+   raising entries become the Why list under the recommended action, the full
+   set becomes the Forensics signal table.
+
+   "none" is the important state. A dimension Aegis did not or could not check
+   still gets a row, phrased as a state -- "Not queried", "Unknown" -- rather
+   than an absence. It is the same fact either way, but "Reputation · Not
+   queried" reads as a checklist item, where the old floating italic "No
+   threat-intelligence lookup for this event" read as the product apologising.
+   The row is also honest in the direction that matters: not-checked is never
+   rendered as a pass. */
+function signalReport(ev) {
+  const word = (v, s) => (typeof v === "function" ? v(s) : v);
+  const checks = (ev.signals || []).map((s) => {
+    const copy = SIGNAL_COPY[s.code] || { label: "Signal", status: s.code };
+    return { label: copy.label, status: word(copy.status, s),
+             why: word(copy.why, s) || null, state: s.state };
+  });
+  return { checks, raised: checks.filter((c) => c.why && c.state !== "ok"),
+           lowered: checks.filter((c) => c.why && c.state === "ok") };
+}
+
+/* Severity says how bad this is; confidence says how well the evidence backs
+   it. The pair is what actually tells a user what to do: "high risk · high
+   confidence" is act now, "high risk · low confidence" is look before you act.
+
+   Both come from core/signals.py, off the same signals listed above -- the
+   count it cites is literally the length of the Why list below.
+
+   `basis` splits the wording, because a verdict of "nothing here" and a
+   verdict of "something here" are not confident in the same way. On a clear
+   event the question isn't doubt, it's coverage: something actually cleared
+   this (SIP, your Trust List), or Aegis just had nothing to say about it.
+   Both are low risk; only one of them is checked. Wording them identically
+   would repeat the "Trust unknown" mistake one line higher up. */
+const CONFIDENCE_NOTE = {
+  risk: {
+    high: "the signals corroborate each other",
+    medium: "a real signal, without much backing it up",
+    low: "one weak indicator and nothing else agreeing",
+  },
+  clear: {
+    high: "actively cleared, not merely unremarkable",
+    low: "nothing raised — but nothing verified it either",
+  },
+};
+
+function confidenceHtml(c) {
+  if (!c) return "";
+  const n = c.corroborating;
+  const detail = c.basis === "clear"
+    ? (c.level === "high" ? "a check came back clear" : "no dimension came back either way")
+    : `${n} corroborating signal${n === 1 ? "" : "s"}`;
+  const polled = c.polled ? " · polled detection, the moment itself was not observed" : "";
+  const note = (CONFIDENCE_NOTE[c.basis] || {})[c.level] || "";
+  return `
+    <span class="lede-conf conf-lvl-${c.level}"
+          title="${escapeHtml(note)} — ${escapeHtml(detail)}${escapeHtml(polled)}">
+      <span class="conf-bars" aria-hidden="true"><i></i><i></i><i></i></span>
+      ${c.level} confidence</span>`;
+}
+
+function signalTableHtml(report) {
+  const rows = report.checks.map((c) => `
+    <tr class="sig-${c.state}">
+      <td class="sig-k">${escapeHtml(c.label)}</td>
+      <td class="sig-v"><span class="sig-dot"></span>${escapeHtml(c.status)}</td>
+    </tr>`).join("");
+  return `
+    <div class="drawer-section-label">Signal check</div>
+    <table class="signal-table">${rows}</table>`;
+}
+
 /* The forensic fields, grouped and labelled, in a fixed reading order. Keys
    are the ones core/ actually writes into details_json per source (process:
    name/pid/exe/parent_pid · folder: path/dest_path/sha256 · usb: the device
@@ -1533,9 +1676,35 @@ function recommendedAction(ev, details) {
   const t = trustFor(ev);
   if (t && t.cls === "ok")
     return { cls: "ok", text: `No action needed. ${t.note}.` };
-  if (ev.severity === "critical" || ev.severity === "high")
-    return { cls: "warn", text: "Worth a look. If you don't recognise this, check the Related tab for what ran just before and after it." };
+  if (ev.severity === "critical" || ev.severity === "high") {
+    // The one branch where confidence changes the advice rather than just
+    // annotating it. A high severity resting on a single heuristic earns a
+    // softer instruction than the same severity with three signals behind it
+    // -- telling both to "check this" is how a tool trains people to ignore it.
+    return (ev.verdict_confidence || {}).level === "low"
+      ? { cls: "warn", text: "Worth a glance, but only one signal points this way and nothing else corroborates it. Check the Related tab for what ran around the same time — if nothing there stands out, this is most likely routine." }
+      : { cls: "warn", text: "Worth a look. If you don't recognise this, check the Related tab for what ran just before and after it." };
+  }
   return { cls: "ok", text: "Nothing to do. Recorded so it's here if you need it later." };
+}
+
+/* The "why" under the recommendation: the exact signals that produced it, in
+   the words of the checks themselves. A recommendation whose trigger is
+   invisible is one the user has to take on faith, and the whole point of this
+   drawer is that they shouldn't have to.
+
+   An all-clear verdict lists the signals that LOWERED it instead -- "no action
+   needed" earns its reasons as much as "do not run this" does. Nothing to cite
+   in either direction means no block at all, rather than an empty heading. */
+function whyHtml(rec, report) {
+  const reasons = rec.cls === "ok" && report.lowered.length ? report.lowered : report.raised;
+  if (!reasons.length) return "";
+  return `
+    <div class="rec-why">
+      <span class="rec-why-label">Why</span>
+      <ul>${reasons.map((c) => `
+        <li class="why-${c.state}"><b>${escapeHtml(c.label)}</b>${escapeHtml(c.why)}</li>`).join("")}</ul>
+    </div>`;
 }
 
 /* An event is stored the moment it happens and explained a few seconds later,
@@ -1575,7 +1744,8 @@ function openDrawer(id) {
 
   const details = eventDetails(ev);
   const facts = factsHtml(details);
-  const rec = recommendedAction(ev, details);
+  const report = signalReport(ev);
+  const rec = recommendedAction(ev, details, report);
 
   const trust = trustTargetFor(ev, details);
   const trustBtn = trust
@@ -1585,38 +1755,52 @@ function openDrawer(id) {
          Always Trust · ${escapeHtml(trust.label)}</button>`
     : "";
 
-  const conf = ev.confidence || "certain";
   const ti = threatIntelHtml(details);
-  // The row only badges definite trust states; here in the drawer the unknown
-  // state is stated outright — "unknown" is the honest answer for most
-  // third-party software, and saying it beats letting the user infer safety
-  // from silence.
-  const tstate = trustFor(ev);
-  const trustLine = !tstate && ev.source === "process"
-    ? '<div class="ai-skipped-note">Trust: unknown — not a verified Apple system binary and not on your Trust List. That is normal for third-party apps.</div>'
-    : "";
-  $("drawer-body").innerHTML = `
-    <div class="drawer-badges">
-      ${sourceIcon(ev.source)}
-      <span class="badge badge-${ev.severity}">${ev.severity}</span>
-      ${trustBadgeHtml(ev)}
-      <span class="meta-badge">${SOURCE_LABELS[ev.source] || escapeHtml(ev.source)}</span>
-      <span class="meta-badge">${escapeHtml(prettyCategory(ev.category))}</span>
-      <span class="meta-badge conf conf-${conf}" title="${CONFIDENCE_TITLES[conf] || conf}">
-        <span class="conf-dot"></span>&nbsp;${conf}</span>
-      <span class="meta-badge">#${ev.id}</span>
-    </div>
-    <div class="drawer-summary">${escapeHtml(ev.summary)}</div>
-    <div class="drawer-time">${fmtFullTime(ev.timestamp)}</div>
+  // Raised signals are a real count over real booleans. It is deliberately not
+  // scaled to a 0-100 "risk score": severity here comes from four named levels,
+  // so a 92/100 would invent 96 gradations the engine cannot distinguish, and
+  // the first number a user checked against their own judgment would give the
+  // whole product away.
+  const raised = report.raised.length;
+  const riskNote = raised
+    ? `${raised} signal${raised === 1 ? "" : "s"} raised`
+    : "no risk signals raised";
 
-    <!-- The AI summary sits above the tabs, not inside them. It is the reason
+  $("drawer-body").innerHTML = `
+    <!-- Verdict, then headline, then the AI. Everything identifying the event
+         -- source, category, id, confidence -- is demoted to one quiet line or
+         pushed into Forensics, because a reader landing on a grid of metadata
+         badges reads chrome first and the analysis second, if at all. -->
+    <header class="drawer-lede">
+      <div class="lede-verdict sev-${ev.severity}">
+        <span class="lede-sev">${ev.severity} risk</span>
+        ${confidenceHtml(ev.verdict_confidence)}
+        <span class="lede-signals">${riskNote}</span>
+        ${trustBadgeHtml(ev)}
+      </div>
+      <h2 class="lede-title">${escapeHtml(ev.summary)}</h2>
+      <!-- The real-time/polled chip that used to sit here is gone: it is the
+           Detection row in the signal table, and it is already folded into the
+           confidence above (a polled observation costs a step). Two chips a
+           foot apart both reading "confidence", meaning different things, was
+           the collision worth deleting. -->
+      <div class="lede-meta">
+        ${sourceIcon(ev.source)}
+        <span>${SOURCE_LABELS[ev.source] || escapeHtml(ev.source)}</span>
+        <span>${escapeHtml(prettyCategory(ev.category))}</span>
+        <span>${fmtFullTime(ev.timestamp)}</span>
+        <span>#${ev.id}</span>
+      </div>
+    </header>
+
+    <!-- The AI analysis sits above the tabs, not inside them. It is the reason
          this product exists, and it spent its life one click behind a tab
          labelled "Summary" -- which most people read as a duplicate of the
          headline already above it, so they never opened it. -->
-    <section class="ai-panel${ev.explanation ? "" : " ai-panel-pending"}" aria-label="AI summary">
+    <section class="ai-panel${ev.explanation ? "" : " ai-panel-pending"}" aria-label="AI analysis">
       <h3 class="ai-panel-title">
         <svg viewBox="0 0 24 24" aria-hidden="true">${SHIELD_PATH}</svg>
-        ${ev.ai_skipped ? "Explanation" : "AI Summary"}
+        ${ev.ai_skipped ? "Explanation" : "AI Analysis"}
       </h3>
       <div id="drawer-ai-body">${explanationHtml(ev)}</div>
     </section>
@@ -1624,6 +1808,7 @@ function openDrawer(id) {
     <section class="rec-action rec-${rec.cls}" aria-label="Recommended action">
       <span class="rec-label">Recommended action</span>
       <p>${escapeHtml(rec.text)}</p>
+      ${whyHtml(rec, report)}
     </section>
 
     <div class="drawer-tabs" role="tablist">
@@ -1633,12 +1818,9 @@ function openDrawer(id) {
     </div>
 
     <div class="tab-panel active" data-panel="forensics">
-      ${ti || '<div class="ai-skipped-note">No threat-intelligence lookup for this event.</div>'}
-      ${trustLine}
+      ${signalTableHtml(report)}
+      ${ti}
       ${facts || '<div class="ai-skipped-note">No structured details on this event.</div>'}
-      ${ev.risk_hint ? `
-        <div class="drawer-section-label">Risk Hint</div>
-        <div class="risk-hint">${renderMarkdownLite(ev.risk_hint)}</div>` : ""}
     </div>
 
     <div class="tab-panel" data-panel="raw" hidden>

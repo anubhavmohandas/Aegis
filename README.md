@@ -124,7 +124,11 @@ Full detail — every stage, every tradeoff, every known gap — in
 
 | **Dashboard** — live stream, counts, severity split | **Any event** — opened to its plain-English explanation |
 |---|---|
-| ![Aegis dashboard on macOS: 24-hour event counts, a severity breakdown, filters, and the live event stream.](docs/media/macos-dashboard.png) | ![An event's detail drawer on the AI Explanation tab: a screen recording was deleted from the Desktop, "a normal file deletion action", "likely normal", "check the Trash if you need to recover the file."](docs/media/macos-explain.png) |
+| ![Aegis dashboard on macOS: 24-hour event counts, a severity breakdown, filters, and the live event stream.](docs/media/macos-dashboard.png) | ![An event's detail drawer: a screen recording was deleted from the Desktop, explained in plain English as "a normal file deletion action", "likely normal", "check the Trash if you need to recover the file."](docs/media/macos-explain.png) |
+
+> **These two are due a re-shoot.** They predate the drawer redesign — the AI
+> analysis now leads the drawer as a panel above the tabs, rather than sitting
+> inside one. See `website/RESHOOT.md`.
 
 ![Ask Aegis answering "Did anyone connect a USB?" — a plain-English answer naming the drive and time, followed by the exact timeline events it drew from.](docs/media/macos-ask.png)
 
@@ -156,20 +160,30 @@ Read the ticks below, not the number above.
   wrapping the dashboard below; `main.py`'s tray-only mode still exists for
   headless use
 - ✅ Dashboard UI — live timeline with filters/search (repeated same-source
-  events collapse into one expandable group), a details drawer with AI
-  explanation, AI-generated PDF report export, and a Settings page
-  (AI provider/key, notifications, watched folders, trust lists). Every
-  event row, group, and the drawer carries a green/amber/red **trust badge**
-  (OS-protected binary / your trust list / VirusTotal verdict; unknowns are
-  stated in the drawer, never badged in rows), and the status bar answers
-  "am I okay?" in one sentence summarizing the last 24 hours
+  events collapse into one expandable group), AI-generated PDF report export,
+  and a Settings page (AI provider/key, notifications, watched folders, trust
+  lists). Every event row, group, and the drawer carries a green/amber/red
+  **trust badge** (OS-protected binary / your trust list / VirusTotal verdict;
+  unknowns are stated in the drawer, never badged in rows), and the status bar
+  answers "am I okay?" in one sentence summarizing the last 24 hours
+- ✅ Investigation drawer — opening an event leads with the verdict and the AI's
+  reading of it, not a grid of metadata: **severity** (how bad, if we read it
+  right) beside **confidence** (how well the signals back that up), then the
+  plain-English analysis, then one recommended action with the exact signals
+  that triggered it. Evidence sits below in **Forensics / Raw / Related** —
+  a signal table where every dimension Aegis can weigh gets a row, including
+  the ones it could not check ("Reputation · Not queried" rather than silence).
+  No 0-100 risk score: severity has four levels, so a number would invent
+  precision the engine cannot distinguish
 - ✅ Ask Aegis — ask the timeline questions in plain English ("did anything
   touch my Downloads while I was away?"); answers cite the specific events
   they came from, and work without an API key via an offline fallback
-- ✅ Opt-in threat enrichment — VirusTotal hash reputation (hash-only, the
-  file is never uploaded; cached in SQLite so repeat binaries cost one
-  lookup and verdicts work offline) plus offline MITRE ATT&CK annotations,
-  surfaced in the drawer and fed to the AI as structured evidence
+- ✅ Optional threat enrichment — when enabled, Aegis enriches the events that
+  warrant it with VirusTotal reputation and MITRE ATT&CK mappings before
+  generating the AI explanation, and shows both in the drawer.
+  **Files are never uploaded** — only the sha256 computed locally is sent, so
+  VirusTotal is asked "have you seen this hash", never handed the file. MITRE
+  mapping is fully offline; verdicts cache in SQLite and keep working offline
 - ✅ Away Sessions & tamper evidence — screen lock/unlock bracket what
   happened while you were gone, and repeated failed auth on a protected
   action (e.g. Stop Monitoring) captures webcam/screenshot evidence into a

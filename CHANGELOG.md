@@ -54,6 +54,33 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com).
   is unchanged for them.
 
 ### Added
+- **Detection confidence, next to severity.** Severity said how bad an event
+  is; nothing said how well the evidence backed it, so a "high" resting on one
+  path heuristic looked identical to a "high" with a VirusTotal detection and
+  two corroborating signals behind it. The drawer now states both, and the
+  recommended action softens its instruction when a high severity has nothing
+  corroborating it — telling both cases to "check this" is how a tool teaches
+  people to ignore it. Confidence is a rank over the signals that actually
+  fired, never a percentage: the inputs are a handful of booleans, so a number
+  would invent gradations nothing here can distinguish (`core/signals.py`).
+  Signals Aegis *watched happen to itself* — a tamper attempt, a monitoring gap
+  — and scan results carry their own corroboration and read confident standing
+  alone. An all-clear is graded too, on coverage rather than doubt: "cleared by
+  SIP" and "nothing had anything to say about it" are both low risk and are not
+  the same claim.
+
+### Changed
+- **The severity heuristics live in one language again.** The investigation
+  drawer explained *why* an event scored high by re-running the severity
+  engine's rules in the browser, because the engine records only its verdict —
+  which meant `app.js` carried its own copies of the suspicious-path, executable
+  -extension and LOLBin tables, and a test whose entire job was to fail when the
+  two drifted. The rules now sit once in `core/signals.py`, next to the engine
+  they explain; the dashboard derives the fired-signal list on read and `app.js`
+  only supplies the wording for each code. Nothing to drift: a code with no
+  wording is a missing row, not a wrong one, and the drift test is replaced by
+  one asserting every emitted code has copy (and that no copy is dead).
+
 - **Event retention.** Nothing ever pruned the event store and nothing capped
   `events.log`: both grew forever on a resident install (Spotlight alone is
   ~1000 events/day on a normal Mac) while every 4s dashboard poll aggregated
@@ -71,13 +98,19 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com).
   collects. `test_process_summary_collapse.py` was pytest-only with no
   `__main__`, so running it directly exited 0 having executed none of its five
   checks; it now runs either way like every other file.
-- **Threat enrichment (opt-in).** VirusTotal hash reputation (hash-only — the
-  file is never uploaded; verdicts cached in SQLite, so repeats cost one
-  lookup and work offline) plus offline MITRE ATT&CK annotations, attached to
-  high/critical events before the AI runs and surfaced in the drawer (verdict,
-  detection count, MITRE badges, VirusTotal link). Master switch
-  `enrich_enabled`; key via `VT_API_KEY`, never stored in `config.yaml`.
-  A live "test enrichment" button checks the EICAR hash end to end.
+- **Threat enrichment (optional).** When enabled, Aegis enriches the events that
+  warrant it with VirusTotal reputation and MITRE ATT&CK mappings before
+  generating the AI explanation, and surfaces both in the drawer (verdict,
+  detection count, MITRE badges, VirusTotal link).
+
+  **Files are never uploaded.** Only the sha256 Aegis already computed locally
+  leaves the machine: VirusTotal is asked "have you seen this hash", never given
+  the file, and a file it has never seen comes back `unknown_hash` rather than
+  prompting a submission. Lookups are gated at `enrich_min_severity` (medium and
+  above by default) and cached in SQLite, so repeat binaries cost one lookup and
+  keep working offline. MITRE mapping is fully offline and needs no key at all.
+  Master switch `enrich_enabled`; key via `VT_API_KEY`, never stored in
+  `config.yaml`. A live "test enrichment" button checks the EICAR hash end to end.
 - **Away Sessions.** Screen lock/unlock now bracket what happened while you
   were away, with a gap-detection summary.
 - **Tamper evidence & Incidents.** Repeated failed auth on a protected action
