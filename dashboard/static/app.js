@@ -360,6 +360,21 @@ function buildThemePicker() {
 
 /* ---------- stats band ---------- */
 
+/* One line of context under a stat tile, comparing this 24h window against the
+   one before it. Counts only -- never a percentage, which turns 1 event into
+   "+100%" and makes a quiet machine look like an incident.
+
+   Two cases deliberately refuse to compare: an older server that doesn't send
+   prev_24h at all, and a store with nothing before this window. Both say what
+   the number covers instead of inventing a baseline of zero to beat. */
+function trendText(now, prev, hasHistory) {
+  if (typeof prev !== "number") return "Last 24 hours";
+  if (!hasHistory) return "First 24 hours of data";
+  const delta = now - prev;
+  if (delta === 0) return "No change since yesterday";
+  return `${delta > 0 ? "+" : "−"}${Math.abs(delta)} since yesterday`;
+}
+
 function renderStats(stats) {
   // Not dismissible on purpose: while this is true, the password that guards
   // Stop Monitoring, Quit and Settings is still the documented default.
@@ -367,12 +382,34 @@ function renderStats(stats) {
 
   tweenNumber($("stat-24h"), stats.last_24h);
   tweenNumber($("stat-total"), stats.total);
-  tweenNumber($("stat-sources"), Object.keys(stats.by_source).length);
+  const sources = Object.keys(stats.by_source);
+  tweenNumber($("stat-sources"), sources.length);
 
   const hicrit = (stats.by_severity.high || 0) + (stats.by_severity.critical || 0);
   const hicritEl = $("stat-hicrit");
   tweenNumber(hicritEl, hicrit);
   hicritEl.classList.toggle("alert", hicrit > 0);
+
+  // A bare number answers "how many" and nothing else. Each tile gets one line
+  // of the context the reader would otherwise have to supply themselves --
+  // built only from figures already in this payload, so nothing here is a
+  // guess. prev_* is the real preceding 24h window (server.py), not a
+  // projection; before Aegis has two days of history it is simply 0, and the
+  // line says "first 24 hours" rather than claiming a +100% surge.
+  const prevHicrit = (stats.prev_by_severity?.high || 0) + (stats.prev_by_severity?.critical || 0);
+  const hasHistory = stats.total > stats.last_24h;
+  $("stat-24h-sub").textContent = trendText(stats.last_24h, stats.prev_24h, hasHistory);
+  $("stat-hicrit-sub").textContent = hicrit
+    ? `${stats.by_severity.critical || 0} critical · ${stats.by_severity.high || 0} high`
+    : trendText(hicrit, prevHicrit, hasHistory);
+  $("stat-sources-sub").textContent = sources.length
+    ? sources.map((s) => SOURCE_LABELS[s] || s).join(" · ")
+    : "Nothing reporting yet";
+  // The tiles are narrow and these lines are sentences, so one can end up
+  // ellipsized -- mirror it into the tooltip rather than losing the tail.
+  for (const id of ["stat-24h-sub", "stat-hicrit-sub", "stat-sources-sub"]) {
+    $(id).title = $(id).textContent;
+  }
 
   // The closure line: one always-visible sentence answering "so... am I okay?"
   // — the question the stats band's raw numbers make the user compute
@@ -620,6 +657,33 @@ function filtersNarrowing() {
   return Boolean(f.q || f.severity.size || f.source.size || f.category || f.rangeSeconds);
 }
 
+/* Collector class names -> what the user calls the thing. Platform prefix and
+   the Monitor suffix are stripped first, so one entry covers Mac/Windows/Linux.
+   An unrecognised collector maps to null and is left out rather than shown by
+   its class name -- this list is a reassurance, not a debug dump. */
+const COLLECTOR_LABELS = {
+  Process: "Processes", Usb: "USB devices", Startup: "Startup items",
+  Folder: "File changes", Session: "Lock & unlock",
+};
+function collectorLabel(cls) {
+  return COLLECTOR_LABELS[String(cls).replace(/^(Mac|Windows|Linux)/, "").replace(/Monitor$/, "")] || null;
+}
+
+/* "Nothing here" is the state a security tool spends most of its life in, and
+   a bare empty box makes it read as "not working". The checklist names what is
+   actually up -- straight from the running pipeline's own collector gauge, so
+   a collector that failed to start is absent instead of being claimed. No
+   gauge (older server, stale snapshot) means no list, never a guessed one. */
+function watchingHtml() {
+  const names = [...new Set((state.monitor?.collectors || []).map(collectorLabel).filter(Boolean))];
+  if (!names.length) return "";
+  return `
+    <div class="empty-watch">
+      <span class="empty-watch-label">Currently monitoring</span>
+      <ul>${names.sort().map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul>
+    </div>`;
+}
+
 /* Three genuinely different situations, three different messages:
    the filters hid everything · monitoring is off · nothing has happened. */
 function emptyStateHtml() {
@@ -648,9 +712,10 @@ function emptyStateHtml() {
   return `
     <div class="empty-state empty-clear">
       <svg viewBox="0 0 24 24">${SHIELD_PATH}</svg>
-      <span class="empty-title">Your system looks clean</span>
+      <span class="empty-title">Everything looks normal</span>
       <span class="empty-detail">Aegis is actively monitoring for suspicious activity. Anything
         it sees — a new process, a USB device, a startup change — lands here.${trustedNote}</span>
+      ${watchingHtml()}
     </div>`;
 }
 
@@ -858,11 +923,16 @@ async function refreshPendingExplanations() {
   }
   // The timeline row shows the summary, which never changes -- only the open
   // drawer displays an explanation. Patch just that block rather than calling
-  // openDrawer again, which would rebuild the drawer and snap the user back to
-  // the Summary tab while they're sitting on the AI tab waiting for this.
+  // openDrawer again, which would rebuild the drawer, reset the tabs, and lose
+  // the user's scroll position the moment the explanation they're waiting for
+  // arrives.
   const aiBody = changed ? document.getElementById("drawer-ai-body") : null;
   if (aiBody && state.selectedId && state.byId.has(state.selectedId)) {
-    aiBody.innerHTML = explanationHtml(state.byId.get(state.selectedId));
+    const ev = state.byId.get(state.selectedId);
+    aiBody.innerHTML = explanationHtml(ev);
+    // The panel is dimmed while there is nothing in it; light it up now that
+    // there is, otherwise the arriving explanation lands in a greyed-out box.
+    aiBody.closest(".ai-panel")?.classList.toggle("ai-panel-pending", !ev.explanation);
   }
 }
 
@@ -894,6 +964,7 @@ function setConsoleReachable(ok) {
 
 async function refreshMonitorStatus() {
   const wasRunning = state.monitor.running;
+  const wasWatching = (state.monitor.collectors || []).join();
   try {
     state.monitor = await api("/api/monitor/status");
   } catch {
@@ -901,10 +972,14 @@ async function refreshMonitorStatus() {
   }
   renderMonitorPill();
   // An empty timeline says something different depending on whether monitoring
-  // is actually on, so re-render it when that answer changes -- and only then.
-  // Rebuilding on every poll would restart the empty state's entrance
-  // animation every 4 seconds.
-  if (!state.events.length && state.monitor.running !== wasRunning) renderTimeline();
+  // is actually on and what it's watching, so re-render when either answer
+  // changes -- and only then. The collector list matters separately because it
+  // arrives from the monitor's 5s metrics snapshot, a poll or two after
+  // `running` flips. Rebuilding on every poll would restart the empty state's
+  // entrance animation every 4 seconds.
+  const changed = state.monitor.running !== wasRunning
+    || (state.monitor.collectors || []).join() !== wasWatching;
+  if (!state.events.length && changed) renderTimeline();
 }
 
 // The dispatcher stamps a heartbeat every 60s (core/dispatcher). Past this
@@ -1383,6 +1458,86 @@ function threatIntelHtml(details) {
     </div>`;
 }
 
+/* The forensic fields, grouped and labelled, in a fixed reading order. Keys
+   are the ones core/ actually writes into details_json per source (process:
+   name/pid/exe/parent_pid · folder: path/dest_path/sha256 · usb: the device
+   block) plus a few a collector could start supplying later.
+
+   A field that isn't on the event is not rendered at all -- no "—" rows. A
+   dash reads as "we looked and there is nothing there", which is a different
+   and much stronger claim than "this kind of event doesn't carry that". The
+   Network group is here for the same reason it is currently always absent:
+   nothing collects it today, so it silently never appears. */
+const FACT_GROUPS = [
+  ["Process", [["name", "Process"], ["pid", "PID"],
+               ["parent_name", "Parent process"], ["parent_pid", "Parent PID"],
+               ["child_name", "Child process"], ["child_pid", "Child PID"],
+               ["user", "User"], ["cmdline", "Command line"]]],
+  ["File", [["exe", "Executable path"], ["path", "Path"], ["dest_path", "Moved to"],
+            ["size_bytes", "Size"]]],
+  ["Device", [["device_name", "Device"], ["media_name", "Media"],
+              ["mount_point", "Mount point"], ["file_system", "File system"],
+              ["bsd_name", "Disk"], ["serial", "Serial"], ["writable", "Writable"]]],
+  ["Hashes", [["sha256", "SHA-256"], ["sha1", "SHA-1"], ["md5", "MD5"]]],
+  ["Network", [["remote_host", "Host"], ["remote_address", "Remote address"],
+               ["remote_port", "Port"], ["protocol", "Protocol"], ["url", "URL"]]],
+];
+
+/* Everything the groups above claim, plus the two keys that have their own
+   panels — so the leftover table can show what's genuinely left over rather
+   than repeating fields already rendered. */
+const FACT_KEYS = new Set(["_schema", "threat_intel",
+  ...FACT_GROUPS.flatMap(([, fields]) => fields.map(([k]) => k))]);
+
+function factRow(label, value) {
+  const v = typeof value === "object" ? JSON.stringify(value) : String(value);
+  return `<tr><td class="k">${escapeHtml(label)}</td><td class="v">${escapeHtml(v)}</td></tr>`;
+}
+
+function factsHtml(details) {
+  const present = (k) => details[k] !== undefined && details[k] !== null && details[k] !== "";
+  const blocks = FACT_GROUPS.map(([title, fields]) => {
+    const rows = fields.filter(([k]) => present(k)).map(([k, label]) => factRow(label, details[k]));
+    return rows.length
+      ? `<div class="drawer-section-label">${title}</div>
+         <table class="details-table">${rows.join("")}</table>`
+      : "";
+  });
+  // Session and tamper events carry keys no group names. Dropping them would
+  // lose real evidence, so they keep the old ungrouped rendering.
+  const rest = Object.entries(details).filter(([k]) => !FACT_KEYS.has(k));
+  if (rest.length) {
+    blocks.push(`<div class="drawer-section-label">Other</div>
+      <table class="details-table">${rest.map(([k, v]) => factRow(k, v)).join("")}</table>`);
+  }
+  return blocks.join("");
+}
+
+/* One recommended action, derived only from signals already on the row: the
+   VirusTotal verdict, the rule engine's trust hint, and the locally-computed
+   severity. Deliberately a fixed table and not a second model call -- the AI's
+   own next step is already in the explanation above, and a separately-generated
+   line that could contradict it would be worse than no line at all.
+
+   Same honesty rule as tiVerdict: undetected never becomes "safe", and the
+   low-severity default says "recorded", not "you're fine". */
+function recommendedAction(ev, details) {
+  const vt = (details.threat_intel || {}).vt;
+  const det = vt && (vt.detections || 0);
+  if (det > 0)
+    return { cls: "bad", text: `Do not open or run this file. ${det} VirusTotal engine${det === 1 ? "" : "s"} flag it as malicious. Quarantine or delete it, then check the related events for what else ran around the same time.` };
+  if (ev.source === "tamper")
+    return { cls: "bad", text: "Something tried to stop monitoring or change Aegis's own settings. If that wasn't you, open the Incidents page — the evidence captured at the time is saved there." };
+  if (vt && (vt.suspicious || 0) > 0)
+    return { cls: "warn", text: "Treat this file as untrusted until you can confirm where it came from. Don't grant it permissions it doesn't need." };
+  const t = trustFor(ev);
+  if (t && t.cls === "ok")
+    return { cls: "ok", text: `No action needed. ${t.note}.` };
+  if (ev.severity === "critical" || ev.severity === "high")
+    return { cls: "warn", text: "Worth a look. If you don't recognise this, check the Related tab for what ran just before and after it." };
+  return { cls: "ok", text: "Nothing to do. Recorded so it's here if you need it later." };
+}
+
 /* An event is stored the moment it happens and explained a few seconds later,
    so "not explained yet" is a normal, temporary state -- distinct from
    ai_skipped (deliberately never explained) and from a stored failure. */
@@ -1419,11 +1574,8 @@ function openDrawer(id) {
   document.querySelector(`.event-row[data-id="${id}"]`)?.classList.add("selected");
 
   const details = eventDetails(ev);
-  const detailRows = Object.entries(details)
-    .filter(([k]) => k !== "_schema" && k !== "threat_intel")  // threat_intel has its own panel
-    .map(([k, v]) => `<tr><td class="k">${escapeHtml(k)}</td>
-                      <td class="v">${escapeHtml(typeof v === "object" ? JSON.stringify(v) : String(v))}</td></tr>`)
-    .join("");
+  const facts = factsHtml(details);
+  const rec = recommendedAction(ev, details);
 
   const trust = trustTargetFor(ev, details);
   const trustBtn = trust
@@ -1457,34 +1609,41 @@ function openDrawer(id) {
     <div class="drawer-summary">${escapeHtml(ev.summary)}</div>
     <div class="drawer-time">${fmtFullTime(ev.timestamp)}</div>
 
+    <!-- The AI summary sits above the tabs, not inside them. It is the reason
+         this product exists, and it spent its life one click behind a tab
+         labelled "Summary" -- which most people read as a duplicate of the
+         headline already above it, so they never opened it. -->
+    <section class="ai-panel${ev.explanation ? "" : " ai-panel-pending"}" aria-label="AI summary">
+      <h3 class="ai-panel-title">
+        <svg viewBox="0 0 24 24" aria-hidden="true">${SHIELD_PATH}</svg>
+        ${ev.ai_skipped ? "Explanation" : "AI Summary"}
+      </h3>
+      <div id="drawer-ai-body">${explanationHtml(ev)}</div>
+    </section>
+
+    <section class="rec-action rec-${rec.cls}" aria-label="Recommended action">
+      <span class="rec-label">Recommended action</span>
+      <p>${escapeHtml(rec.text)}</p>
+    </section>
+
     <div class="drawer-tabs" role="tablist">
-      <button class="drawer-tab active" data-tab="summary" role="tab">Summary</button>
-      <button class="drawer-tab" data-tab="ai" role="tab">AI Explanation</button>
-      <button class="drawer-tab" data-tab="details" role="tab">Details</button>
+      <button class="drawer-tab active" data-tab="forensics" role="tab">Forensics</button>
+      <button class="drawer-tab" data-tab="raw" role="tab">Raw</button>
       <button class="drawer-tab" data-tab="related" role="tab">Related</button>
     </div>
 
-    <div class="tab-panel active" data-panel="summary">
+    <div class="tab-panel active" data-panel="forensics">
       ${ti || '<div class="ai-skipped-note">No threat-intelligence lookup for this event.</div>'}
       ${trustLine}
-    </div>
-
-    <div class="tab-panel" data-panel="ai" hidden>
-      <div class="drawer-section-label">${ev.ai_skipped ? "Explanation" : "AI Explanation"}</div>
-      <div id="drawer-ai-body">${explanationHtml(ev)}</div>
+      ${facts || '<div class="ai-skipped-note">No structured details on this event.</div>'}
       ${ev.risk_hint ? `
         <div class="drawer-section-label">Risk Hint</div>
         <div class="risk-hint">${renderMarkdownLite(ev.risk_hint)}</div>` : ""}
     </div>
 
-    <div class="tab-panel" data-panel="details" hidden>
-      <div class="drawer-section-label">Details</div>
-      ${detailRows ? `<table class="details-table">${detailRows}</table>`
-                   : '<div class="ai-skipped-note">No structured details.</div>'}
-      <details class="raw-json">
-        <summary>raw event JSON</summary>
-        <pre>${escapeHtml(JSON.stringify({ ...ev, details_json: details }, null, 2))}</pre>
-      </details>
+    <div class="tab-panel" data-panel="raw" hidden>
+      <div class="drawer-section-label">Raw event</div>
+      <pre class="raw-pre">${escapeHtml(JSON.stringify({ ...ev, details_json: details }, null, 2))}</pre>
     </div>
 
     <div class="tab-panel" data-panel="related" hidden>

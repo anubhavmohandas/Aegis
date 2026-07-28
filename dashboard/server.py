@@ -540,6 +540,14 @@ def _query_stats_inner(conn: sqlite3.Connection, day_ago: float) -> dict:
         by_source = dict(conn.execute(
             "SELECT source, COUNT(*) FROM events WHERE timestamp >= ? GROUP BY source", (day_ago,)
         ).fetchall())
+        # The 24h window BEFORE this one, so the stat tiles can say "+4 since
+        # yesterday" from a real count instead of a made-up percentage. One
+        # grouped query rather than two: the totals are its own sum. Same
+        # timestamp index as every other aggregate here.
+        prev_by_severity = dict(conn.execute(
+            "SELECT severity, COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? "
+            "GROUP BY severity", (day_ago - 86400, day_ago)
+        ).fetchall())
         categories = [r[0] for r in conn.execute(
             "SELECT DISTINCT category FROM events ORDER BY category").fetchall()]
         latest = conn.execute(
@@ -550,6 +558,8 @@ def _query_stats_inner(conn: sqlite3.Connection, day_ago: float) -> dict:
             "last_24h": last_24h,
             "by_severity": by_severity,
             "by_source": by_source,
+            "prev_24h": sum(prev_by_severity.values()),
+            "prev_by_severity": prev_by_severity,
             "by_hour": _hourly_activity(conn, day_ago),
             "categories": categories,
             "latest": dict(latest) if latest else None,
@@ -1105,6 +1115,7 @@ def monitor_status() -> dict:
             "started_at": started_at,
             "uptime_seconds": max(0.0, time.time() - started_at) if (running and started_at) else None,
             "heartbeat_age": _heartbeat_age() if running else None,
+            "collectors": _monitor_collectors() if running else [],
             "managed": "in_process",
         }
     state = _read_monitor_state()
@@ -1129,6 +1140,7 @@ def monitor_status() -> dict:
         "started_at": state["started_at"],
         "uptime_seconds": max(0.0, time.time() - state["started_at"]),
         "heartbeat_age": _heartbeat_age(),
+        "collectors": _monitor_collectors(),
         "managed": "external",
     }
 
@@ -1179,6 +1191,20 @@ def _monitor_metrics() -> dict:
     snap["stale"] = age > METRICS_STALE_SECONDS
     snap["available"] = True
     return snap
+
+
+def _monitor_collectors() -> list[str]:
+    """Which collectors are actually up, by class name -- the gauge
+    core.metrics.record_collectors publishes from whichever pipeline started
+    them. Feeds the console's "currently monitoring" checklist, so it has to
+    describe what IS running, not what config asked for: a stale or missing
+    snapshot returns [] and the UI omits the list rather than claiming
+    coverage it cannot see."""
+    snap = _monitor_metrics()
+    if not snap.get("available") or snap.get("stale"):
+        return []
+    got = (snap.get("gauges") or {}).get("collectors")
+    return [str(c) for c in got] if isinstance(got, list) else []
 
 
 def _db_facts(db_path: str) -> dict:

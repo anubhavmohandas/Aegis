@@ -145,6 +145,7 @@
     <div class="stat-tile stat-tile-activity">
       <span class="stat-label">Events · 24h</span>
       <span class="stat-value" id="stat-24h">—</span>
+      <span class="stat-sub" id="stat-24h-sub"></span>
       <!-- One bar per hour, filled by renderSparkline(); the caption carries the
            peak so every value isn't locked behind a hover. -->
       <div class="spark" id="spark" role="img"
@@ -158,14 +159,17 @@
     <div class="stat-tile">
       <span class="stat-label">High / Critical · 24h</span>
       <span class="stat-value" id="stat-hicrit">—</span>
+      <span class="stat-sub" id="stat-hicrit-sub"></span>
     </div>
     <div class="stat-tile">
       <span class="stat-label">Active sources · 24h</span>
       <span class="stat-value" id="stat-sources">—</span>
+      <span class="stat-sub" id="stat-sources-sub"></span>
     </div>
     <div class="stat-tile">
       <span class="stat-label">Total logged</span>
       <span class="stat-value" id="stat-total">—</span>
+      <span class="stat-sub">All time</span>
     </div>
 
     <div class="severity-panel">
