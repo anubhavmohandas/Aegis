@@ -13,6 +13,7 @@ the table beneath it is the actual, unfiltered record, computed locally from
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import Counter
 from pathlib import Path
@@ -22,12 +23,19 @@ from fpdf.enums import XPos, YPos
 
 from .ai_explainer import AIExplainer
 from .config import AppConfig
+from .signals import confidence_for, signals_for
 from .version import __version__
+
+logger = logging.getLogger("aegis.report_generator")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOGO_PATH = REPO_ROOT / "assets" / "logo.png"
 
 SEVERITY_ORDER = ["critical", "high", "medium", "low"]
+# Medium is on the important side of the line deliberately: it is where the
+# screenshot / LOLBin / USB-insert events land, which are precisely the ones a
+# reader is opening the report to check on.
+_IMPORTANT_SEVERITIES = ("critical", "high", "medium")
 SOURCE_LABELS = {"process": "Process", "usb": "USB", "startup": "Startup", "folder": "Folder"}
 
 # Print-safe palette: same hues as the dashboard's "daylight" (light) theme,
@@ -45,6 +53,46 @@ SEV_COLOR = {
     "medium": (176, 128, 0),
     "low": (53, 103, 168),
 }
+TONE_COLOR = {
+    "ok": (17, 122, 86),
+    "warn": (176, 128, 0),
+    "bad": (204, 34, 68),
+    "unknown": (100, 115, 138),
+}
+
+# WHAT THE VERDICT BLOCK IS FOR: a reader who opens this PDF is asking "should
+# I worry?", and a table of 250 rows does not answer that -- it makes them do
+# the analysis Aegis already did. This block answers it on page 2 and lets
+# everything after it be supporting evidence.
+#
+# It is computed from core/signals.py -- the SAME rules the console's
+# investigation drawer renders -- and never from a second table of its own. A
+# report that calls a period "healthy" while the drawer shows a persistence
+# entry on one of its events would be worse than shipping no verdict at all,
+# and two rule sets is exactly how that happens.
+#
+# Pairs of (signal code, the thing being counted). Deliberately noun phrases
+# rather than "No X detected": each row renders as `<thing> ..... None` or
+# `<thing> ..... 2 observed`, so one label stays truthful in both directions --
+# a negated label ("No tamper attempts") reads as a lie the moment the count is
+# non-zero, which is exactly the row a reader is most likely to be scanning for.
+#
+# And the verdict column says "None", never "Clean": it reports what Aegis
+# OBSERVED in this period, which is a claim it can support. "Clean" would be a
+# claim about the machine, which no amount of event data can establish.
+_ASSESSMENT_CHECKS = [
+    ("vt_malicious", "Known-malicious files"),
+    ("tamper", "Tamper attempts against Aegis"),
+    ("persistence", "New startup or persistence entries"),
+    ("suspicious_path", "Executables run from suspicious locations"),
+    ("executable_drop", "Executables written to watched folders"),
+    ("monitoring_gap", "Gaps in monitoring coverage"),
+]
+
+# The three that escalate the whole period on their own, because each is a fact
+# about the artifact rather than an inference about it -- core/signals.py calls
+# the same three _CONCLUSIVE and lets them carry high confidence unaccompanied.
+_SERIOUS = {"vt_malicious", "tamper", "persistence"}
 
 PAGE_W = 210  # A4 mm
 MARGIN = 14
@@ -168,10 +216,107 @@ def _compute_stats(events: list[dict]) -> dict:
     }
 
 
+def _assess(events: list[dict], stats: dict) -> dict:
+    """The report's own verdict: status, how much to trust it, and why.
+
+    Local and deterministic -- this is the part of the report that must stay
+    true when the AI narrative is unavailable, wrong, or turned off entirely,
+    so it reads only the signals on the events and never `summary_text`.
+    """
+    fired = Counter()
+    strong_clear = 0
+    for ev in events:
+        # dashboard/server.py::query_events already annotated these. Recompute
+        # only for a caller that handed over raw rows (a test, or a future
+        # non-dashboard entry point) -- never trust the key being present.
+        sigs = ev.get("signals") or signals_for(ev)
+        for s in sigs:
+            if s["state"] in ("bad", "warn"):
+                fired[s["code"]] += 1
+        conf = ev.get("verdict_confidence") or confidence_for(sigs)
+        # "Nothing fired" is not evidence. "SIP or the user's own Trust List
+        # positively cleared this" is. Only the latter counts toward coverage.
+        if conf["basis"] == "clear" and conf["level"] == "high":
+            strong_clear += 1
+
+    checks = [(label, fired.get(code, 0)) for code, label in _ASSESSMENT_CHECKS]
+    serious = sum(fired.get(code, 0) for code in _SERIOUS)
+    flagged = sum(n for _, n in checks)
+    # Anything the report is going to PRINT under "Important Events" has to keep
+    # the verdict off "Healthy", medium included. A page-1 all-clear sitting
+    # above a table of events the same report called important is the one
+    # internal contradiction guaranteed to cost the reader their trust in both.
+    notable = sum(stats["by_severity"].get(s, 0) for s in _IMPORTANT_SEVERITIES)
+
+    if not events:
+        # An empty period is NOT an all-clear, and this is the single most
+        # important branch in the function: monitoring may simply have been off.
+        # Printing "Healthy" over a period Aegis never watched is the one
+        # mistake that would make every other verdict in this report worthless.
+        return {
+            "status": "No Activity Recorded", "tone": "unknown", "confidence": "Low",
+            "reason": "No events were recorded for this period. That can mean a quiet system "
+                      "or a period when monitoring was not running -- this report cannot "
+                      "distinguish between the two.",
+            "action": "Confirm monitoring was active across this period before treating it as clean.",
+            "checks": checks, "coverage": 0,
+        }
+
+    if serious:
+        status, tone = "Needs Attention", "bad"
+        reason = (f"{serious} event{'s' if serious != 1 else ''} carried a hard indicator "
+                  f"(a malicious-file detection, a tamper attempt, or a new persistence entry). "
+                  f"These are observations rather than inferences, so they warrant review "
+                  f"regardless of how routine the rest of the period looks.")
+        action = "Review the flagged events below before treating this machine as trusted."
+    elif notable or flagged:
+        n = notable or flagged
+        status, tone = "Review Suggested", "warn"
+        reason = (f"No malware, tampering or persistence was observed, but {n} "
+                  f"event{'s' if n != 1 else ''} rose above routine activity. Most such events "
+                  f"are explained by something the user did themselves.")
+        action = "Skim the important events below and confirm each was expected."
+    else:
+        status, tone = "Healthy", "ok"
+        reason = ("Routine operating-system and application activity only. None of the "
+                  "indicators Aegis checks for were observed in this period.")
+        action = "No action required."
+
+    # occam: coverage thresholds are judgement, not measurement -- they say how
+    # much of the period was positively cleared (SIP-verified or user-trusted)
+    # rather than merely un-flagged. Tune against real timelines if "Low" starts
+    # showing up on days that are genuinely fine; replace with a per-source
+    # coverage model if it ever needs to justify itself to an auditor.
+    coverage = strong_clear / len(events)
+    if serious:
+        confidence = "High"       # a scan result or a watched tamper attempt stands alone
+    elif coverage >= 0.6:
+        confidence = "High"
+    elif coverage >= 0.25:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
+
+    return {"status": status, "tone": tone, "confidence": confidence, "reason": reason,
+            "action": action, "checks": checks, "coverage": round(coverage * 100)}
+
+
 def generate_pdf_report(events: list[dict], range_label: str, range_start: float,
                          range_end: float, config: AppConfig) -> bytes:
     stats = _compute_stats(events)
-    summary_text = AIExplainer(config).summarize_period(_summary_prompt_block(events, stats, range_label))
+    assessment = _assess(events, stats)
+    try:
+        summary_text = AIExplainer(config).summarize_period(
+            _summary_prompt_block(events, stats, range_label))
+    except Exception as exc:
+        # The footer on every page promises the narrative is a convenience, not
+        # the verdict. That has to be structurally true, not just printed: an
+        # unreachable provider, an expired key or a rate limit must not be able
+        # to take down a report whose verdict block was computed locally and is
+        # sitting right above this section, fully valid.
+        logger.warning("Period summary unavailable -- rendering report without it.", exc_info=True)
+        summary_text = (f"The AI narrative could not be generated for this period ({exc.__class__.__name__}). "
+                        f"The assessment above and every event below are computed locally and are unaffected.")
 
     pdf = _ReportPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=22)
@@ -179,6 +324,7 @@ def generate_pdf_report(events: list[dict], range_label: str, range_start: float
 
     _draw_cover(pdf, stats, range_label)
     pdf.add_page()
+    _draw_assessment(pdf, assessment)
     _draw_summary(pdf, summary_text)
     _draw_stat_tiles(pdf, stats)
     _draw_severity_bar(pdf, stats)
@@ -251,6 +397,94 @@ def _draw_cover(pdf: _ReportPDF, stats: dict, range_label: str):
     pdf.cell(0, 6, "AI explanations are a convenience layer, not a security verdict.", align="C")
 
 
+def _ensure_room(pdf: _ReportPDF, needed_mm: float):
+    """Page-break ahead of a block that draws itself with rect() and set_xy().
+
+    fpdf2's auto page break only fires from inside cell()/multi_cell(). The stat
+    tiles, the severity bar and its legend, and the assessment band are painted
+    with rect() and an explicit cursor, so nothing stops them rendering straight
+    through the footer -- which is exactly what they did once the assessment
+    block above them pushed the cursor further down the page.
+    """
+    if pdf.get_y() + needed_mm > pdf.h - 22:
+        pdf.add_page()
+
+
+def _draw_assessment(pdf: _ReportPDF, a: dict):
+    """The 'should I worry?' block -- first thing on page 2, above the narrative.
+
+    Drawn as a fixed-height status band plus ordinary flowing text rather than
+    one dynamically-sized panel: boxing the whole block would mean measuring
+    wrapped text to size the rectangle behind it, and getting that wrong pushes
+    a border through the middle of a sentence or across a page break. The band
+    carries the colour, the text below it just flows.
+    """
+    tone = TONE_COLOR.get(a["tone"], TONE_COLOR["unknown"])
+
+    band_h = 15
+    _ensure_room(pdf, band_h + 20)   # band + the first lines of the reason
+    y = pdf.get_y()
+    pdf.set_fill_color(*tone)
+    pdf.rect(MARGIN, y, CONTENT_W, band_h, style="F")
+
+    pdf.set_xy(MARGIN + 5, y + 3.4)
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(255, 255, 255)
+    pdf.cell(CONTENT_W * 0.6, 8, _safe(a["status"]))
+
+    pdf.set_xy(MARGIN + CONTENT_W * 0.6, y + 4.6)
+    pdf.set_font("Helvetica", "", 8.5)
+    pdf.cell(CONTENT_W * 0.4 - 5, 6, _letterspaced(f"Confidence: {a['confidence']}"), align="R")
+
+    pdf.set_y(y + band_h + 5)
+    pdf.set_font("Helvetica", "", 10.5)
+    pdf.set_text_color(*INK)
+    pdf.multi_cell(CONTENT_W, 5.6, _safe(a["reason"]))
+
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(*INK_3)
+    pdf.cell(0, 5, _letterspaced("Recommended Action"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("Helvetica", "B", 10.5)
+    pdf.set_text_color(*tone)
+    pdf.multi_cell(CONTENT_W, 5.6, _safe(a["action"]))
+
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(*INK_3)
+    pdf.cell(0, 5, _letterspaced("What Aegis Checked"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.ln(1)
+
+    val_w = 30
+    for label, count in a["checks"]:
+        _ensure_room(pdf, 6)   # the tone square is a rect(); don't orphan it
+        row_y = pdf.get_y()
+        ok = count == 0
+        pdf.set_fill_color(*(TONE_COLOR["ok"] if ok else TONE_COLOR["bad"]))
+        pdf.rect(MARGIN + 1, row_y + 1.9, 2.4, 2.4, style="F")
+        pdf.set_xy(MARGIN + 6, row_y)
+        pdf.set_font("Helvetica", "", 9.5)
+        pdf.set_text_color(*INK)
+        pdf.cell(CONTENT_W - val_w - 6, 6, _safe(label))
+        pdf.set_font("Helvetica", "B" if not ok else "", 9.5)
+        pdf.set_text_color(*(INK_2 if ok else TONE_COLOR["bad"]))
+        pdf.cell(val_w, 6, "None" if ok else f"{count} observed", align="R")
+        pdf.set_y(row_y + 6)
+
+    if a["coverage"]:
+        pdf.ln(1)
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.set_text_color(*INK_3)
+        # Says what the confidence figure above actually rests on. Without this
+        # a reader has no way to tell a well-evidenced "Healthy" from one that
+        # only means Aegis had nothing to say about anything it saw.
+        pdf.multi_cell(CONTENT_W, 4.6,
+                       f"{a['coverage']}% of events in this period were positively cleared "
+                       f"(SIP-verified Apple binaries or entries on your Trust List) rather than "
+                       f"merely unflagged. Analysis is performed locally; your files are never uploaded.")
+    pdf.ln(3)
+
+
 def _draw_summary(pdf: _ReportPDF, summary_text: str):
     pdf.section_title("Executive Summary")
     pdf.set_font("Helvetica", "", 10.5)
@@ -268,6 +502,7 @@ def _draw_summary(pdf: _ReportPDF, summary_text: str):
 
 
 def _draw_stat_tiles(pdf: _ReportPDF, stats: dict):
+    _ensure_room(pdf, 46)   # section title + 20mm tiles + the severity bar under them
     pdf.section_title("Activity At A Glance")
     tiles = [
         ("Total Events", str(stats["total"])),
@@ -297,6 +532,7 @@ def _draw_stat_tiles(pdf: _ReportPDF, stats: dict):
 
 def _draw_severity_bar(pdf: _ReportPDF, stats: dict):
     total = sum(stats["by_severity"].get(s, 0) for s in SEVERITY_ORDER)
+    _ensure_room(pdf, 20)   # bar + legend row, both rect()-drawn
     y = pdf.get_y()
     bar_h = 6
     pdf.set_draw_color(*BORDER)
@@ -353,8 +589,82 @@ def _draw_breakdown(pdf: _ReportPDF, stats: dict):
     pdf.ln(4)
 
 
+def _background_label(ev: dict) -> str:
+    # Same collapse the console timeline does (dashboard/static/app.js::groupKey):
+    # drop the PID so repeat runs of one process land on one line instead of
+    # one line each. mdworker_shared alone is ~1000 rows/day on a normal Mac.
+    return _safe(str(ev.get("summary", "")).split(" (PID")[0])
+
+
+def _draw_background(pdf: _ReportPDF, background: list[dict]):
+    """Routine low-severity activity, collapsed to counts.
+
+    Printed as counts rather than rows because the full rows are already
+    available -- the footnote points at the CSV/JSON export. Nobody reads page
+    8 of identical Spotlight entries, and a report that makes them scroll past
+    it to reach the events that matter has buried its own conclusion.
+    """
+    if not background:
+        return
+    pdf.section_title(f"Background Activity ({len(background)})")
+    pdf.set_font("Helvetica", "", 8.5)
+    pdf.set_text_color(*INK_3)
+    pdf.multi_cell(CONTENT_W, 5,
+                   "Low-severity, routine activity, grouped by what produced it. Listed for "
+                   "completeness -- none of it contributed to the assessment on page 1.")
+    pdf.ln(2)
+
+    counts = Counter(_background_label(ev) for ev in background)
+    grouped = counts.most_common(20)
+    val_w = 22
+    for label, count in grouped:
+        y = pdf.get_y()
+        if y + 6 > pdf.h - 20:
+            pdf.add_page()
+            y = pdf.get_y()
+        pdf.set_xy(MARGIN, y)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(*INK)
+        text = label if len(label) <= 105 else label[:104] + "..."
+        pdf.cell(CONTENT_W - val_w, 6, text)
+        pdf.set_text_color(*INK_2)
+        pdf.cell(val_w, 6, f"x{count}", align="R")
+        pdf.set_y(y + 6)
+
+    remaining = len(counts) - len(grouped)
+    if remaining > 0:
+        pdf.ln(1)
+        pdf.set_font("Helvetica", "I", 8.5)
+        pdf.set_text_color(*INK_3)
+        pdf.cell(0, 5, f"...and {remaining} further background group(s).")
+
+
 def _draw_event_table(pdf: _ReportPDF, events: list[dict]):
-    pdf.section_title(f"Event Log ({len(events)} events)")
+    """Important events in full, routine activity collapsed underneath them.
+
+    The old single "Event Log" listed all 250 severity-sorted rows together, so
+    the one event worth acting on and the 200 Spotlight indexer entries got the
+    same visual weight and the same amount of the reader's attention.
+    """
+    important = [e for e in events if e.get("severity") in _IMPORTANT_SEVERITIES]
+    background = [e for e in events if e.get("severity") not in _IMPORTANT_SEVERITIES]
+
+    pdf.section_title(f"Important Events ({len(important)})")
+    if not important:
+        pdf.set_font("Helvetica", "I", 9.5)
+        pdf.set_text_color(*INK_3)
+        pdf.multi_cell(CONTENT_W, 5.5,
+                       f"No events above low severity in this period. All {len(events)} "
+                       f"recorded events were routine and are grouped below.")
+        pdf.ln(2)
+        _draw_background(pdf, background)
+        return
+
+    _draw_rows(pdf, important)
+    _draw_background(pdf, background)
+
+
+def _draw_rows(pdf: _ReportPDF, events: list[dict]):
     ordered = sorted(events, key=lambda e: (_sev_key(e), -e.get("timestamp", 0)))
     cap = 250
     shown = ordered[:cap]
@@ -411,5 +721,5 @@ def _draw_event_table(pdf: _ReportPDF, events: list[dict]):
         pdf.set_font("Helvetica", "I", 8.5)
         pdf.set_text_color(*INK_3)
         pdf.multi_cell(CONTENT_W, 5,
-                       f"Showing the {cap} highest-severity events of {len(events)} total in this period "
-                       f"(highest severity first). Use Export CSV/JSON from the console for the full set.")
+                       f"Showing the {cap} highest-severity of {len(events)} important events in this "
+                       f"period. Use Export CSV/JSON from the console for the full set.")

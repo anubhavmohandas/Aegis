@@ -452,6 +452,137 @@ def _prompt_password_tk(title: str, informative: str) -> str | None:
         root.destroy()
 
 
+def _fmt_duration(seconds: float) -> str:
+    h, rem = divmod(int(max(seconds, 0)), 3600)
+    return f"{h}h {rem // 60}m" if h else f"{rem // 60}m"
+
+
+def _choice_alert_macos(AppKit, title: str, message: str, buttons: list[str]) -> int:
+    """Native alert with several buttons; returns the index of the one clicked."""
+    alert = AppKit.NSAlert.alloc().init()
+    alert.setMessageText_(title)
+    alert.setInformativeText_(message)
+    for label in buttons:
+        alert.addButtonWithTitle_(label)
+    return int(alert.runModal()) - int(AppKit.NSAlertFirstButtonReturn)
+
+
+def _build_session_summary(config) -> dict:
+    """The numbers behind the quit dialog, over the window Aegis was running.
+
+    Scoped to this SESSION rather than to "today" deliberately: the PDF offered
+    in the same dialog is generated over this identical range, so the count the
+    user reads on screen and the count in the file they keep can never disagree.
+
+    The verdict comes from core/report_generator._assess -- the same function
+    that prints the assessment block in the PDF, not a second opinion computed
+    here. The dialog and the report have to agree or neither is worth reading.
+    """
+    from core.metrics import METRICS
+    from core.report_generator import _assess, _compute_stats
+    from dashboard.server import query_events
+
+    since, until = METRICS.started_at, time.time()
+    # Explicit limit: query_events defaults to 200 rows, which would quietly
+    # turn "events this session" into "the 200 most recent", and a session
+    # summary that undercounts is worse than no session summary.
+    events = query_events(config.db_path,
+                          {"since": [str(since)], "until": [str(until)], "limit": ["100000"]},
+                          limit_cap=100_000)
+    stats = _compute_stats(events)
+    return {"since": since, "until": until, "events": events, "stats": stats,
+            "assessment": _assess(events, stats), "duration": _fmt_duration(until - since)}
+
+
+def _format_session_summary(s: dict) -> str:
+    a, st = s["assessment"], s["stats"]
+    return "\n".join([
+        a["status"].upper(),
+        "",
+        f"Monitoring session:   {s['duration']}",
+        f"Events observed:      {st['total']}",
+        f"High / critical:      {st['hicrit']}",
+        f"AI explanations:      {st['explained']}",
+        "",
+        a["reason"],
+        "",
+        a["action"],
+    ])
+
+
+def _save_session_report(s: dict, config) -> Path:
+    from core.config import persistent_dir
+    from core.report_generator import format_range_label, generate_pdf_report
+
+    out_dir = persistent_dir() / "reports"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"aegis-session-{time.strftime('%Y%m%d-%H%M%S')}.pdf"
+    path.write_bytes(generate_pdf_report(
+        s["events"], format_range_label(s["since"], s["until"]), s["since"], s["until"], config))
+    return path
+
+
+def _quit_summary_gate(action: str) -> bool:
+    """Session summary on the way out. Returns False only if the user cancels.
+
+    ORDER MATTERS, and it is the reason this lives at the end of
+    _authorize_action rather than in front of it: these counts describe what
+    Aegis saw on this machine, so they are shown only to someone who has already
+    proved they are allowed to stop it. Prompting with the summary first would
+    hand an unauthenticated person a readout of the machine's activity -- the
+    exact thing the password gate exists to withhold.
+
+    FAILS OPEN, unlike _authorize_action, which fails closed. The asymmetry is
+    deliberate: by this point the user has already authenticated a quit, so a
+    broken summary must never become a way to trap them inside the app. A
+    failed gate keeps you monitored; a failed summary just quits quietly.
+    """
+    if action != "quit":
+        return True
+    try:
+        config = load_config()
+        s = _build_session_summary(config)
+        body = _format_session_summary(s)
+
+        if sys.platform == "darwin":
+            import AppKit
+            choice = _choice_alert_macos(AppKit, "Aegis session summary", body,
+                                         ["Save Report & Quit", "Quit", "Cancel"])
+            notify = lambda t, m: _info_alert_macos(AppKit, t, m)
+        else:
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            try:
+                # askyesnocancel maps exactly onto the three choices and is
+                # stdlib -- Yes: save and quit, No: quit, Cancel: stay.
+                ans = messagebox.askyesnocancel(
+                    "Aegis session summary",
+                    f"{body}\n\nSave a PDF report before quitting?", parent=root)
+            finally:
+                root.destroy()
+            choice = 0 if ans else (1 if ans is False else 2)
+            notify = _info_alert_tk
+
+        if choice == 2:
+            return False        # Cancel -> Aegis keeps running
+        if choice == 0:
+            try:
+                notify("Report saved", str(_save_session_report(s, config)))
+            except Exception:
+                # Quitting was already authorized -- a report failure reports
+                # itself and gets out of the way rather than vetoing the quit.
+                logger.warning("Session report could not be generated.", exc_info=True)
+                notify("Report failed", "The session report could not be generated. "
+                                        "Aegis will still quit.")
+        return True
+    except Exception:
+        logger.warning("Session summary unavailable -- quitting without it.", exc_info=True)
+        return True
+
+
 def _authorize_action(action: str, title: str, informative: str) -> bool:
     """Password-gate a protected action (Stop Monitoring / Quit) from the tray,
     menu bar, or the window-close handler. Returns True only if the dashboard
@@ -462,12 +593,18 @@ def _authorize_action(action: str, title: str, informative: str) -> bool:
     block + evidence notice as the web UI (guard_protected_action logs the
     tamper attempt, captures evidence at the threshold, and locks out).
 
+    A correct password is necessary but no longer sufficient for action="quit":
+    the session summary runs afterwards (_quit_summary_gate) and returns False
+    if the user backs out there. Every caller already treats False as "keep
+    running", so a cancel needs no new handling -- but note the password is not
+    remembered, so quitting again re-prompts.
+
     Disabling tamper protection is the intended escape hatch on the rare box
     where no dialog can render (non-macOS without tkinter) -- otherwise the gate
     would fail closed and there'd be no way to quit."""
     from core.config import load_config
     if not load_config().tamper_require_password:
-        return True   # gate disabled -> action proceeds without a prompt
+        return _quit_summary_gate(action)   # gate disabled -> straight to the summary
     from dashboard.server import guard_protected_action
     confirm = title.split()[0]                        # "Stop" / "Quit"
     if sys.platform == "darwin":
@@ -492,7 +629,9 @@ def _authorize_action(action: str, title: str, informative: str) -> bool:
             note += f"\nEvidence captured (incident #{result.get('incident_id')})."
         notify(f"{title} blocked", note)
         return False
-    return True
+    # Authenticated. A quit now gets its session summary (and the chance to
+    # cancel); every other protected action returns straight through.
+    return _quit_summary_gate(action)
 
 
 def _on_closing() -> bool | None:

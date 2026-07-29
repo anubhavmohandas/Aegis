@@ -55,6 +55,9 @@ credentials.json*
 # Tamper-evidence captures (screenshots + incident.json) -- from-source runs
 # write these to the repo root via persistent_dir(); never commit them.
 incidents/
+# Session reports saved from the quit dialog -- same deal: persistent_dir()
+# puts them in the repo root on a from-source run.
+reports/
 aegis_events.db
 events.log
 *.db

@@ -705,9 +705,10 @@ function emptyStateHtml() {
           watching processes, USB devices, startup items and your folders.</span>
       </div>`;
   }
-  // Never let "clean" overstate itself while Hide Trusted is on.
+  // Never let "clean" overstate itself while Hide Routine is on.
   const trustedNote = state.filters.hideTrusted
-    ? ` Trusted activity is hidden from this view — it's still being logged.`
+    ? ` Routine activity — your Trust List, Apple system binaries and Aegis's own
+       helpers — is hidden from this view. It's still being logged.`
     : "";
   return `
     <div class="empty-state empty-clear">

@@ -356,20 +356,29 @@ def _build_event_query(params: dict) -> tuple[str, list]:
         args.extend([like, like, like])
 
     # Events the user themselves opted out of seeing via a Trust List entry,
-    # plus SIP-protected Apple platform binaries (core/rule_engine.py sets
-    # risk_hint to one of these four exact strings), are still fully
+    # plus SIP-protected Apple platform binaries and Aegis's own subprocesses
+    # (core/rule_engine.py sets risk_hint to one of these five exact strings),
+    # are still fully
     # persisted -- this only affects what THIS query returns, never what's in
     # the DB. Distinct from rate_limited/duplicate_suppressed, which stay
     # visible by default: those reflect unusual burst activity worth seeing,
     # not routine noise already vetted by the user or by SIP (e.g.
     # mdworker_shared launching every second during Spotlight indexing, which
     # otherwise buries everything else in the timeline).
+    #
+    # aegis_own_child belongs in this list and not behind a toggle of its own:
+    # it is the same category of noise (routine, already vetted, nothing the
+    # user can act on) and core/signals.py already treats it as a _STRONG_CLEAR
+    # alongside system_binary and user_trusted. It is matched on PARENT PID, not
+    # on name, so a payload called "osascript" is not covered by it and stays
+    # visible -- which is the distinction that makes hiding these safe at all.
     # IS NULL half is load-bearing: normal AI-explained events persist with
     # risk_hint NULL, and `NULL NOT IN (...)` is NULL (falsy) in SQL -- without
     # it, this filter silently hid every ordinary event, not just trusted ones.
     if params.get("hide_trusted", [""])[0] == "1":
         where.append("(risk_hint IS NULL OR risk_hint NOT IN ('user_trusted_process', "
-                     "'user_trusted_process_hash', 'user_trusted_usb', 'os_platform_binary'))")
+                     "'user_trusted_process_hash', 'user_trusted_usb', 'os_platform_binary', "
+                     "'aegis_own_child'))")
 
     for key, op in (("since", ">="), ("until", "<=")):
         raw = params.get(key, [""])[0]
