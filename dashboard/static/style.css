@@ -1005,15 +1005,23 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
    low-confidence critical must not borrow critical's red and read as more
    certain than it is. */
 .lede-conf {
+  /* Fallback matters: the tint below is driven entirely by the conf-lvl-* class
+     app.js writes, so an unrecognised level would otherwise resolve to an
+     invalid color-mix and drop the pill's styling silently. */
+  --conf-color: var(--ink-3);
   display: inline-flex; align-items: center; gap: 6px;
-  font-size: 11.5px; color: var(--ink-3);
+  font-size: 11.5px; font-weight: 600;
+  color: var(--conf-color);
+  border: 1px solid color-mix(in srgb, var(--conf-color) 38%, transparent);
+  background: color-mix(in srgb, var(--conf-color) 11%, transparent);
+  border-radius: 3px; padding: 3px 8px;
   text-transform: lowercase;
   cursor: help;
 }
 .conf-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 10px; }
 .conf-bars i {
   width: 3px; border-radius: 1px;
-  background: var(--border-strong);
+  background: color-mix(in srgb, var(--conf-color) 30%, transparent);
 }
 .conf-bars i:nth-child(1) { height: 4px; }
 .conf-bars i:nth-child(2) { height: 7px; }
@@ -1021,9 +1029,15 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .conf-lvl-low   .conf-bars i:nth-child(1),
 .conf-lvl-medium .conf-bars i:nth-child(-n+2),
 .conf-lvl-high  .conf-bars i { background: currentColor; }
-.conf-lvl-high   { color: var(--ink-2); }
-.conf-lvl-medium { color: var(--ink-3); }
-.conf-lvl-low    { color: var(--sev-medium); }
+/* Accent for high because accent is the product's own voice in this UI (it is
+   the AI panel's colour) -- "the system is sure", not "this is safe". The
+   severity pill sits immediately to its left and owns the risk hue, which is
+   what keeps a green confidence next to a red verdict from reading as an
+   all-clear. Still never tinted BY severity: a low-confidence critical must not
+   borrow critical's red and look more certain than it is. */
+.conf-lvl-high   { --conf-color: var(--accent); }
+.conf-lvl-medium { --conf-color: var(--ink-2); }
+.conf-lvl-low    { --conf-color: var(--sev-medium); }
 .lede-title {
   font-size: 20px; font-weight: 650; line-height: 1.3;
   letter-spacing: -.01em;
@@ -1048,8 +1062,11 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   border-left: 3px solid var(--accent);
   background: color-mix(in srgb, var(--accent) 7%, transparent);
   border-radius: var(--radius);
-  padding: 20px 22px 22px;
-  margin-bottom: 16px;
+  padding: 24px 26px 26px;
+  /* The top margin collapses against .drawer-lede's 16px rather than adding to
+     it (both are in normal block flow inside .drawer-body), so this is a 24px
+     gap above, not 40. */
+  margin: 24px 0 22px;
 }
 .ai-panel-title {
   display: flex; align-items: center; gap: 8px;
@@ -1086,12 +1103,16 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .rec-action.rec-bad  { --rec-color: var(--sev-critical); }
 .rec-action.rec-warn { --rec-color: var(--sev-medium); }
 .rec-action.rec-ok   { --rec-color: var(--accent); }
+/* Weight is already maxed -- Chakra Petch ships 400/500/600/700 and no 800, so
+   asking for heavier only gets synthetic bolding. The heading reads bolder via
+   size and tighter tracking instead, which is where the lightness actually came
+   from at 10px. */
 .rec-label {
   display: block;
   font-family: var(--font-display);
-  font-size: 10px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase;
+  font-size: 11px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase;
   color: var(--rec-color);
-  margin-bottom: 5px;
+  margin-bottom: 6px;
 }
 .rec-action p { font-size: 13px; line-height: 1.6; color: var(--ink-2); }
 
