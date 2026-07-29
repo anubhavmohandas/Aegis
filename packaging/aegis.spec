@@ -162,5 +162,15 @@ if IS_MAC:
                 "Aegis takes one webcam photo as tamper evidence when repeated "
                 "wrong passwords are entered on a protected action, and only if "
                 "you enable webcam evidence in Settings.",
+            # Folder prompts are raised up front at launch (core/permissions.py).
+            # Without these strings macOS shows its generic "wants to access
+            # files" text -- from a security app that reads as exactly the kind
+            # of thing you deny.
+            "NSDesktopFolderUsageDescription":
+                "Aegis watches your Desktop for file changes and shows them in your timeline.",
+            "NSDocumentsFolderUsageDescription":
+                "Aegis watches your Documents folder for file changes and shows them in your timeline.",
+            "NSDownloadsFolderUsageDescription":
+                "Aegis watches your Downloads folder for file changes and shows them in your timeline.",
         },
     )

@@ -36,6 +36,7 @@ from core.config import load_config
 from core.dispatcher import Dispatcher
 from core.folder_monitor import FolderMonitor
 from core.metrics import record_collectors
+from core.permissions import prime as prime_permissions
 from core.session_monitor import SessionMonitor
 from dashboard.server import MONITOR_LOG_PATH, build_server
 from main import build_platform_monitors
@@ -715,6 +716,10 @@ def main():
     _set_macos_app_name()   # show "Aegis", not "Python", when run from source
     _wire_monitor_log()
     config = load_config()
+    # Ask for Camera / Screen Recording / folder access HERE, at launch, while
+    # the user is looking at the app -- not later, from inside a tamper capture
+    # triggered by a wrong password (see core/permissions.py).
+    prime_permissions(config)
 
     pipeline = MonitorPipeline(config)
     try:

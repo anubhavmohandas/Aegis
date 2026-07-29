@@ -1001,6 +1001,13 @@ def write_settings(body: dict) -> dict:
     vt_key = str(body.get("vt_api_key", ""))
     if vt_key:  # same blank-means-keep contract; fixed env var name (one VirusTotal)
         set_secret("VT_API_KEY", vt_key)
+
+    # Just-enabled webcam/screenshot evidence must raise its OS permission
+    # prompt NOW, with the Settings page still on screen -- the whole point of
+    # core/permissions.py is that the prompt never surfaces mid-tamper-capture.
+    from types import SimpleNamespace
+    from core.permissions import prime as prime_permissions
+    prime_permissions(SimpleNamespace(**config))
     return {}
 
 
