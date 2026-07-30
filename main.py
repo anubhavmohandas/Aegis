@@ -90,7 +90,8 @@ def main(use_tray: bool = True):
     event_queue: Queue = Queue()
 
     platform_monitors = build_platform_monitors(system, event_queue, config.poll_interval_seconds)
-    folder_monitor = FolderMonitor(config.watched_folders, event_queue)
+    folder_monitor = FolderMonitor(config.watched_folders, event_queue,
+                                   config.folder_ignore_patterns)
     session_monitor = SessionMonitor(event_queue, config.poll_interval_seconds)
 
     dispatcher = Dispatcher(event_queue, config)

@@ -94,7 +94,8 @@ class MonitorPipeline:
         try:
             platform_monitors = build_platform_monitors(system, event_queue,
                                                          self.config.poll_interval_seconds)
-            folder_monitor = FolderMonitor(self.config.watched_folders, event_queue)
+            folder_monitor = FolderMonitor(self.config.watched_folders, event_queue,
+                                            self.config.folder_ignore_patterns)
             session_monitor = SessionMonitor(event_queue, self.config.poll_interval_seconds)
             monitors = platform_monitors + [folder_monitor, session_monitor]
             dispatcher = Dispatcher(event_queue, self.config)

@@ -54,6 +54,39 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com).
   is unchanged for them.
 
 ### Added
+- **The PDF report now reaches a verdict instead of only listing events.** It
+  opened on an AI narrative and 250 severity-sorted rows, which answered "what
+  happened" and left "should I worry" to the reader — the one question they
+  opened it to have answered. Page 2 now leads with an overall assessment
+  (Healthy / Review Suggested / Needs Attention), the confidence behind it, a
+  recommended action, and a *What Aegis Checked* list naming each indicator and
+  whether it was observed. Computed from `core/signals.py` — the same rules the
+  console drawer renders — so the report cannot call a period healthy while the
+  drawer shows persistence on one of its events. Also computed *locally and
+  before* the AI call, so an unreachable provider now degrades to a report with
+  its verdict intact rather than a 500: the footer has always promised the
+  narrative is a convenience rather than the verdict, and that is now
+  structurally true (`core/report_generator.py`).
+  - An **empty period is never reported as Healthy.** No events can mean a quiet
+    machine or a stretch when monitoring was off, and the report cannot tell
+    those apart — it says so, at Low confidence, instead of printing an
+    all-clear over a period Aegis never watched.
+  - Confidence rests on **coverage, not silence**: the percentage counts events
+    positively cleared (SIP-verified or on your Trust List), not events that
+    merely failed to trip anything.
+- **Executables are detected by content, not just by extension.** Detection was
+  extension-only, so a Mach-O binary saved as `invoice.pdf` scored the same as
+  a text file — and on macOS that is the realistic drop, since native Mach-O
+  executables carry no extension at all and never matched the extension list to
+  begin with. Mach-O (all four byte orders plus universal binaries), ELF, PE and
+  `#!` scripts are now recognised from their magic bytes whatever the file is
+  called, including on the rename path (`core/severity_engine.py::executable_kind`).
+  The verdict is recorded on the event at detection time rather than re-derived
+  on read: the drawer annotates every visible row on every poll, so sniffing
+  there would put a disk read in the poll loop and would let the drawer say
+  "not executable" under a severity raised for exactly the opposite reason once
+  the file was deleted. Rows written before this fall back to the extension
+  check, so the existing store keeps explaining itself.
 - **Detection confidence, next to severity.** Severity said how bad an event
   is; nothing said how well the evidence backed it, so a "high" resting on one
   path heuristic looked identical to a "high" with a VirusTotal detection and
@@ -70,6 +103,34 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com).
   the same claim.
 
 ### Changed
+- **Watched folders are now recursive.** They were top-level only, which quietly
+  made "watch my Downloads folder" mean "watch the top level of my Downloads
+  folder" — a drop into `~/Downloads/installer/` produced no event at all, which
+  is a blind spot nobody reading the setting would assume they had. Recursion is
+  paired with a deliberately short ignore list (`.git`, `node_modules`,
+  `__pycache__`, `.Trash`, editor swap files, partial downloads) plus a new
+  `folder_ignore_patterns` config key that *extends* it. The default list
+  pointedly omits `build/`, `dist/`, `target/` and `Library/`: they are noisy,
+  and they are also exactly where a compiled binary legitimately lands — a
+  watcher that ignores where executables appear is not watching for executables.
+  Partial-download suffixes are safe to skip because the completed file is
+  *renamed* into place, which fires the move path and is classified on the
+  destination (`core/folder_monitor.py`).
+- **"Hide Trusted" is now "Hide Routine", and covers Aegis's own helpers.** The
+  filter already hid your Trust List and SIP-protected Apple binaries but not
+  the subprocesses Aegis itself starts for notifications, evidence capture and
+  system checks — so the timeline showed the user Aegis reacting to itself.
+  Folded into the existing default-on filter rather than given a second toggle:
+  it is the same category of noise, and `core/signals.py` already treats it as a
+  strong all-clear alongside the other two. Safe to hide specifically because
+  the rule matches on **parent PID, not name** — a payload called `osascript`
+  is not covered and stays visible. Still fully persisted; this only changes
+  what the view returns (`dashboard/server.py`).
+- **The report separates important events from background activity.** All 250
+  rows shared one table, so the one event worth acting on and 200 Spotlight
+  indexer entries carried identical visual weight. Critical/high/medium are now
+  listed in full; low-severity activity is grouped to counts underneath, using
+  the same PID-stripping collapse the console timeline uses.
 - **The severity heuristics live in one language again.** The investigation
   drawer explained *why* an event scored high by re-running the severity
   engine's rules in the browser, because the engine records only its verdict —

@@ -80,6 +80,12 @@ class AppConfig:
     ai_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
     ai_temperature: float = 0.2             # low on purpose: consistent, boring explanations
     watched_folders: list[str] = field(default_factory=list)
+    folder_ignore_patterns: list[str] = field(default_factory=list)
+                                            # EXTENDS core/folder_monitor._DEFAULT_IGNORES, never replaces it.
+                                            # Watched folders are scanned recursively, so this is the knob for
+                                            # a noisy subtree of your own. Each pattern is fnmatch-ed against
+                                            # every path COMPONENT, so "node_modules" excludes the whole tree.
+                                            # Every entry is a deliberate blind spot -- keep the list short.
     poll_interval_seconds: int = 3          # used by every polling-based monitor (USB/startup/process fallback)
     notify_enabled: bool = False            # master switch for OS desktop popups. Default OFF: the dashboard
                                             # timeline is already a live view of every event, so popups are an
@@ -179,6 +185,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         ai_model=ai["model"],
         ai_temperature=ai["temperature"],
         watched_folders=_parse_str_list(raw, "watched_folders"),
+        folder_ignore_patterns=_parse_str_list(raw, "folder_ignore_patterns"),
         poll_interval_seconds=_parse_int(raw, "poll_interval_seconds", 3),
         notify_enabled=bool(raw.get("notify_enabled", False)),
         notify_on_startup_scan=bool(raw.get("notify_on_startup_scan", True)),

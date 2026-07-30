@@ -707,8 +707,7 @@ function emptyStateHtml() {
   }
   // Never let "clean" overstate itself while Hide Routine is on.
   const trustedNote = state.filters.hideTrusted
-    ? ` Routine activity — your Trust List, Apple system binaries and Aegis's own
-       helpers — is hidden from this view. It's still being logged.`
+    ? ` Routine activity — your Trust List, Apple system binaries and Aegis's own helpers — is hidden from this view. It's still being logged.`
     : "";
   return `
     <div class="empty-state empty-clear">

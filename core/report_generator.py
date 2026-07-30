@@ -606,6 +606,13 @@ def _draw_background(pdf: _ReportPDF, background: list[dict]):
     """
     if not background:
         return
+    # Keep the heading with its content. fpdf2's auto-break only triggers on the
+    # NEXT write, so a section_title that just fits at the foot of a page leaves
+    # the heading stranded there with its whole list overleaf -- observed with
+    # "BACKGROUND ACTIVITY (300)" alone under the last event row. The title,
+    # intro paragraph and a few rows need roughly 45mm between them.
+    if pdf.get_y() + 45 > pdf.h - 20:
+        pdf.add_page()
     pdf.section_title(f"Background Activity ({len(background)})")
     pdf.set_font("Helvetica", "", 8.5)
     pdf.set_text_color(*INK_3)
@@ -617,11 +624,16 @@ def _draw_background(pdf: _ReportPDF, background: list[dict]):
     counts = Counter(_background_label(ev) for ev in background)
     grouped = counts.most_common(20)
     val_w = 22
+    # Same manual-pagination-with-auto-break-OFF dance as _draw_rows below, and
+    # for the same reason: this loop drives the cursor with set_y(), so leaving
+    # fpdf2's auto-break armed lets it fire inside a row's own cell() calls
+    # while the loop still holds the stale pre-break y -- two page breaks for
+    # one overflow, which is what produces a page holding a single orphan row.
+    pdf.set_auto_page_break(auto=False)
     for label, count in grouped:
-        y = pdf.get_y()
-        if y + 6 > pdf.h - 20:
+        if pdf.get_y() + 6 > pdf.h - 20:
             pdf.add_page()
-            y = pdf.get_y()
+        y = pdf.get_y()
         pdf.set_xy(MARGIN, y)
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(*INK)
@@ -630,6 +642,7 @@ def _draw_background(pdf: _ReportPDF, background: list[dict]):
         pdf.set_text_color(*INK_2)
         pdf.cell(val_w, 6, f"x{count}", align="R")
         pdf.set_y(y + 6)
+    pdf.set_auto_page_break(auto=True, margin=22)
 
     remaining = len(counts) - len(grouped)
     if remaining > 0:

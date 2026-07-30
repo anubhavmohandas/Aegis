@@ -21,12 +21,17 @@ severity down: (1) the user's own trusted-item list, or (2) a startup-item
 Only two things push severity up beyond the category baseline, both
 well-established, boring heuristics from real EDR products, not guesses:
   - A new process executing from a temp/downloads-style path.
-  - A new/modified file in a watched folder with an executable-ish extension.
+  - A new/modified file in a watched folder that IS executable code -- by
+    extension, or by its magic bytes when the extension says otherwise (see
+    executable_kind), so renaming a Mach-O binary to invoice.pdf doesn't hide it.
 These are heuristics, not verdicts -- they raise the number in the UI, they
 don't block anything or make a decision for the user.
 """
 
 from __future__ import annotations
+
+import os
+from pathlib import Path
 
 from core.events import EventCategory, MonitorEvent
 from core.rule_engine import RuleVerdict, is_system_binary
@@ -77,6 +82,70 @@ _EXECUTABLE_EXTENSIONS = (
     ".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".jar", ".dll", ".sh", ".command",
 )
 
+# The half of the check that a rename cannot defeat. The extension list catches
+# `payload.exe`; this catches the same Mach-O binary saved as `invoice.pdf` --
+# which on macOS is the more realistic drop, because native Mach-O executables
+# carry NO extension at all and so never matched anything in the list above.
+#
+# Longest-prefix concerns don't arise: these are all distinct 2- and 4-byte
+# leaders, and the first match wins.
+_EXECUTABLE_MAGIC = (
+    (b"\x7fELF", "ELF"),
+    (b"MZ", "PE"),
+    (b"#!", "script"),
+    (b"\xcf\xfa\xed\xfe", "Mach-O"),   # 64-bit little-endian -- the modern default
+    (b"\xce\xfa\xed\xfe", "Mach-O"),   # 32-bit little-endian
+    (b"\xfe\xed\xfa\xcf", "Mach-O"),   # 64-bit big-endian
+    (b"\xfe\xed\xfa\xce", "Mach-O"),   # 32-bit big-endian
+    # CAFEBABE is a Mach-O universal binary AND a Java .class. No attempt is
+    # made to tell them apart: both are compiled code landing in a folder the
+    # user watches, which is the thing being flagged.
+    (b"\xca\xfe\xba\xbe", "universal binary or Java class"),
+    (b"\xbe\xba\xfe\xca", "universal binary"),
+)
+
+
+def _magic_bytes(path: str) -> bytes:
+    """First 4 bytes of `path`, or b"" if it can't be read as a regular file.
+
+    Every failure returns b"" on purpose. The file may already be gone (a
+    create-then-delete race is normal in a watched folder), sit on a volume
+    that just disconnected, or simply not be readable by this user. None of
+    those are evidence of anything, and the extension check runs regardless --
+    content sniffing only ever ADDS detections, it can never remove one.
+    """
+    try:
+        if not Path(path).is_file():
+            return b""   # missing, a directory, or a socket/FIFO/device node
+        # O_NONBLOCK is load-bearing, not decoration: opening a FIFO for reading
+        # BLOCKS until a writer appears, and this runs inline on the single
+        # dispatcher thread -- a named pipe swapped in behind the is_file()
+        # check would stall all event processing, for every collector, forever.
+        # Windows has no O_NONBLOCK, hence the getattr.
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        try:
+            return os.read(fd, 4)
+        finally:
+            os.close(fd)
+    except OSError:
+        return b""
+
+
+def executable_kind(path: str) -> str | None:
+    """What kind of executable `path` is (".exe", "Mach-O", ...), or None.
+
+    Shared with core/signals.py so that "is this an executable drop" has exactly
+    one answer -- the severity number and the drawer's explanation of that
+    number must never be able to disagree about it.
+    """
+    if not path:
+        return None
+    ext = next((e for e in _EXECUTABLE_EXTENSIONS if path.lower().endswith(e)), None)
+    if ext:
+        return ext   # no file read needed, and still works once the file is deleted
+    magic = _magic_bytes(path)
+    return next((name for sig, name in _EXECUTABLE_MAGIC if magic.startswith(sig)), None)
+
 
 def _bump(level: str, steps: int = 1) -> str:
     idx = SEVERITY_ORDER.index(level)
@@ -120,8 +189,7 @@ class SeverityEngine:
                     level = "low"
 
         if event.category in (EventCategory.FILE_CREATED, EventCategory.FILE_MODIFIED):
-            path = str(event.details.get("path", "")).lower()
-            if any(path.endswith(ext) for ext in _EXECUTABLE_EXTENSIONS):
+            if self._note_executable(event, str(event.details.get("path", ""))):
                 level = _bump(level, steps=2)  # low -> high: an executable dropped in a watched folder is worth surfacing
 
         if event.category == EventCategory.FILE_MOVED:
@@ -131,11 +199,27 @@ class SeverityEngine:
             # rename it to "payload.exe" (only on_moved fires -- if this checked
             # src_path instead of dest_path, the rename to an executable
             # extension would go completely unclassified).
-            dest = str(event.details.get("dest_path", "")).lower()
-            if any(dest.endswith(ext) for ext in _EXECUTABLE_EXTENSIONS):
+            if self._note_executable(event, str(event.details.get("dest_path", ""))):
                 level = _bump(level, steps=2)
 
         return level
+
+    @staticmethod
+    def _note_executable(event: MonitorEvent, path: str) -> str | None:
+        """Classify `path`, and RECORD the answer on the event.
+
+        Recorded rather than left to be recomputed, because core/signals.py
+        derives the drawer's explanation on every dashboard read -- long after
+        the file may have been deleted, replaced, or unmounted. Sniffing content
+        there would put a disk read on every poll of every visible row, and
+        would let the drawer say "not executable" underneath a severity this
+        engine raised for precisely the opposite reason. Detected once, here,
+        while the file still exists; stored in details_json by _persist.
+        """
+        kind = executable_kind(path)
+        if kind:
+            event.details["exec_kind"] = kind
+        return kind
 
 
 if __name__ == "__main__":

@@ -160,8 +160,18 @@ def signals_for(event: dict) -> list[dict]:
 
     file_path = str(details.get("dest_path") or details.get("path") or "").lower()
     if source == "folder" and file_path:
-        ext = next((e for e in _EXECUTABLE_EXTENSIONS if file_path.endswith(e)), None)
-        out.append(_sig("executable_drop", "bad", ext=ext) if ext
+        # exec_kind is written by core/severity_engine at DETECTION time, when
+        # the file still existed -- including the magic-byte verdict for things
+        # whose extension lies. Deliberately not recomputed here: this function
+        # runs on every dashboard poll for every visible row, and the file is
+        # frequently long gone by then.
+        #
+        # Rows persisted before exec_kind existed fall back to the extension
+        # check, so the whole existing store keeps explaining itself correctly
+        # rather than silently reclassifying as "not executable".
+        kind = details.get("exec_kind") or next(
+            (e for e in _EXECUTABLE_EXTENSIONS if file_path.endswith(e)), None)
+        out.append(_sig("executable_drop", "bad", ext=kind) if kind
                    else _sig("not_executable", "ok"))
 
     if category == "startup_item_added":
