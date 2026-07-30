@@ -132,27 +132,52 @@ class FolderMonitor:
         self.observer = Observer()
 
     def start(self):
-        # Confirmed bug: watchdog's Windows backend (ReadDirectoryChangesW)
-        # calls CreateFileW synchronously inside Observer.start() itself --
-        # if `folder` doesn't exist, that raises straight out of start(),
-        # which propagates out of main.py's unguarded startup loop and kills
-        # the whole process before the dispatcher/tray ever comes up. macOS's
-        # FSEvents backend happens to be lenient about this, so the bug was
-        # Windows-only. Every other collector that schedules a watchdog path
-        # (macos/windows/linux startup_monitor.py) already guards with
-        # `if path.exists()`; this was the one place that guard was missing.
+        # Confirmed bug behind the is_dir() guard below: watchdog's Windows
+        # backend (ReadDirectoryChangesW) calls CreateFileW synchronously while
+        # the emitter starts -- if `folder` doesn't exist that raises straight
+        # out of this method, propagates through main.py's unguarded startup
+        # loop, and kills the whole process before the dispatcher/tray ever
+        # comes up. macOS's FSEvents backend happens to be lenient about this,
+        # so the bug was Windows-only. Every other collector that schedules a
+        # watchdog path (macos/windows/linux startup_monitor.py) already guards
+        # with `if path.exists()`; this was the one place that guard was
+        # missing. The try/except below is the second line of defense, for the
+        # folders that DO exist and still can't be watched.
         handler = _Handler(self.out_queue, self.ignores)
+        # Observer FIRST, watches after. watchdog only starts an emitter inside
+        # schedule() once the observer is already alive; scheduled beforehand,
+        # every emitter is instead started by observer.start(), so the first
+        # folder that fails takes the whole call -- and with it folder
+        # monitoring entirely -- down with one exception. Started first, each
+        # schedule() raises at its own folder and can be contained to it.
+        self.observer.start()
         for folder in self.folders:
-            if Path(folder).is_dir():
+            if not Path(folder).is_dir():
+                logger.warning("Watched folder does not exist, skipping: %s", folder)
+                continue
+            try:
                 # Recursive: a drop into ~/Downloads/installer/ was previously
                 # invisible, which made "watch my Downloads folder" mean
                 # something narrower than anyone reading it would assume.
                 # _DEFAULT_IGNORES is what keeps this from drowning the
                 # dispatcher in .git and node_modules churn.
                 self.observer.schedule(handler, folder, recursive=True)
-            else:
-                logger.warning("Watched folder does not exist, skipping: %s", folder)
-        self.observer.start()
+            except OSError as e:
+                # Linux, and only since watches became recursive: inotify burns
+                # one watch descriptor PER DIRECTORY and
+                # fs.inotify.max_user_watches (commonly 8192) is a per-user cap
+                # shared with every other watcher on the box, so a deep
+                # Documents tree can exhaust it with ENOSPC. Windows can land
+                # here too (ReadDirectoryChangesW opens the directory handle
+                # synchronously) for a folder that exists but can't be opened.
+                # Note folder_ignore_patterns does NOT help: it filters events
+                # after the fact, it does not prune the watched tree.
+                logger.error(
+                    "Could not watch %s (%s) -- continuing without it, remaining folders "
+                    "are unaffected. On Linux this is usually the inotify watch limit: "
+                    "raise it with `sudo sysctl -w fs.inotify.max_user_watches=524288` "
+                    "(persist in /etc/sysctl.d/) or narrow watched_folders in config.yaml.",
+                    folder, e)
 
     def stop(self):
         self.observer.stop()

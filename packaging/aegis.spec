@@ -87,7 +87,7 @@ hiddenimports = ["anthropic", "openai", "certifi"]
 # tkinter only excluded on macOS: the tray's password/info dialogs use native
 # NSAlert there, but desktop_app._prompt_password_tk needs tkinter on
 # Windows/Linux -- excluding it everywhere silently broke the packaged tray Stop.
-excludes = ["PySide6", "pytest"]
+excludes = ["pytest"]
 
 if IS_MAC:
     # WebKit/PyObjCTools are pywebview's Cocoa backend (webview/platforms/cocoa.py)
@@ -95,12 +95,20 @@ if IS_MAC:
     # were: PyInstaller's static scan is unreliable specifically for PyObjC's
     # Objective-C bridge modules.
     hiddenimports += ["AppKit", "Foundation", "objc", "WebKit", "PyObjCTools"]
-    excludes += ["tkinter", "windows", "linux", "plyer", "pyudev", "wmi", "win32com", "win32api", "etw"]
+    excludes += ["tkinter", "windows", "linux", "plyer", "pyudev", "wmi", "win32com",
+                 "win32api", "etw", "PySide6"]
 elif IS_WIN:
     hiddenimports += ["plyer.platforms.win.notification"]
-    excludes += ["macos", "linux", "pyudev", "AppKit", "Foundation", "objc"]
+    excludes += ["macos", "linux", "pyudev", "AppKit", "Foundation", "objc", "PySide6"]
 else:
-    hiddenimports += ["plyer.platforms.linux.notification"]
+    # PySide6 is excluded on mac/Windows (only ui/timeline_app.py wants it, and
+    # the bundle ships desktop_app.py) but must NOT be on Linux: pywebview has
+    # exactly two GUI backends there, GTK/WebKitGTK -- apt-only, invisible to a
+    # venv -- and Qt. PySide6 + qtpy is the pip-installable one, so excluding it
+    # builds an app that dies at webview.start() with "You must have either QT
+    # or GTK with Python extensions installed". See requirements-linux.txt.
+    hiddenimports += ["plyer.platforms.linux.notification", "qtpy",
+                      "PySide6.QtWebEngineWidgets", "webview.platforms.qt"]
     excludes += ["windows", "macos", "wmi", "win32com", "win32api", "etw",
                  "AppKit", "Foundation", "objc"]
 

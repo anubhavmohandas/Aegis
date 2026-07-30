@@ -121,8 +121,13 @@ def _magic_bytes(path: str) -> bytes:
         # BLOCKS until a writer appears, and this runs inline on the single
         # dispatcher thread -- a named pipe swapped in behind the is_file()
         # check would stall all event processing, for every collector, forever.
-        # Windows has no O_NONBLOCK, hence the getattr.
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        # Windows has no O_NONBLOCK, hence the getattr; O_BINARY is the mirror
+        # image -- Windows-only and REQUIRED there, because os.open defaults to
+        # text mode, which strips CR before LF and treats 0x1A as EOF. Magic
+        # bytes are binary by definition, so a translated read is a
+        # misidentified file.
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+                     | getattr(os, "O_BINARY", 0))
         try:
             return os.read(fd, 4)
         finally:

@@ -324,7 +324,11 @@ def _connect_ro(db_path: str) -> sqlite3.Connection:
     # One short-lived read-only connection per request. This dashboard serves
     # one user on localhost; connection reuse isn't worth sharing state across
     # ThreadingHTTPServer threads.
-    conn = sqlite3.connect(f"file:{Path(db_path).resolve()}?mode=ro", uri=True, timeout=5)
+    # as_uri() rather than f"file:{path}": a URI filename is percent-DECODED by
+    # SQLite, so a literal "%2F" (or any %XX) in the real path silently opened
+    # the wrong file, and on Windows a raw "C:\..." is not a valid file: URI
+    # body at all. as_uri() escapes and produces file:///C:/... correctly.
+    conn = sqlite3.connect(f"{Path(db_path).resolve().as_uri()}?mode=ro", uri=True, timeout=5)
     conn.row_factory = sqlite3.Row
     return conn
 
