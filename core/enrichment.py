@@ -42,11 +42,11 @@ import ssl
 import time
 import urllib.error
 import urllib.request
-from collections import deque
 
 import certifi
 
 from core.events import EventCategory, MonitorEvent
+from core.metrics import RateCounter
 from core.rule_engine import _sha256_of  # reuse: same size cap + locked-file handling
 from core.severity_engine import SEVERITY_ORDER, _SUSPICIOUS_PATH_FRAGMENTS
 
@@ -143,7 +143,9 @@ class ThreatEnricher:
     def __init__(self, config):
         self.config = config
         self._conn: sqlite3.Connection | None = None
-        self._minute_bucket: deque[float] = deque()
+        # Shared rolling-window limiter (core/metrics.py) -- the dispatcher's
+        # AI-explain ceiling uses the same one.
+        self._vt_budget = RateCounter(window_seconds=60)
         self._auth_failed = False          # bad key: fail once, log once, stop calling until restart
         self._quota_backoff_until = 0.0
 
@@ -240,13 +242,7 @@ class ThreatEnricher:
             return None
 
     def _under_budget(self) -> bool:
-        now = time.time()
-        while self._minute_bucket and now - self._minute_bucket[0] > 60:
-            self._minute_bucket.popleft()
-        if len(self._minute_bucket) >= _VT_BUDGET_PER_MINUTE:
-            return False
-        self._minute_bucket.append(now)
-        return True
+        return self._vt_budget.admit(_VT_BUDGET_PER_MINUTE)
 
     # --- cache (same SQLite file as the event store, own table) ------------
 

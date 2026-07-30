@@ -57,7 +57,7 @@ def _load_env_file(path: Path = ENV_FILE_PATH) -> None:
     """Minimal .env loader (KEY=VALUE lines, # comments). Deliberately
     dependency-free -- python-dotenv would be a whole package for these ten
     lines. Variables already set in the real shell environment always win;
-    the file only fills gaps, so `NVIDIA_API_KEY=other venv/bin/python main.py`
+    the file only fills gaps, so `NVIDIA_API_KEY=x venv/bin/python desktop_app.py`
     still behaves the way anyone would expect."""
     if not path.exists():
         return
@@ -118,7 +118,7 @@ class AppConfig:
     @property
     def api_key(self) -> str | None:
         # A real shell/process env var always wins (lets a developer override
-        # with `NVIDIA_API_KEY=other python main.py` regardless of what's
+        # with `NVIDIA_API_KEY=other python desktop_app.py` regardless of what's
         # stored). Otherwise fall back to the encrypted local store the
         # dashboard's Settings page writes to (see core/secrets_store.py).
         env_value = os.environ.get(self.ai_api_key_env)

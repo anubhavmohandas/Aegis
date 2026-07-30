@@ -10,7 +10,7 @@ exercise against a live kernel interface, not just read the docs for.
 
 Not in the client's requested scope (Windows + macOS only), but it's the
 strongest evidence this architecture actually works end to end -- see
-main.py and the project's verification notes for a live run.
+the project's verification notes for a live run.
 """
 
 from __future__ import annotations

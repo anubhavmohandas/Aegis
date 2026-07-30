@@ -62,11 +62,15 @@ Add your AI provider's API key from Settings → AI Explainer — it's encrypted
 rest and, unlike the old `.env`-file approach, **survives every self-update**,
 so you only ever type it once.
 
-Prefer a headless/background process with no window (e.g. a server, or a
-machine you SSH into)? `python main.py` runs the same monitors as a system-tray
-app instead, and still reads `config/config.yaml` / an optional `.env` file
-(`NVIDIA_API_KEY=nvapi-...`) directly for anyone who'd rather configure by
-hand than through the dashboard.
+Want the window out of the way? Hide Aegis from the More menu (or the menu-bar /
+tray icon): the window and Dock icon go away, monitoring keeps running, and the
+menu-bar icon stays as the way back. `config/config.yaml` and an optional `.env`
+file (`NVIDIA_API_KEY=nvapi-...`) are still read directly, for anyone who'd
+rather configure by hand than through the dashboard.
+
+To read an existing event store without starting monitoring at all:
+`python dashboard/server.py --db aegis_events.db` serves the console as a
+read-only viewer.
 
 The AI layer speaks to any OpenAI-compatible endpoint (NVIDIA, OpenAI,
 OpenRouter, local Ollama) or Anthropic — pick provider/model/key from the
@@ -104,7 +108,7 @@ flowchart LR
   AI -->|explanation backfilled| DB
   AI --> NOTIF["desktop notification"]
 
-  DB --> UI["Dashboard · desktop_app.py<br/>Tray · main.py"]
+  DB --> UI["Desktop app · desktop_app.py<br/>window + menu-bar/tray"]
   UI -.->|Ask Aegis · Daily Brief · PDF report| AI
 ```
 
@@ -156,9 +160,9 @@ Read the ticks below, not the number above.
   involved on Mac)
 - ✅ Noise reduction: opt-in trusted lists, dedupe, rate limiting, and a
   configurable popup severity floor
-- ✅ Desktop app (`desktop_app.py`) — one window: live console + Settings,
-  wrapping the dashboard below; `main.py`'s tray-only mode still exists for
-  headless use
+- ✅ Desktop app (`desktop_app.py`) — one window and one process: live console +
+  Settings wrapping the dashboard below, plus a menu-bar/tray icon (Hide, Start
+  and password-gated Stop, Quit) so it can run with no window on screen
 - ✅ Dashboard UI — live timeline with filters/search (repeated same-source
   events collapse into one expandable group), AI-generated PDF report export,
   and a Settings page (AI provider/key, notifications, watched folders, trust

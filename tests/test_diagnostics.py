@@ -138,7 +138,6 @@ def _server(db_path):
     S.DATA_DIR = _TMP
     S.CONFIG_PATH = _TMP / "config.yaml"
     S.CREDENTIALS_PATH = _TMP / "credentials.json"
-    S.MONITOR_STATE_FILE = _TMP / ".aegis_monitor.json"
     S.DashboardHandler.db_path = db_path
     return S
 

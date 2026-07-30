@@ -85,7 +85,7 @@ jobs:
           pip install -r requirements-common.txt -r requirements-windows.txt pyinstaller
 
       - name: Runtime smoke validation
-        run: python packaging/validate_runtime.py --skip-timeline
+        run: python packaging/validate_runtime.py
 
       - name: Build PyInstaller bundle
         run: pyinstaller packaging/aegis.spec

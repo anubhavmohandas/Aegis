@@ -4,7 +4,6 @@ Runtime smoke checks used by local validation and CI packaging workflows.
 What this verifies:
 1) Core module imports that should always load in a healthy environment.
 2) Dashboard HTTP server can start and serve the login page.
-3) Timeline UI can construct and enter the Qt event loop once (offscreen).
 
 The script is intentionally strict: any failed check returns a non-zero exit
 code so CI fails fast instead of publishing a broken package.
@@ -14,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import importlib
-import os
 import socket
 import sys
 import threading
@@ -27,23 +25,16 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-def _import_smoke(include_timeline: bool = True) -> None:
-    modules = [
+def _import_smoke() -> None:
+    for module in (
         "core.version",
         "core.config",
+        "core.collectors",
         "core.dispatcher",
         "core.updater",
         "dashboard.server",
         "desktop_app",
-        "main",
-    ]
-    if include_timeline:
-        # ui.timeline_app imports PySide6 at module level -- environments that
-        # pass --skip-timeline (because Qt isn't installed/wanted there) must
-        # not have the import smoke fail on the exact dependency the flag
-        # exists to avoid.
-        modules.append("ui.timeline_app")
-    for module in modules:
+    ):
         importlib.import_module(module)
 
 
@@ -83,46 +74,19 @@ def _dashboard_server_smoke(host: str, port: int) -> None:
         thread.join(timeout=3)
 
 
-def _timeline_offscreen_smoke(db_path: str) -> None:
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-    from PySide6.QtCore import QTimer
-    from PySide6.QtWidgets import QApplication
-
-    from core.database import EventStore
-    from ui.timeline_app import TimelineWindow
-
-    app = QApplication.instance() or QApplication([])
-    window = TimelineWindow(EventStore(db_path))
-    window.show()
-    QTimer.singleShot(200, app.quit)
-    app.exec()
-    window.close()
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0, help="0 means auto-pick a free port")
-    parser.add_argument("--skip-timeline", action="store_true", help="Skip Qt timeline smoke check")
     args = parser.parse_args()
 
     try:
-        _import_smoke(include_timeline=not args.skip_timeline)
+        _import_smoke()
         print("import_smoke_ok")
 
         port = args.port if args.port else _pick_free_port(args.host)
         _dashboard_server_smoke(args.host, port)
         print("dashboard_server_smoke_ok")
-
-        if args.skip_timeline:
-            print("timeline_smoke_skipped")
-        else:
-            from core.config import load_config
-
-            cfg = load_config()
-            _timeline_offscreen_smoke(cfg.db_path)
-            print("timeline_offscreen_smoke_ok")
     except Exception as exc:
         print(f"runtime_validation_failed: {exc}", file=sys.stderr)
         return 1

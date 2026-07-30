@@ -5,14 +5,21 @@ pyudev>=0.24
 # scope (Windows + macOS); included because it's the collector set that
 # could actually be verified end-to-end in a Linux sandbox during development.
 
+PySide6>=6.8
 qtpy
-# pywebview's window needs a GUI backend, and on Linux it has exactly two:
-# GTK (PyGObject + WebKitGTK -- apt packages a plain venv cannot see) or Qt.
-# PySide6 is already in requirements-common and ships QtWebEngineWidgets, and
-# qtpy is the thin shim `webview.platforms.qt` actually imports. Without this
-# line `python desktop_app.py` dies at start() with "You must have either QT
-# or GTK with Python extensions installed" -- verified: adding qtpy alone makes
-# that import resolve to PySide6/qtwebengine.
+# LINUX ONLY, and load-bearing here even though nothing in Aegis imports Qt
+# directly: pywebview's window needs a GUI backend, and on Linux it has exactly
+# two -- GTK (PyGObject + WebKitGTK, apt packages a plain venv cannot see) or
+# Qt. PySide6 ships QtWebEngineWidgets and qtpy is the thin shim
+# `webview.platforms.qt` actually imports. Without these two lines
+# `python desktop_app.py` dies at start() with "You must have either QT or GTK
+# with Python extensions installed" -- verified: qtpy alone makes that import
+# resolve to PySide6/qtwebengine.
+#
+# It used to sit in requirements-common for ui/timeline_app.py (a read-only
+# PySide6 timeline viewer, since deleted -- the dashboard superseded it). That
+# made every macOS and Windows install pay for a Qt runtime that
+# packaging/aegis.spec then excluded from the bundle anyway.
 
 # Not pip-installable -- install with apt (Debian/Kali/Ubuntu):
 #
@@ -24,7 +31,8 @@ qtpy
 #                    with no dialog available the window refuses to close and
 #                    the only way out is killing the process (or turning off
 #                    tamper protection in Settings first).
-#   libnotify-bin -- desktop popups via plyer; only matters with
+#   libnotify-bin -- provides notify-send, which core/notifier.py calls
+#                    directly for desktop popups; only matters with
 #                    notify_enabled: true. Without it notifications fall back
 #                    to a printed line, nothing else breaks.
 #

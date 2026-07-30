@@ -31,7 +31,13 @@ logger = logging.getLogger("aegis.report_generator")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOGO_PATH = REPO_ROOT / "assets" / "logo.png"
 
-SEVERITY_ORDER = ["critical", "high", "medium", "low"]
+# WORST FIRST -- this is display order for the report's tables, bars and
+# legends, deliberately the REVERSE of core/severity_engine.SEVERITY_ORDER,
+# which is a low->critical ranking used for comparisons (`>= notify floor`).
+# Two module-level constants with the same name and opposite orders is how
+# someone imports the wrong one and inverts a severity test, so this one is
+# named for what it is.
+_SEV_DISPLAY_ORDER = ["critical", "high", "medium", "low"]
 # Medium is on the important side of the line deliberately: it is where the
 # screenshot / LOLBin / USB-insert events land, which are precisely the ones a
 # reader is opening the report to check on.
@@ -138,7 +144,7 @@ def _safe(text) -> str:
 
 def _sev_key(ev: dict) -> int:
     sev = ev.get("severity", "low")
-    return SEVERITY_ORDER.index(sev) if sev in SEVERITY_ORDER else len(SEVERITY_ORDER)
+    return _SEV_DISPLAY_ORDER.index(sev) if sev in _SEV_DISPLAY_ORDER else len(_SEV_DISPLAY_ORDER)
 
 
 class _ReportPDF(FPDF):
@@ -184,7 +190,7 @@ def _summary_prompt_block(events: list[dict], stats: dict, range_label: str) -> 
     lines = [
         f"Report period: {range_label}",
         f"Total events: {stats['total']}",
-        "By severity: " + ", ".join(f"{k}={stats['by_severity'].get(k, 0)}" for k in SEVERITY_ORDER),
+        "By severity: " + ", ".join(f"{k}={stats['by_severity'].get(k, 0)}" for k in _SEV_DISPLAY_ORDER),
         # Parenthesized so `or "none"` applies to the join, not the whole
         # concatenation (which is always truthy -- the fallback never fired).
         "By source: " + (", ".join(f"{SOURCE_LABELS.get(k, k)}={v}" for k, v in stats["by_source"].items()) or "none"),
@@ -531,7 +537,7 @@ def _draw_stat_tiles(pdf: _ReportPDF, stats: dict):
 
 
 def _draw_severity_bar(pdf: _ReportPDF, stats: dict):
-    total = sum(stats["by_severity"].get(s, 0) for s in SEVERITY_ORDER)
+    total = sum(stats["by_severity"].get(s, 0) for s in _SEV_DISPLAY_ORDER)
     _ensure_room(pdf, 20)   # bar + legend row, both rect()-drawn
     y = pdf.get_y()
     bar_h = 6
@@ -541,7 +547,7 @@ def _draw_severity_bar(pdf: _ReportPDF, stats: dict):
         pdf.rect(MARGIN, y, CONTENT_W, bar_h, style="DF")
     else:
         x = MARGIN
-        for sev in SEVERITY_ORDER:
+        for sev in _SEV_DISPLAY_ORDER:
             count = stats["by_severity"].get(sev, 0)
             if not count:
                 continue
@@ -553,7 +559,7 @@ def _draw_severity_bar(pdf: _ReportPDF, stats: dict):
 
     pdf.set_font("Helvetica", "", 8.5)
     legend_x = MARGIN
-    for sev in SEVERITY_ORDER:
+    for sev in _SEV_DISPLAY_ORDER:
         count = stats["by_severity"].get(sev, 0)
         pdf.set_xy(legend_x, pdf.get_y())
         pdf.set_fill_color(*SEV_COLOR[sev])

@@ -20,9 +20,9 @@ Aegis/
                        by the dashboard, rendered — never re-derived — by app.js
     enrichment.py      opt-in VirusTotal hash lookup + local MITRE ATT&CK annotations,
                        attached to the event BEFORE the AI runs (see "Threat enrichment")
-    database.py        SQLite event history (read by ui/timeline_app.py)
+    database.py        SQLite event history (written here, read mode=ro by the dashboard)
     dispatcher.py       queue -> dedupe -> rule engine -> severity -> rate-limit -> enrich -> AI -> notify -> persist
-    notifier.py         desktop notifications, per platform (macOS: osascript primary; Windows/Linux: plyer)
+    notifier.py         desktop notifications, per platform (macOS: osascript, Linux: notify-send, Windows: plyer)
     folder_monitor.py   watchdog-based folder watching (real-time on all OSes)
     session_monitor.py  screen lock/unlock detection -- brackets "Away Sessions"
     evidence.py        tamper evidence: repeated failed auth on a protected action
@@ -30,7 +30,7 @@ Aegis/
     report_generator.py AI executive summary -> printable PDF (fpdf2, pure Python)
     secrets_store.py   encrypted-at-rest API-key storage that survives self-update
     updater.py         self-update from GitHub Releases (explicit user click only)
-    tray_app.py         system tray icon (pystray)
+    collectors.py      per-OS collector wiring (build_platform_monitors)
   windows/            Windows collector
     process_monitor.py  ETW (pywintrace) with WMI polling fallback
     usb_monitor.py       WMI Win32_PnPEntity creation/deletion events
@@ -43,10 +43,19 @@ Aegis/
     process_monitor.py  psutil polling diff (same tradeoff as macOS)
     usb_monitor.py       pyudev netlink monitor (real-time, kernel-sourced)
     startup_monitor.py   XDG autostart .desktop files (watchdog)
-  ui/
-    timeline_app.py     read-only PySide6 timeline viewer over the SQLite store
-  main.py              entry point: detects OS, wires collectors, runs tray + dispatcher
+  desktop_app.py       THE entry point: collectors + dispatcher + dashboard server
+                       + a native pywebview window, one process
 ```
+
+Two things that used to be here are gone, both for the same reason: a second way
+to run Aegis that nobody shipped, whose only lasting effect was bugs in the way
+everybody did. `main.py` was a tray-only entry point (its collector wiring
+survives as `core/collectors.py`), and the dashboard could drive it as a separate
+process over a pidfile -- in a frozen build that spawned a second whole copy of
+the app, and a stale pidfile could make Stop Monitoring terminate the app itself.
+`ui/timeline_app.py` was a read-only PySide6 timeline the dashboard superseded;
+it was never bundled, and it kept PySide6 (a Qt runtime) in the dependency list
+of every macOS and Windows install for nothing.
 
 Every collector's only contract is: produce `MonitorEvent` objects and push
 them onto the shared queue. The dispatcher, AI explainer, database, and UI
@@ -82,7 +91,7 @@ Collector (OS-specific)
    explanation lands + the already-persisted row updated in place
        |
        v
-  ui/timeline_app.py reads the SQLite store on demand, independent process
+  The dashboard reads the SQLite store mode=ro on its own thread
 ```
 
 Severity is computed before the rate limiter specifically so a burst of
@@ -225,20 +234,18 @@ is still pending.
 ## Validation status — v2.0.5
 
 Be precise about what "done" means: everything below was run via
-`python3 main.py` from source unless explicitly called out otherwise.
+`python3 desktop_app.py` from source unless explicitly called out otherwise.
 
 ```
-macOS, from source (python3 main.py):
+macOS, from source (python3 desktop_app.py):
   [x] Launches, runs continuously without crashing
   [x] Process monitor    -- real spawns detected (git, browser helpers, system daemons)
   [x] Folder monitor     -- real create/modify/delete cycle detected, severity correct
   [x] USB monitor        -- real mount/unmount detected (after the SPStorageDataType fix)
   [x] Notifications       -- real banners confirmed on screen (after the osascript fix)
   [x] Rule engine / severity / rate limiting -- all confirmed against real event bursts
-  [ ] Tray icon visually confirmed in the menu bar -- never explicitly checked
+  [ ] Menu-bar icon visually confirmed -- never explicitly checked
   [ ] AI explanations against a real API key -- only tested key-less so far
-  [x] Timeline UI (ui/timeline_app.py) offscreen smoke run (window creation + event load path)
-      succeeds in a headless Qt run; still not visually confirmed on a desktop.
   [x] Packaged .app -- built with PyInstaller (packaging/aegis.spec) and
       smoke-run on real Apple Silicon hardware: version banner, NSWorkspace
       observer, USB baseline, rule-engine gating of real daemons, a real
@@ -247,7 +254,7 @@ macOS, from source (python3 main.py):
       ~/Library/Application Support/Aegis. Tray icon visibility still not
       explicitly confirmed (same caveat as the source run).
 
-Windows, from source (python main.py, real hardware):
+Windows, from source (python desktop_app.py, real hardware):
   [x] Process/USB/startup monitoring validated via WMI polling fallback
   [ ] Packaged bundle + installer + self-update still unverified on real hardware
 ```
@@ -259,7 +266,7 @@ a background thread) didn't cause a hang — the app ran continuously for
 but the tray icon's actual visibility in the menu bar hasn't been confirmed
 separately from "didn't crash."
 
-If `python main.py` works but a packaged `.exe`/`.app` doesn't, that's a
+If `python desktop_app.py` works but a packaged `.exe`/`.app` doesn't, that's a
 packaging problem (hidden imports, missing bundled data files), not a
 monitoring-logic bug — see "Packaging" below before debugging the wrong
 layer. Use `TEST_REPORT_TEMPLATE.md` for anything that doesn't match
@@ -290,10 +297,13 @@ Windows (ADR-008 applies).
 **Known PyInstaller gotchas the spec already handles — check these before
 debugging anything else if you modify it:** `config/config.yaml` and
 `assets/tray_icon.png` are read relative to the module location and must be
-bundled explicitly as data files (`core/config.py` and `core/tray_app.py`
-fall back gracefully if missing — defaults / placeholder shield icon — so a
-missing bundle silently runs with the wrong config and icon, which looks
-like a bug and isn't one). plyer loads its per-OS backend by string name at
+bundled explicitly as data files (`core/config.py` and
+`desktop_app._load_icon_image` fall back gracefully if missing — defaults /
+placeholder shield icon — so a missing bundle silently runs with the wrong
+config and icon, which looks like a bug and isn't one). `cv2`/`numpy` are
+excluded outright: 118MB of a 165MB bundle for the optional webcam frame, which
+`core/evidence.py` already degrades cleanly without. plyer loads its per-OS
+backend by string name at
 runtime, so on Windows it must be a hidden import or notifications silently
 drop to the print fallback. And relative `log_path`/`db_path` would be
 written to `/` from a Finder-launched `.app` — `core/config.py` anchors
@@ -340,9 +350,7 @@ them to a per-user data dir when running frozen.
    verification"), and Windows source runs have now also been validated on
    real hardware via the WMI fallback path. What is still missing is the
    Windows packaged-build/installer/self-update validation path on real
-   hardware. The PySide6 timeline UI now passes import/syntax checks plus an
-   offscreen smoke run (window + event loading path), but still has no
-   explicit visual desktop confirmation on either platform.
+   hardware.
 
 ## On the "Aegis" name
 

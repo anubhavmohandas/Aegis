@@ -18,13 +18,18 @@ a fallback. History of this decision (v1 -> v2):
   long-documented AppleScript feature. The alternative -- a native
   UNUserNotificationCenter backend via pyobjc -- was considered and rejected
   for now: it requires the process to be a signed, bundled .app to register
-  for notifications, which is exactly what running `python main.py` from a
-  clone is not. Revisit when signed releases exist.
+  for notifications, which is exactly what running from a clone is not.
+  Revisit when signed releases exist.
 
-Windows/Linux: plyer remains the backend (it wraps the win32 toast APIs and
-libnotify respectively, and works there). Per ADR-008, the Windows path is
-not restructured without Windows hardware evidence -- this change only stops
-macOS from routing through a backend known-broken on macOS.
+Linux: `notify-send` directly, for the same reason as macOS. plyer's Linux
+backend shells out to exactly this binary, and requirements-linux.txt already
+tells the user to `apt install libnotify-bin` to get it -- so plyer was a
+dependency wrapping a subprocess call to a program we require by hand anyway.
+One less layer between "send a notification" and the thing that sends it.
+
+Windows: plyer remains the backend -- it wraps the win32 toast APIs, which is
+real work, not a subprocess. Per ADR-008 the Windows path is not restructured
+without Windows hardware evidence.
 
 The `print` fallback is last resort on every platform: notification backends
 are the most environment-fragile part of this app, and a notification
@@ -46,12 +51,15 @@ def notify(title: str, message: str) -> None:
     message = (message[:250] + "…") if len(message) > 250 else message
     branded_title = f"Aegis — {title}"
 
-    if platform.system() == "Darwin":
-        if _notify_macos(branded_title, message):
-            return
+    system = platform.system()
+    if system == "Darwin":
+        backend = _notify_macos
+    elif system == "Linux":
+        backend = _notify_linux
     else:
-        if _notify_plyer(branded_title, message):
-            return
+        backend = _notify_plyer
+    if backend(branded_title, message):
+        return
 
     print(f"[NOTIFY-FALLBACK] {branded_title}: {message}")
 
@@ -78,6 +86,20 @@ def _notify_macos(branded_title: str, message: str) -> bool:
         return True
     except Exception as e:
         logger.warning("macOS osascript notification failed: %s | %s | %s", e, branded_title, message)
+        return False
+
+
+def _notify_linux(branded_title: str, message: str) -> bool:
+    try:
+        # argv, not a shell string -- title/message contain attacker-influenced
+        # text (filenames, process names), same reasoning as _notify_macos.
+        # `--` stops a message starting with "-" being read as an option.
+        subprocess.run(["notify-send", "--app-name=Aegis", "--", branded_title, message],
+                       check=True, capture_output=True, timeout=5)
+        return True
+    except Exception as e:
+        # Almost always libnotify-bin not installed (see requirements-linux.txt).
+        logger.warning("notify-send failed (%s): %s | %s", e, branded_title, message)
         return False
 
 

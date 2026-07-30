@@ -154,7 +154,7 @@ def build_tray_icon() -> Image.Image:
     (monochrome) image: NSImage template mode keys off the ALPHA channel and
     ignores RGB, so this one file serves both surfaces -- macOS flattens it
     to an auto-inverting silhouette in the menu bar, while pystray on
-    Windows/Linux (core/tray_app.py) draws the same file in full colour.
+    Windows/Linux (desktop_app._load_icon_image) draws the same file in full colour.
 
     The opaque black background this replaces is what forced
     setTemplate_(False) in desktop_app.py: template mode on a fully opaque

@@ -1,15 +1,19 @@
 """
 Aegis -- desktop app entry point.
 
-This is the "just give me a real app" entry point: one process, one Dock/
-taskbar icon, one window. It starts the same monitor pipeline as main.py
-(collectors + dispatcher), runs the dashboard's HTTP server in a background
-thread instead of as a separate `python dashboard/server.py` process, and
-opens a native window (pywebview -- Cocoa/WebKit on macOS, WebView2 on
-Windows, GTK/QtWebEngine on Linux) pointed at it. Closing the window stops
-the monitors and exits, the way a normal desktop app behaves -- no invisible
-background process left over, unlike main.py's tray-only mode (still
-available for anyone who explicitly wants headless/background operation).
+THE entry point: one process, one Dock/taskbar icon, one window. It starts the
+monitor pipeline (collectors + dispatcher), runs the dashboard's HTTP server in
+a background thread, and opens a native window (pywebview -- Cocoa/WebKit on
+macOS, WebView2 on Windows, GTK/QtWebEngine on Linux) pointed at it. Closing
+the window stops the monitors and exits, the way a normal desktop app behaves
+-- no invisible background process left over.
+
+There used to be a second, tray-only entry point (main.py) that ran the same
+pipeline with no window, plus a `python dashboard/server.py` mode that drove it
+as a separate process over a pidfile. Both are gone: the branch nobody shipped
+was the source of the bugs in the branch everybody shipped (a frozen build
+spawning a second copy of itself, Stop Monitoring resolving to our own pid).
+core/collectors.py is the one piece of main.py that survived.
 
 Run with:
     python desktop_app.py
@@ -27,11 +31,13 @@ import platform
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from queue import Queue
 
 import webview
 
+from core.collectors import build_platform_monitors
 from core.config import load_config
 from core.dispatcher import Dispatcher
 from core.folder_monitor import FolderMonitor
@@ -39,7 +45,6 @@ from core.metrics import record_collectors
 from core.permissions import prime as prime_permissions
 from core.session_monitor import SessionMonitor
 from dashboard.server import MONITOR_LOG_PATH, build_server
-from main import build_platform_monitors
 
 logger = logging.getLogger("aegis.desktop_app")
 
@@ -49,15 +54,28 @@ PORT = 8787
 APP_ICON = Path(__file__).resolve().parent / "assets" / "tray_icon.png"  # square mark, not the full text lockup
 
 
+def _load_icon_image():
+    """The tray/menu-bar icon as a PIL image, for pystray (which needs an image
+    object, not a path). Falls back to a generated shield so a checkout missing
+    the asset still runs -- macOS goes through NSImage instead (see
+    _add_macos_menubar) and never calls this."""
+    from PIL import Image, ImageDraw
+
+    if APP_ICON.is_file():
+        return Image.open(APP_ICON).convert("RGBA")
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.polygon([(32, 4), (58, 16), (58, 34), (32, 60), (6, 34), (6, 16)], fill=(30, 144, 255, 255))
+    draw.polygon([(32, 14), (50, 22), (50, 33), (32, 50), (14, 33), (14, 22)], fill=(255, 255, 255, 255))
+    return img
+
+
 class MonitorPipeline:
-    """Same collectors + dispatcher wiring as main.main(), but as a
-    start/stop-able object instead of a one-shot function -- the dashboard's
+    """Collectors + dispatcher, as a start/stop-able object -- the dashboard's
     Start/Stop Monitoring button needs to actually restart this, not just
     fire once at launch. Each start() builds fresh monitor/dispatcher
     objects rather than reusing stopped ones; none of these classes are
-    documented as restart-safe, and "always construct new" is the same
-    pattern main.py already used across the app's lifetime, just repeated
-    on demand instead of once."""
+    documented as restart-safe, so "always construct new" is the pattern."""
 
     def __init__(self, config):
         self.config = config
@@ -437,20 +455,35 @@ def _add_macos_menubar(window, pipeline, on_quit):
         logger.warning("Could not schedule macOS menu-bar item", exc_info=True)
 
 
-def _prompt_password_tk(title: str, informative: str) -> str | None:
-    """tkinter (stdlib) secure-input dialog -- the Windows/Linux counterpart of
-    _prompt_password_macos. A fresh Tk root per call, created and destroyed on
-    the calling thread. Returns the password, or None if cancelled or tkinter is
-    unavailable."""
+@contextmanager
+def _tk_root():
+    """A hidden, always-on-top Tk root for one modal dialog, destroyed after.
+
+    Every tkinter dialog in this file needs the same four lines around it
+    (Tk/withdraw/topmost, then destroy in a finally) -- withdraw because we want
+    the dialog without its parent window, topmost because the dialog otherwise
+    opens behind the app, and destroy because a leaked root breaks the next
+    call. A fresh root per call, on the calling thread, is deliberate: these
+    fire from tray/menu-bar callbacks on whichever thread pystray hands us.
+
+    Raises if tkinter is missing (Debian-family pythons ship without it) -- see
+    _authorize_action, where that has to fail closed."""
     import tkinter as tk
-    from tkinter import simpledialog
     root = tk.Tk()
     root.withdraw()
     root.attributes("-topmost", True)
     try:
-        return simpledialog.askstring(title, informative, show="*", parent=root)
+        yield root
     finally:
         root.destroy()
+
+
+def _prompt_password_tk(title: str, informative: str) -> str | None:
+    """tkinter (stdlib) secure-input dialog -- the Windows/Linux counterpart of
+    _prompt_password_macos. Returns the password, or None if cancelled."""
+    from tkinter import simpledialog
+    with _tk_root() as root:
+        return simpledialog.askstring(title, informative, show="*", parent=root)
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -551,19 +584,13 @@ def _quit_summary_gate(action: str) -> bool:
                                          ["Save Report & Quit", "Quit", "Cancel"])
             notify = lambda t, m: _info_alert_macos(AppKit, t, m)
         else:
-            import tkinter as tk
             from tkinter import messagebox
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)
-            try:
+            with _tk_root() as root:
                 # askyesnocancel maps exactly onto the three choices and is
                 # stdlib -- Yes: save and quit, No: quit, Cancel: stay.
                 ans = messagebox.askyesnocancel(
                     "Aegis session summary",
                     f"{body}\n\nSave a PDF report before quitting?", parent=root)
-            finally:
-                root.destroy()
             choice = 0 if ans else (1 if ans is False else 2)
             notify = _info_alert_tk
 
@@ -669,15 +696,9 @@ def _on_closing() -> bool | None:
 
 def _info_alert_tk(title: str, message: str) -> None:
     try:
-        import tkinter as tk
         from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        try:
+        with _tk_root() as root:
             messagebox.showinfo(title, message, parent=root)
-        finally:
-            root.destroy()
     except Exception:
         logger.info("%s: %s", title, message)   # headless/no-tkinter fallback
 
@@ -693,7 +714,6 @@ def _add_pystray_tray(window, pipeline, on_quit):
         return
     try:
         import pystray
-        from core.tray_app import _load_icon_image
 
         def _open(icon, item):
             try:
@@ -831,12 +851,12 @@ def _darken_titlebar(window):
 def _wire_monitor_log() -> None:
     """The dashboard's "Log" button reads MONITOR_LOG_PATH (dashboard/server.py's
     monitor_log_tail()). That worked in the old two-process model because
-    starting main.py as a subprocess piped its stdout straight into that file
-    (see server.py's start_monitor()) -- but in this unified process, nothing
-    wrote to it at all: logging.basicConfig below only attaches a console
-    StreamHandler, invisible once packaged (no terminal). Confirmed bug: the
-    Log modal always showed "(log is empty)" for the desktop app specifically.
-    Adding a FileHandler at the same path both processes agree on fixes it.
+    starting the monitor as a subprocess piped its stdout straight into that
+    file -- but in this unified process, nothing wrote to it at all:
+    logging.basicConfig below only attaches a console StreamHandler, invisible
+    once packaged (no terminal). Confirmed bug: the Log modal always showed
+    "(log is empty)" for the desktop app specifically. Attaching a FileHandler
+    at that path fixes it.
 
     Rotating, not plain: this app is designed to sit resident for weeks, the
     root logger writes every INFO line here, and nothing ever truncated the
@@ -878,7 +898,7 @@ def main():
         # the dashboard up on this port -- reuse it rather than fail to bind.
         # The monitor pipeline we just started above is still ours; whether
         # that's a second monitor writing to the same DB is on the user, the
-        # same tradeoff as running `python main.py` twice today.
+        # same tradeoff as launching the app twice.
         logger.info("Dashboard already reachable on %s:%s -- opening a window onto it, "
                     "not starting a second server", HOST, PORT)
     else:

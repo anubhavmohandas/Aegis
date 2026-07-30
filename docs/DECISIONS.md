@@ -151,7 +151,7 @@ used on Windows/Linux.
 
 **Why not UNUserNotificationCenter via pyobjc:** registering for native
 notifications requires being a signed, bundled .app — exactly what
-`python main.py` from a clone is not. Revisit when signed releases exist.
+`python desktop_app.py` from a clone is not. Revisit when signed releases exist.
 
 **Would become wrong if:** Apple removes/breaks `display notification` in
 AppleScript (stable for a decade+), or Aegis ships signed. Verified live on

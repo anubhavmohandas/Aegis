@@ -37,7 +37,6 @@ srv.DATA_DIR = _TMP
 srv.CONFIG_PATH = _TMP / "config" / "config.yaml"
 srv.CREDENTIALS_PATH = _TMP / "credentials.json"
 srv.ENV_PATH = _TMP / ".env"
-srv.MONITOR_STATE_FILE = _TMP / ".aegis_monitor.json"
 srv.PBKDF2_ITERATIONS = 1000          # the gate is what's under test, not PBKDF2's cost
 srv._settings_unlock_until.clear()
 srv._tamper_state.clear()

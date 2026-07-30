@@ -7,7 +7,7 @@ Copy this for each test session. One template per bug/observation, not per day â
 - OS:
 - OS build/version:
 - Python version:
-- Build type: `python main.py` (source) / PyInstaller / py2app
+- Build type: `python desktop_app.py` (source) / PyInstaller / py2app
 - Build tool version (if packaged):
 - Git commit:
 
@@ -36,5 +36,5 @@ Always / Sometimes / Once
 ## Notes
 
 <!-- Anything that distinguishes this from a clean run â€” e.g. "only happens in the
-     packaged build, works fine with `python main.py`" is the single most useful
+     packaged build, works fine with `python desktop_app.py`" is the single most useful
      note you can add, since it immediately separates packaging bugs from logic bugs -->

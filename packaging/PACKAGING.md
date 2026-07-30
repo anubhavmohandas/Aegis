@@ -15,7 +15,7 @@ Source run works  ──►  then package  ──►  breakage = packaging bug
 
 On a fresh machine that means: clone, `python -m venv venv`, activate,
 `pip install -r requirements-<os>.txt`, put the API key in `.env`, run
-`python main.py`, and work through `TEST_REPORT_TEMPLATE.md`. Only then
+`python desktop_app.py`, and work through `TEST_REPORT_TEMPLATE.md`. Only then
 continue below.
 
 For a fast non-interactive sanity pass, run:
@@ -24,9 +24,8 @@ For a fast non-interactive sanity pass, run:
 python packaging/validate_runtime.py
 ```
 
-This validates core imports, dashboard server startup/reachability, and an
-offscreen Timeline UI smoke run. In CI, Windows runs the same script with
-`--skip-timeline` to avoid flaky GUI backend assumptions on hosted runners.
+This validates core imports and dashboard server startup/reachability. CI runs
+the same script with no flags.
 
 ## Building the bundle (all platforms)
 
@@ -46,9 +45,10 @@ Output lands in `dist/` (gitignored):
 | Windows  | `dist/Aegis/` (onedir with `Aegis.exe`) | console kept ON for alpha builds — see the spec comment |
 | Linux    | `dist/Aegis/` | console |
 
-The timeline UI (`ui/timeline_app.py`) is deliberately not bundled — it's a
-developer tool until the v2 dashboard exists, and PySide6 would triple the
-bundle size for something `main.py` never imports.
+`cv2`/`numpy` are excluded from the bundle (see the spec comment): they were
+118MB of a 165MB build, serving only the optional webcam evidence frame, which
+`core/evidence.py` already degrades cleanly without. Screenshot evidence — the
+on-by-default artifact — uses PIL and stays bundled.
 
 ## Where a packaged build keeps its files
 

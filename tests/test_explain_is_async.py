@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.dispatcher import Dispatcher
 from core.events import EventCategory, MonitorEvent
+from core.metrics import RateCounter
 
 SLOW_SECONDS = 1.0
 
@@ -62,7 +63,7 @@ def _dispatcher(store, tmp_log):
     d.enricher = None
     d.in_queue = Queue()
     d._recent_summaries = __import__("collections").deque()
-    d._minute_bucket = __import__("collections").deque()
+    d._explain_budget = RateCounter(window_seconds=60)   # the AI-explain rate ceiling
     d._stop = threading.Event()
     d._last_heartbeat = time.time()
     d._explain_pool = ThreadPoolExecutor(max_workers=3)

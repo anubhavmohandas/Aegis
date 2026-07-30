@@ -16,13 +16,11 @@
 # For an app that starts at login and stays resident, onedir's only cost
 # (a folder instead of a single file) is invisible behind an installer.
 #
-# The old tray-only entry point (main.py) still exists and still works for
-# anyone who explicitly wants headless/background operation -- it's just not
-# what gets packaged as "Aegis.app" anymore, since a window-less menu-bar
-# icon with no way to see or configure anything was the wrong default for a
-# packaged, non-technical-facing build. The old read-only PySide6 timeline
-# (ui/timeline_app.py) is still not bundled -- fully superseded by the
-# dashboard now, PySide6 would triple the bundle size for nothing.
+# desktop_app.py is the only entry point. A tray-only one (main.py) and a
+# read-only PySide6 timeline (ui/timeline_app.py) used to exist alongside it;
+# both are deleted -- see the note in ARCHITECTURE.md for why a second way to
+# run the app cost more than it gave. PySide6 is consequently a Linux-only
+# dependency now (pywebview's Qt backend), never bundled on mac/Windows.
 
 import subprocess
 import sys
@@ -67,11 +65,11 @@ datas = [
     (str(ROOT / "dashboard" / "static"), "dashboard/static"),
 ]
 
-# main.py imports its collector package inside build_platform_monitors(), and
-# plyer/anthropic/openai are imported lazily too -- PyInstaller's bytecode
-# scan finds most of these, but plyer's per-OS backend is loaded by string
-# name at runtime and MUST be named explicitly or Windows notifications
-# silently fall through to the print fallback in the frozen build.
+# core/collectors.py imports its platform package inside
+# build_platform_monitors(), and plyer/anthropic/openai are imported lazily too
+# -- PyInstaller's bytecode scan finds most of these, but plyer's per-OS backend
+# is loaded by string name at runtime and MUST be named explicitly or Windows
+# notifications silently fall through to the print fallback in the frozen build.
 # certifi is named explicitly because core/updater.py now imports it inside
 # _ssl_context() rather than at module scope (so the pure version helpers stay
 # importable without it -- see the comment there). PyInstaller's bytecode scan
@@ -89,6 +87,21 @@ hiddenimports = ["anthropic", "openai", "certifi"]
 # Windows/Linux -- excluding it everywhere silently broke the packaged tray Stop.
 excludes = ["pytest"]
 
+# cv2 (+ the numpy it drags in) was 118MB of a 165MB bundle -- 73% of the
+# download -- serving exactly one optional feature: the webcam frame in
+# core/evidence._webcam, behind tamper_evidence_webcam, which defaults to
+# False. evidence.py already handles cv2 being absent as a first-class case
+# (it returns a "needs opencv-python (not installed in this build)" reason
+# that the incident records), so excluding it degrades along a path that was
+# already written and tested rather than breaking anything.
+#
+# Screenshot evidence -- the default, on-by-default artifact -- is PIL, which
+# stays bundled. To get webcam capture back, either run from source with
+# `pip install opencv-python-headless`, or port _webcam to the AVFoundation
+# bridge core/evidence._camera_indices already uses (pyobjc-core is bundled
+# and ~1MB); do that when someone actually asks for it in a packaged build.
+excludes += ["cv2", "numpy"]
+
 if IS_MAC:
     # WebKit/PyObjCTools are pywebview's Cocoa backend (webview/platforms/cocoa.py)
     # -- listed explicitly for the same reason AppKit/Foundation/objc already
@@ -101,16 +114,17 @@ elif IS_WIN:
     hiddenimports += ["plyer.platforms.win.notification"]
     excludes += ["macos", "linux", "pyudev", "AppKit", "Foundation", "objc", "PySide6"]
 else:
-    # PySide6 is excluded on mac/Windows (only ui/timeline_app.py wants it, and
+    # PySide6 is excluded on mac/Windows (nothing there imports Qt, and
     # the bundle ships desktop_app.py) but must NOT be on Linux: pywebview has
     # exactly two GUI backends there, GTK/WebKitGTK -- apt-only, invisible to a
     # venv -- and Qt. PySide6 + qtpy is the pip-installable one, so excluding it
     # builds an app that dies at webview.start() with "You must have either QT
     # or GTK with Python extensions installed". See requirements-linux.txt.
-    hiddenimports += ["plyer.platforms.linux.notification", "qtpy",
-                      "PySide6.QtWebEngineWidgets", "webview.platforms.qt"]
+    hiddenimports += ["qtpy", "PySide6.QtWebEngineWidgets", "webview.platforms.qt"]
+    # plyer is Windows-only now: macOS uses osascript and Linux notify-send,
+    # both called directly (see core/notifier.py).
     excludes += ["windows", "macos", "wmi", "win32com", "win32api", "etw",
-                 "AppKit", "Foundation", "objc"]
+                 "AppKit", "Foundation", "objc", "plyer"]
 
 a = Analysis(
     [str(ROOT / "desktop_app.py")],
@@ -160,7 +174,7 @@ if IS_MAC:
         info_plist={
             # Normal foreground app now: Dock icon, app switcher entry, a real
             # window (desktop_app.py). LSUIElement/menu-bar-only made sense
-            # for the old tray-only main.py entry point, not for something
+            # for the old tray-only entry point, not for something
             # meant to be opened, looked at, and configured.
             "CFBundleShortVersionString": __version__,
             "NSHumanReadableCopyright": "Created by Anubhav",

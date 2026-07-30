@@ -287,10 +287,34 @@ const clientMetrics = {
   },
 };
 
-async function api(path) {
+/* POST counterpart of api(). Every POST in this file used to hand-roll
+   method/headers/JSON.stringify and, more importantly, skipped api()'s 401 ->
+   /login and 403 -> first-run-password handling entirely: an expired session
+   redirected on a GET but produced a bare "Request failed" on any POST.
+
+   Returns the parsed body and the Response, because unlike the GETs several
+   POST callers key off status (403 tamper_blocked / settings_locked, 429
+   lockout) and off error payloads that accompany a non-ok status -- so this
+   deliberately does NOT throw on !res.ok the way api() does. */
+async function post(path, body) {
+  const res = await apiFetch(path, {
+    method: "POST",
+    ...(body === undefined ? {} : {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { res, data, ok: res.ok };
+}
+
+/* Shared by api() and post(): the fetch itself, the session/first-run gates
+   that must apply to every request whatever its method, and the client-side
+   latency series the diagnostics page compares against server timings. */
+async function apiFetch(path, init) {
   const started = performance.now();
   try {
-    const res = await fetch(path);
+    const res = await fetch(path, init);
     if (res.status === 401) {
       location.replace("/login");        // session expired or missing
       throw new Error("unauthenticated");
@@ -306,14 +330,22 @@ async function api(path) {
         throw new Error("password change required");
       }
     }
-    if (!res.ok) throw new Error(`${path} -> ${res.status}`);
-    return await res.json();
+    return res;
   } finally {
     // Query string stripped so /api/events?limit=200&q=x and its next call
     // share one series -- otherwise every keystroke in the search box would
     // mint a new label and the page would be unreadable.
     clientMetrics.record(`fetch ${path.split("?")[0]}`, performance.now() - started);
   }
+}
+
+/* GET returning parsed JSON, throwing on any non-ok status -- callers of this
+   one only ever want the body, and render their own "could not load" state
+   from the throw. */
+async function api(path) {
+  const res = await apiFetch(path);
+  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  return await res.json();
 }
 
 /* ---------- themes ---------- */
@@ -1079,9 +1111,7 @@ async function startMonitor() {
   state.monitorBusy = true;
   renderMonitorPill();
   try {
-    const res = await fetch("/api/monitor/start", { method: "POST" });
-    if (res.status === 401) { location.replace("/login"); return; }
-    const data = await res.json();
+    const { data } = await post("/api/monitor/start");
     state.monitor = data;
     toast(data.running ? "Monitoring started"
                        : "Monitor process exited immediately — check the log", !data.running);
@@ -1100,9 +1130,7 @@ async function restartMonitoring() {
   state.monitorBusy = true;
   renderMonitorPill();
   try {
-    const res = await fetch("/api/monitor/restart", { method: "POST" });
-    if (res.status === 401) { location.replace("/login"); return; }
-    const data = await res.json();
+    const { data } = await post("/api/monitor/restart");
     state.monitor = data;
     toast(data.running ? "Monitoring restarted — saved settings are now active"
                        : "Restart failed — monitoring did not come back up, check the log", !data.running);
@@ -1216,13 +1244,7 @@ async function confirmPasswordAction() {
   btn.disabled = true;
   if (mode === "stop") { state.monitorBusy = true; renderMonitorPill(); }
   try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...extra, password }),
-    });
-    if (res.status === 401) { location.replace("/login"); return; }
-    const data = await res.json();
+    const { res, data } = await post(url, { ...extra, password });
     if (res.status === 403 && data.tamper_blocked) {
       // Wrong password -- nothing happened; keep the modal open.
       if (data.locked) {
@@ -1335,8 +1357,8 @@ async function saveResponseAsFile(res, filename) {
    on failure so each caller can surface the error in its own UI. */
 async function downloadReportPdf(since, until, label) {
   const qs = new URLSearchParams({ since, until, label });
-  const res = await fetch(`/api/report/pdf?${qs.toString()}`);
-  if (res.status === 401) { location.replace("/login"); throw new Error("unauthenticated"); }
+  // apiFetch, not api(): the response is a PDF, so it must not be read as JSON.
+  const res = await apiFetch(`/api/report/pdf?${qs.toString()}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `report failed (${res.status})`);
@@ -2331,12 +2353,7 @@ async function askAegis(question) {
   reply.innerHTML = '<span class="ask-typing"><i></i><i></i><i></i></span>';
 
   try {
-    const res = await fetch("/api/ask", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, history: askHistory.slice(-4) }),
-    });
-    if (res.status === 401) { location.replace("/login"); return; }
-    const data = await res.json();
+    const { data } = await post("/api/ask", { question, history: askHistory.slice(-4) });
     reply.classList.remove("ask-thinking");
     if (data.error) {
       reply.classList.add("ask-error");
@@ -2402,8 +2419,11 @@ function selectProvider(id, { applyPreset } = { applyPreset: true }) {
    went wrong (the caller must not turn that into a password prompt). */
 async function loadSettings() {
   try {
-    const res = await fetch("/api/settings");
-    if (res.status === 401) { location.replace("/login"); return false; }
+    // apiFetch, not api(): a 403 here is the Settings lock, which this function
+    // reports to its caller rather than treating as a failure. api() throws on
+    // any non-ok status, so it can't express that -- but the 401 and first-run
+    // gates still have to apply, which is what apiFetch carries.
+    const res = await apiFetch("/api/settings");
     if (res.status === 403) return "locked";
     if (!res.ok) throw new Error(`settings -> ${res.status}`);
     const s = await res.json();
@@ -2485,7 +2505,7 @@ async function lockSettings(message = "Settings locked") {
   switchView("console");
   toast(message);
   // Best effort: the server's own TTL still closes it if this never lands.
-  try { await fetch("/api/settings/lock", { method: "POST" }); } catch { /* ignore */ }
+  try { await post("/api/settings/lock"); } catch { /* ignore */ }
 }
 
 /* ---------- self-update ---------- */
@@ -2530,15 +2550,10 @@ async function installUpdate() {
   btn.disabled = true;
   $("update-status").textContent = "Downloading update…";
   try {
-    const res = await fetch("/api/update/install", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        download_url: latestUpdateInfo.download_url,
-        asset_name: latestUpdateInfo.asset_name,
-      }),
+    const { res, data } = await post("/api/update/install", {
+      download_url: latestUpdateInfo.download_url,
+      asset_name: latestUpdateInfo.asset_name,
     });
-    const data = await res.json().catch(() => ({}));
     if (res.status === 403 && data.settings_locked) {
       $("update-status").textContent = "";
       btn.disabled = false;
@@ -2587,18 +2602,13 @@ async function saveFirstRunPassword() {
   btn.disabled = true;
   note.textContent = "Saving…";
   try {
-    const res = await fetch("/api/settings/password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      // The current password is still the default at this point — that's the
-      // whole reason this modal is up. change_password() verifies it anyway,
-      // so a machine where it's somehow already been changed just gets the
-      // ordinary "current password is incorrect" back.
-      body: JSON.stringify({ current_password: "admin", new_password: next }),
-    });
-    if (res.status === 401) { location.replace("/login"); return; }
-    const data = await res.json();
-    if (!res.ok) { note.textContent = data.error || "Could not set the password."; return; }
+    // The current password is still the default at this point — that's the
+    // whole reason this modal is up. change_password() verifies it anyway, so a
+    // machine where it's somehow already been changed just gets the ordinary
+    // "current password is incorrect" back.
+    const { ok, data } = await post("/api/settings/password",
+                                    { current_password: "admin", new_password: next });
+    if (!ok) { note.textContent = data.error || "Could not set the password."; return; }
     // The server rotated every session and handed this one a fresh cookie;
     // reload so the console starts up cleanly with the APIs now open.
     note.textContent = "Password set — loading Aegis…";
@@ -2626,14 +2636,9 @@ async function changePassword() {
   btn.disabled = true;
   status.textContent = "Saving…";
   try {
-    const res = await fetch("/api/settings/password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ current_password: current, new_password: next }),
-    });
-    if (res.status === 401) { location.replace("/login"); return; }
-    const data = await res.json();
-    if (!res.ok) { status.textContent = data.error || "Could not change password."; return; }
+    const { ok, data } = await post("/api/settings/password",
+                                    { current_password: current, new_password: next });
+    if (!ok) { status.textContent = data.error || "Could not change password."; return; }
     $("pw-current").value = "";
     $("pw-new").value = "";
     $("pw-confirm").value = "";
@@ -2660,44 +2665,38 @@ async function saveSettings() {
   const btn = $("settings-save");
   btn.disabled = true;
   try {
-    const res = await fetch("/api/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ai: {
-          provider: preset.provider,
-          base_url: $("set-base-url").value.trim(),
-          api_key_env: $("set-key-env").value.trim(),
-          model: $("set-model").value.trim(),
-          temperature: Number($("set-temp").value),
-          api_key: $("set-api-key").value,   // blank = keep existing
-        },
-        notify_enabled: $("set-notify-enabled").checked,
-        notify_min_severity: floor,
-        notify_on_startup_scan: $("set-startup-scan").checked,
-        watched_folders: splitLines("set-folders"),
-        poll_interval_seconds: Number($("set-poll").value) || 3,
-        trusted_process_names: splitLines("set-trusted-names"),
-        trusted_process_hashes: splitLines("set-trusted-hashes"),
-        trusted_usb_ids: splitLines("set-trusted-usb"),
-        enrich_enabled: $("set-enrich-enabled").checked,
-        vt_api_key: $("set-vt-key").value,   // blank = keep existing
-        tamper_require_password: $("set-tamper-require").checked,
-        tamper_evidence_screenshot: $("set-tamper-screenshot").checked,
-        tamper_evidence_webcam: $("set-tamper-webcam").checked,
-        tamper_attempts_before_capture: Number($("set-tamper-attempts").value) || 3,
-        evidence_dir: $("set-evidence-dir").value.trim(),
-      }),
+    const { res, ok, data } = await post("/api/settings", {
+      ai: {
+        provider: preset.provider,
+        base_url: $("set-base-url").value.trim(),
+        api_key_env: $("set-key-env").value.trim(),
+        model: $("set-model").value.trim(),
+        temperature: Number($("set-temp").value),
+        api_key: $("set-api-key").value,   // blank = keep existing
+      },
+      notify_enabled: $("set-notify-enabled").checked,
+      notify_min_severity: floor,
+      notify_on_startup_scan: $("set-startup-scan").checked,
+      watched_folders: splitLines("set-folders"),
+      poll_interval_seconds: Number($("set-poll").value) || 3,
+      trusted_process_names: splitLines("set-trusted-names"),
+      trusted_process_hashes: splitLines("set-trusted-hashes"),
+      trusted_usb_ids: splitLines("set-trusted-usb"),
+      enrich_enabled: $("set-enrich-enabled").checked,
+      vt_api_key: $("set-vt-key").value,   // blank = keep existing
+      tamper_require_password: $("set-tamper-require").checked,
+      tamper_evidence_screenshot: $("set-tamper-screenshot").checked,
+      tamper_evidence_webcam: $("set-tamper-webcam").checked,
+      tamper_attempts_before_capture: Number($("set-tamper-attempts").value) || 3,
+      evidence_dir: $("set-evidence-dir").value.trim(),
     });
-    if (res.status === 401) { location.replace("/login"); return; }
-    const data = await res.json();
     // The unlock expires on its own (SETTINGS_UNLOCK_TTL) — re-prompt and
     // then finish the save the user already asked for, rather than losing it.
     if (res.status === 403 && data.settings_locked) {
       openUnlockModal(saveSettings);
       return;
     }
-    if (!res.ok) { toast(data.error || `Save failed (${res.status})`, true); return; }
+    if (!ok) { toast(data.error || `Save failed (${res.status})`, true); return; }
     $("set-api-key").value = "";
     $("set-vt-key").value = "";
     if (data.settings) $("vt-key-status").textContent = data.settings.vt_api_key_set ? "configured" : "not set";
@@ -2771,9 +2770,7 @@ function bindSettings() {
     out.className = "vt-test-result";
     out.textContent = "Looking up the EICAR test file on VirusTotal…";
     try {
-      const res = await fetch("/api/enrich/test", { method: "POST" });
-      if (res.status === 401) { location.replace("/login"); return; }
-      const data = await res.json().catch(() => ({}));
+      const { res, data } = await post("/api/enrich/test");
       if (res.status === 403 && data.settings_locked) {
         out.textContent = "";
         openUnlockModal(() => $("vt-test-btn").click());
@@ -2952,12 +2949,8 @@ function closeIncidentDrawer() {
 
 async function reviewIncident(id) {
   try {
-    const res = await fetch("/api/incidents/review", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: Number(id) }),
-    });
-    if (res.status === 401) { location.replace("/login"); return; }
-    if (res.ok) { toast("Incident marked reviewed"); closeIncidentDrawer(); loadIncidents(); refreshShield(); }
+    const { ok } = await post("/api/incidents/review", { id: Number(id) });
+    if (ok) { toast("Incident marked reviewed"); closeIncidentDrawer(); loadIncidents(); refreshShield(); }
   } catch { toast("Could not update incident", true); }
 }
 
@@ -3023,19 +3016,14 @@ function trustTargetFor(ev, details) {
 async function addTrust(kind, value, btn) {
   if (btn) { btn.disabled = true; btn.textContent = "Trusting…"; }
   try {
-    const res = await fetch("/api/trust/add", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind, value }),
-    });
-    if (res.status === 401) { location.replace("/login"); return; }
-    const data = await res.json();
+    const { res, ok, data } = await post("/api/trust/add", { kind, value });
     if (res.status === 403 && data.settings_locked) {
       // Trust entries are a config change like any other -- same gate.
       if (btn) { btn.disabled = false; btn.textContent = `Always Trust · ${btn.dataset.label || "this"}`; }
       openUnlockModal(() => addTrust(kind, value, btn));
       return;
     }
-    if (!res.ok) { toast(data.error || "Could not add trust", true); if (btn) { btn.disabled = false; } return; }
+    if (!ok) { toast(data.error || "Could not add trust", true); if (btn) { btn.disabled = false; } return; }
     toast("Added to Trust List — future matches skip the AI call");
     settingsLoaded = false;   // force settings reload so the new entry shows
     if (btn) { btn.textContent = "Trusted ✓"; }
@@ -3091,10 +3079,8 @@ function bind() {
   $("load-older").addEventListener("click", loadOlder);
 
   $("open-evidence-btn").addEventListener("click", async () => {
-    const res = await fetch("/api/evidence/open-folder", { method: "POST" });
-    if (res.status === 401) { location.replace("/login"); return; }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) toast(data.error || "Could not open folder", true);
+    const { ok, data } = await post("/api/evidence/open-folder");
+    if (!ok) toast(data.error || "Could not open folder", true);
   });
 
   $("new-events-pill").addEventListener("click", () => {
@@ -3106,8 +3092,8 @@ function bind() {
 
   const exportEvents = async (format) => {
     try {
-      const res = await fetch(`/api/export?${filterQuery({ format })}`);
-      if (res.status === 401) { location.replace("/login"); return; }
+      // apiFetch, not api(): the response is a CSV/JSON file download.
+      const res = await apiFetch(`/api/export?${filterQuery({ format })}`);
       if (!res.ok) throw new Error(`export failed (${res.status})`);
       const stamp = new Date().toISOString().slice(0, 10);
       await saveResponseAsFile(res, `aegis-events-${stamp}.${format}`);
@@ -3119,7 +3105,7 @@ function bind() {
   $("export-csv").addEventListener("click", () => exportEvents("csv"));
 
   $("logout-btn").addEventListener("click", async () => {
-    try { await fetch("/api/logout", { method: "POST" }); } catch { /* redirect regardless */ }
+    try { await post("/api/logout"); } catch { /* redirect regardless */ }
     location.replace("/login");
   });
 

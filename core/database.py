@@ -81,9 +81,14 @@ class EventStore:
 
     def __init__(self, db_path: str = "aegis_events.db"):
         self.db_path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True) if Path(db_path).parent != Path(".") else None
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        # Rows come back as mappings, so every read below is `dict(row)` instead
+        # of zipping the values against a column list fetched by its own extra
+        # `SELECT * FROM <table> LIMIT 0` query -- which was four hand-copied
+        # spellings of the same thing, each one a chance to name the wrong table.
+        self._conn.row_factory = sqlite3.Row
         self._enable_wal()
         self._init_schema()
 
@@ -187,8 +192,7 @@ class EventStore:
                 rows = self._conn.execute(
                     "SELECT * FROM events ORDER BY timestamp DESC LIMIT ?", (limit,)
                 ).fetchall()
-            cols = [d[0] for d in self._conn.execute("SELECT * FROM events LIMIT 0").description]
-            return [dict(zip(cols, row)) for row in rows]
+            return [dict(row) for row in rows]
 
     def between(self, since: float, until: float, limit: int = 500) -> list[dict]:
         """Events inside a time window, oldest first -- the away-session recap
@@ -198,8 +202,7 @@ class EventStore:
                 "SELECT * FROM events WHERE timestamp >= ? AND timestamp <= ? "
                 "ORDER BY timestamp, id LIMIT ?", (since, until, limit),
             ).fetchall()
-            cols = [d[0] for d in self._conn.execute("SELECT * FROM events LIMIT 0").description]
-            return [dict(zip(cols, row)) for row in rows]
+            return [dict(row) for row in rows]
 
     def prune_events(self, cutoff: float) -> int:
         """Delete events older than `cutoff` (unix seconds); returns the count.
@@ -251,16 +254,12 @@ class EventStore:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM incidents ORDER BY timestamp DESC LIMIT ?", (limit,)).fetchall()
-            cols = [d[0] for d in self._conn.execute("SELECT * FROM incidents LIMIT 0").description]
-            return [dict(zip(cols, row)) for row in rows]
+            return [dict(row) for row in rows]
 
     def get_incident(self, incident_id: int) -> dict | None:
         with self._lock:
             row = self._conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
-            if row is None:
-                return None
-            cols = [d[0] for d in self._conn.execute("SELECT * FROM incidents LIMIT 0").description]
-            return dict(zip(cols, row))
+            return dict(row) if row is not None else None
 
     def delete_incidents(self, ids: list[int]) -> int:
         if not ids:

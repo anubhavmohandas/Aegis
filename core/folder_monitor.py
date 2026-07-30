@@ -135,7 +135,7 @@ class FolderMonitor:
         # Confirmed bug behind the is_dir() guard below: watchdog's Windows
         # backend (ReadDirectoryChangesW) calls CreateFileW synchronously while
         # the emitter starts -- if `folder` doesn't exist that raises straight
-        # out of this method, propagates through main.py's unguarded startup
+        # out of this method, propagates through the caller's startup
         # loop, and kills the whole process before the dispatcher/tray ever
         # comes up. macOS's FSEvents backend happens to be lenient about this,
         # so the bug was Windows-only. Every other collector that schedules a

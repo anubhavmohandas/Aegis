@@ -25,7 +25,7 @@ Design notes:
   best-effort throughout.
 * **Process-local.** METRICS is a per-process singleton. The dispatcher and the
   dashboard's HTTP server each keep their own; when they are separate processes
-  (main.py tray mode) the dispatcher publishes its snapshot through the SQLite
+  the dispatcher publishes its snapshot through the SQLite
   `meta` table, the same read-only channel the heartbeat already uses. See
   dashboard/server.py monitor_metrics().
 """
@@ -125,6 +125,29 @@ class RateCounter:
         while self._marks and self._marks[0] < cutoff:
             self._marks.popleft()
 
+    def admit(self, cap: int) -> bool:
+        """True if fewer than `cap` marks fall inside the window, CONSUMING a
+        slot. False leaves the window untouched, so a refused caller doesn't
+        spend budget on being refused.
+
+        The one method here that gates behaviour rather than just observing it
+        -- the rest of this module is instrumentation and never affects control
+        flow. It lives on RateCounter because a rolling window of timestamps is
+        exactly what a rate limit is, and this was independently hand-rolled
+        twice (dispatcher's AI-explain ceiling, enrichment's VirusTotal
+        free-tier budget) with the same eight lines of trim-then-compare.
+
+        Unlike the rest of the class, this must be correct rather than
+        best-effort: callers treat False as "don't make the call"."""
+        now = time.time()
+        with self._lock:
+            self._trim(now)
+            if len(self._marks) >= cap:
+                return False
+            self._marks.append(now)
+            self._total += 1
+            return True
+
     def stats(self) -> dict:
         now = time.time()
         with self._lock:
@@ -207,8 +230,7 @@ METRICS = Metrics()
 def record_collectors(monitors) -> None:
     """Publish which collectors are actually up, by class name.
 
-    Called from both pipelines (main.py's tray mode and desktop_app's
-    MonitorPipeline) with the list that genuinely started -- not the list that
+    Called from desktop_app's MonitorPipeline with the list that genuinely started -- not the list that
     was meant to. A collector that raised on start and got rolled back must not
     appear here, because "which collectors are running?" is precisely the
     question this answers when a whole source of events has silently gone

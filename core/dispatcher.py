@@ -65,7 +65,7 @@ from .config import AppConfig
 from .database import EventStore
 from .enrichment import ThreatEnricher
 from .events import EventCategory, MonitorEvent
-from .metrics import METRICS, rss_mb
+from .metrics import METRICS, RateCounter, rss_mb
 from .notifier import notify
 from .process_notes import describe
 from .rule_engine import RuleEngine
@@ -195,7 +195,10 @@ class Dispatcher:
         self.enricher = ThreatEnricher(config) if config.enrich_enabled else None
         self.store = event_store or EventStore(config.db_path)
         self._recent_summaries: deque[tuple[str, float]] = deque()
-        self._minute_bucket: deque[float] = deque()
+        # The AI-explain ceiling. RateCounter.admit is the shared rolling-window
+        # limiter (core/metrics.py) -- enrichment's VirusTotal budget uses the
+        # same one rather than a second hand-rolled deque.
+        self._explain_budget = RateCounter(window_seconds=60)
         self._stop = threading.Event()
         self._last_heartbeat = 0.0
         self._last_metrics = 0.0
@@ -491,13 +494,7 @@ class Dispatcher:
         return False
 
     def _under_rate_limit(self) -> bool:
-        now = time.time()
-        while self._minute_bucket and now - self._minute_bucket[0] > 60:
-            self._minute_bucket.popleft()
-        if len(self._minute_bucket) >= MAX_EVENTS_PER_MINUTE:
-            return False
-        self._minute_bucket.append(now)
-        return True
+        return self._explain_budget.admit(MAX_EVENTS_PER_MINUTE)
 
     # --- away sessions + heartbeat ----------------------------------------
 
@@ -538,7 +535,7 @@ class Dispatcher:
         """Write this process's metrics snapshot where the dashboard can read it.
 
         The dashboard opens the event store mode=ro and, in tray mode
-        (main.py), is a different process entirely -- so there is no in-memory
+        may be a different process entirely -- so there is no in-memory
         object it could read instead. The meta table is the existing one-way
         channel for exactly this (see _heartbeat above), and a JSON blob under
         one key keeps the schema in this file rather than spread across new

@@ -7,7 +7,7 @@
 ; first compile as part of Windows validation, not a formality.
 ;
 ; Prerequisites, in order (see packaging/PACKAGING.md):
-;   1. Validate Aegis from source on the Windows machine (python main.py).
+;   1. Validate Aegis from source on the Windows machine (python desktop_app.py).
 ;   2. Build the PyInstaller bundle:  pyinstaller packaging/aegis.spec
 ;      -> produces dist\Aegis\ (onedir).
 ;   3. Install Inno Setup 6 (https://jrsoftware.org/isinfo.php), open this

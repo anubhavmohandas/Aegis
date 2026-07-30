@@ -16,7 +16,7 @@ pre-release tag ABOVE any suffix, so republishing "2.0.3" as "2.0.3-alpha"
 would make every installed copy treat the build it is already running as a
 newer release and self-update in a loop (the v2.0.1 incident).
 
-Bump this in exactly one place -- main.py logs it, packaging/aegis.spec
+Bump this in exactly one place -- desktop_app.py logs it, packaging/aegis.spec
 embeds it in the bundle name, and packaging/windows-installer.iss carries a
 copy (Inno Setup can't import Python; keep them in sync by hand, and the
 packaging docs call that out).

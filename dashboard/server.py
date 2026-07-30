@@ -2,10 +2,12 @@
 Aegis dashboard -- local web UI over the SQLite event store.
 
 Read-only by construction: the SQLite file is opened with mode=ro, so this
-process can never write to the event store the monitors are appending to.
-Runs completely separately from main.py (same philosophy as ui/timeline_app.py:
-a UI bug must never take down monitoring), and binds to 127.0.0.1 only --
-this is a personal dashboard, not a network service.
+process can never write to the event store the monitors are appending to. Binds
+to 127.0.0.1 only -- this is a personal dashboard, not a network service.
+
+Normally served in-process by desktop_app.py, on a background thread. Run
+standalone (below) it is purely a viewer over an existing event store: there is
+no monitor pipeline to control, and /api/monitor/* says so.
 
 Zero dependencies beyond the stdlib, so it works inside the PyInstaller
 bundle and on a bare python install alike.
@@ -48,8 +50,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-import psutil  # already a core Aegis dependency (requirements-common.txt)
-
 STATIC_DIR = Path(__file__).parent / "static"
 REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -76,8 +76,6 @@ DATA_DIR = persistent_dir()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / "config.yaml" if _is_frozen() else DATA_DIR / "config" / "config.yaml"
 ENV_PATH = DATA_DIR / ".env"             # legacy plaintext key location -- read-only, for migration
-MAIN_PY = REPO_ROOT / "main.py"
-MONITOR_STATE_FILE = DATA_DIR / ".aegis_monitor.json"  # {"pid": int, "started_at": float}
 MONITOR_LOG_PATH = DATA_DIR / "monitor.log" if _is_frozen() else DATA_DIR / "dashboard" / "monitor.log"
 
 MIME = {
@@ -1040,68 +1038,25 @@ def _passthrough(key: str, default):
     return default
 
 
-# --- monitor process control --------------------------------------------------
-# The dashboard is a read-only viewer over the event store; main.py is the
-# actual thing that watches the system and produces events. These two are
-# separate processes by design (a UI bug must never take down monitoring --
-# see the module docstring), so "start/stop monitoring" here means spawning
-# and signalling that separate process, never importing/running its code
-# in-thread. State survives dashboard restarts via a small pidfile-style
-# state file instead of an in-memory handle.
-
-def _read_monitor_state() -> dict | None:
-    if not MONITOR_STATE_FILE.is_file():
-        return None
-    try:
-        return json.loads(MONITOR_STATE_FILE.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
-def _process_alive(pid: int) -> bool:
-    try:
-        return psutil.pid_exists(pid) and psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
-    except psutil.Error:
-        return False
-
-
-def _find_external_monitor_pid() -> int | None:
-    """Detect a main.py started outside the dashboard (e.g. `python main.py`
-    from a terminal, the way README.md itself says to run it), so the status
-    shown is honest even when the dashboard didn't launch it -- and so Start
-    doesn't spawn a second, duplicate monitor process. Matches by resolving
-    each cmdline argument against the process's own cwd, since a relative
-    "main.py" argument (the common case) carries no path info by itself."""
-    target = MAIN_PY.resolve()
-    own_pid = os.getpid()
-    try:
-        for proc in psutil.process_iter(["pid", "cmdline", "cwd"]):
-            # Never match THIS process. The desktop app hosts the dashboard in
-            # the same process it runs the monitor in; if this ever returned
-            # our own pid, "Stop Monitoring" would terminate() the whole app
-            # (window included) instead of just pausing monitoring -- which is
-            # exactly the "Aegis quits when I click Stop" symptom.
-            if proc.info["pid"] == own_pid:
-                continue
-            cmdline = proc.info.get("cmdline") or []
-            if not any(part.endswith("main.py") for part in cmdline):
-                continue
-            cwd = proc.info.get("cwd")
-            for part in cmdline:
-                if not part.endswith("main.py"):
-                    continue
-                candidate = Path(part)
-                if not candidate.is_absolute() and cwd:
-                    candidate = Path(cwd) / candidate
-                try:
-                    if candidate.resolve() == target:
-                        return proc.info["pid"]
-                except OSError:
-                    continue
-    except psutil.Error:
-        pass
-    return None
-
+# --- monitor control ----------------------------------------------------------
+# The monitor pipeline runs in THIS process (desktop_app.py's MonitorPipeline,
+# handed over as the three monitor_*_callbacks) and is started/stopped through
+# those callbacks.
+#
+# There used to be a second mode here: no callbacks, and the dashboard instead
+# spawned `python main.py` as a subprocess, tracked it through a pidfile, hunted
+# for externally-started ones by scanning every process's cmdline, and killed it
+# with SIGTERM. It is gone along with main.py. It was never the shipped path --
+# packaging/aegis.spec bundles desktop_app.py, which always passes the callbacks
+# -- and it actively cost the shipped path bugs: in a frozen build
+# `sys.executable str(MAIN_PY)` launched a second entire copy of Aegis (window
+# and all), and a stale pidfile could name this very process, so Stop Monitoring
+# terminated the app instead of pausing monitoring. Both needed guards that only
+# existed because the dead branch did.
+#
+# Without callbacks (`python dashboard/server.py`) the dashboard is now honestly
+# a read-only viewer: status reports "unmanaged" and start/stop refuse rather
+# than pretending to control something.
 
 def _heartbeat_age() -> float | None:
     """Seconds since the dispatcher last stamped its heartbeat, or None if it
@@ -1127,47 +1082,26 @@ def _heartbeat_age() -> float | None:
 
 
 def monitor_status() -> dict:
-    if DashboardHandler.in_process_monitor:
-        # The monitor pipeline lives in this same process, but -- unlike the
-        # app itself -- it's genuinely start/stop-able via
-        # monitor_{start,stop}_callback (see desktop_app.py's
-        # MonitorPipeline), so its running state has to be asked for, not
-        # assumed true.
-        info = DashboardHandler.monitor_status_callback()
-        running, started_at = info["running"], info.get("started_at")
-        return {
-            "running": running,
-            "pid": os.getpid() if running else None,
-            "started_at": started_at,
-            "uptime_seconds": max(0.0, time.time() - started_at) if (running and started_at) else None,
-            "heartbeat_age": _heartbeat_age() if running else None,
-            "collectors": _monitor_collectors() if running else [],
-            "managed": "in_process",
-        }
-    state = _read_monitor_state()
-    if state and _process_alive(state.get("pid", -1)):
-        pid = state["pid"]
-    else:
-        if state:
-            MONITOR_STATE_FILE.unlink(missing_ok=True)  # stale -- that process is gone
-        pid = _find_external_monitor_pid()
-        if pid is not None:
-            try:
-                state = {"pid": pid, "started_at": psutil.Process(pid).create_time()}
-                MONITOR_STATE_FILE.write_text(json.dumps(state))
-            except psutil.Error:
-                pid = None  # gone between the scan and now -- treat as not running
-
-    if pid is None:
-        return {"running": False, "pid": None, "started_at": None, "uptime_seconds": None, "managed": "external"}
+    if not DashboardHandler.in_process_monitor:
+        # No pipeline to ask (`python dashboard/server.py` -- a viewer over an
+        # existing event store). Say so rather than guessing: "unmanaged" is
+        # what the UI keys off to leave the Start/Stop buttons alone.
+        return {"running": False, "pid": None, "started_at": None,
+                "uptime_seconds": None, "managed": "unmanaged"}
+    # The monitor pipeline lives in this same process, but -- unlike the app
+    # itself -- it's genuinely start/stop-able via monitor_{start,stop}_callback
+    # (see desktop_app.py's MonitorPipeline), so its running state has to be
+    # asked for, not assumed true.
+    info = DashboardHandler.monitor_status_callback()
+    running, started_at = info["running"], info.get("started_at")
     return {
-        "running": True,
-        "pid": pid,
-        "started_at": state["started_at"],
-        "uptime_seconds": max(0.0, time.time() - state["started_at"]),
-        "heartbeat_age": _heartbeat_age(),
-        "collectors": _monitor_collectors(),
-        "managed": "external",
+        "running": running,
+        "pid": os.getpid() if running else None,
+        "started_at": started_at,
+        "uptime_seconds": max(0.0, time.time() - started_at) if (running and started_at) else None,
+        "heartbeat_age": _heartbeat_age() if running else None,
+        "collectors": _monitor_collectors() if running else [],
+        "managed": "in_process",
     }
 
 
@@ -1281,91 +1215,46 @@ def diagnostics(db_path: str) -> dict:
     }
 
 
+_NO_PIPELINE = {"error": "monitoring is not managed by this dashboard -- "
+                         "launch Aegis (desktop_app.py) to start or stop it"}
+
+
 def start_monitor() -> dict:
-    if DashboardHandler.in_process_monitor:
-        # Actually starts/rebuilds the collector+dispatcher pipeline in THIS
-        # process (see desktop_app.py's MonitorPipeline.start) -- NOT the
-        # subprocess-spawning path below. That path launching here would, in
-        # a frozen build, run `sys.executable str(MAIN_PY)` where
-        # sys.executable IS the Aegis binary itself -- a second whole copy of
-        # the app, second window included, which is exactly what used to
-        # happen and looked like "the app restarts itself."
-        #
-        # A raise here (bad db_path, a watched folder that vanished) used to
-        # escape do_POST, which only catches BrokenPipeError -- the browser got
-        # a dropped connection and the user got no idea why monitoring was off.
-        # MonitorPipeline.start() now leaves itself cleanly stopped on failure,
-        # so reporting the reason is both safe and the whole point.
-        try:
-            DashboardHandler.monitor_start_callback()
-        except Exception as e:
-            logger_srv.exception("In-process monitor start failed")
-            return {**monitor_status(), "error": f"could not start monitoring: {e}"}
-        return monitor_status()
-    status = monitor_status()
-    if status["running"]:
-        return status
+    """Start/rebuild the collector+dispatcher pipeline in this process (see
+    desktop_app.py's MonitorPipeline.start).
 
-    MONITOR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(MONITOR_LOG_PATH, "ab") as log_f:
-        log_f.write(f"\n--- launched by dashboard at {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n".encode())
-        popen_kwargs = {}
-        if platform.system() == "Windows":
-            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        else:
-            popen_kwargs["start_new_session"] = True  # own session: survives the dashboard's shell
-        proc = subprocess.Popen(
-            [sys.executable, str(MAIN_PY)],
-            cwd=str(REPO_ROOT), stdin=subprocess.DEVNULL,
-            stdout=log_f, stderr=subprocess.STDOUT,
-            **popen_kwargs,
-        )
-
-    started_at = time.time()
-    MONITOR_STATE_FILE.write_text(json.dumps({"pid": proc.pid, "started_at": started_at}))
-    return {"running": True, "pid": proc.pid, "started_at": started_at, "uptime_seconds": 0.0}
+    A raise here (bad db_path, a watched folder that vanished) used to escape
+    do_POST, which only catches BrokenPipeError -- the browser got a dropped
+    connection and the user got no idea why monitoring was off. MonitorPipeline
+    .start() leaves itself cleanly stopped on failure, so reporting the reason
+    is both safe and the whole point."""
+    if not DashboardHandler.in_process_monitor:
+        return {**monitor_status(), **_NO_PIPELINE}
+    try:
+        DashboardHandler.monitor_start_callback()
+    except Exception as e:
+        logger_srv.exception("In-process monitor start failed")
+        return {**monitor_status(), "error": f"could not start monitoring: {e}"}
+    return monitor_status()
 
 
 def stop_monitor() -> dict:
-    if DashboardHandler.in_process_monitor:
-        # Stops the collector+dispatcher threads (desktop_app.py's
-        # MonitorPipeline.stop) but leaves the app/window/dashboard server
-        # running -- pausing monitoring is not the same as quitting the app.
-        #
-        # Same guard start_monitor() already carries, and for the same reason:
-        # the password gate above has already passed at this point, so a raise
-        # here is a genuine failure to stop, not a rejected request -- and it
-        # escaped do_POST (which catches only BrokenPipeError) as a dropped
-        # connection, leaving the UI saying "Request failed" with no way to
-        # tell whether monitoring is still running.
-        try:
-            DashboardHandler.monitor_stop_callback()
-        except Exception as e:
-            logger_srv.exception("In-process monitor stop failed")
-            return {**monitor_status(), "error": f"could not stop monitoring: {e}"}
-        return monitor_status()
-    state = _read_monitor_state()
-    pid = state["pid"] if state and _process_alive(state.get("pid", -1)) else _find_external_monitor_pid()
-    if pid == os.getpid():
-        # Belt-and-suspenders with _find_external_monitor_pid's own guard: a
-        # stale MONITOR_STATE_FILE could still name this very process. Refuse
-        # to terminate ourselves -- that would close the app/window, not pause
-        # monitoring. Clear the bad state and report stopped.
-        logger_srv.warning("stop_monitor resolved to our own pid (%s) -- refusing to self-terminate", pid)
-        pid = None
-    if pid is not None:
-        try:
-            proc = psutil.Process(pid)
-            proc.terminate()
-            try:
-                proc.wait(timeout=6)
-            except psutil.TimeoutExpired:
-                proc.kill()  # each event is committed individually (core/database.py),
-                             # so a hard kill here can't corrupt the event store
-        except psutil.Error:
-            pass
-    MONITOR_STATE_FILE.unlink(missing_ok=True)
-    return {"running": False, "pid": None, "started_at": None, "uptime_seconds": None, "managed": "external"}
+    """Stop the collector+dispatcher threads but leave the app/window/dashboard
+    server running -- pausing monitoring is not the same as quitting the app.
+
+    Same guard start_monitor() carries, and for the same reason: the password
+    gate has already passed at this point, so a raise here is a genuine failure
+    to stop, not a rejected request -- and it escaped do_POST (which catches
+    only BrokenPipeError) as a dropped connection, leaving the UI saying
+    "Request failed" with no way to tell whether monitoring is still running."""
+    if not DashboardHandler.in_process_monitor:
+        return {**monitor_status(), **_NO_PIPELINE}
+    try:
+        DashboardHandler.monitor_stop_callback()
+    except Exception as e:
+        logger_srv.exception("In-process monitor stop failed")
+        return {**monitor_status(), "error": f"could not stop monitoring: {e}"}
+    return monitor_status()
 
 
 # --- tamper protection -------------------------------------------------------
@@ -1400,7 +1289,8 @@ LOCKOUT_SECONDS = 60
 def _writable_store():
     from core.database import EventStore
     # Falls back to the configured store when no server was ever built --
-    # the tray-only quit gate (main.py) reaches here without build_server().
+    # desktop_app's menu-bar/tray quit gate reaches here via
+    # guard_protected_action before build_server has run.
     return EventStore(DashboardHandler.db_path or _safe_config().db_path)
 
 
@@ -1848,16 +1738,16 @@ def install_update(download_url: str, asset_name: str) -> dict:
 class DashboardHandler(BaseHTTPRequestHandler):
     # Set by build_server(). Empty until then -- and the tamper-gate helpers
     # (_writable_store/_heartbeat_age) CAN run before/without build_server:
-    # main.py's tray-only mode routes its quit gate through
-    # guard_protected_action with no dashboard server at all. Those helpers
-    # fall back to config.db_path, so a custom db_path in config.yaml doesn't
-    # send tamper events to a second, wrong "aegis_events.db" in the cwd.
+    # desktop_app's menu-bar Quit routes its gate through
+    # guard_protected_action before the server is built. Those helpers fall
+    # back to config.db_path, so a custom db_path in config.yaml doesn't send
+    # tamper events to a second, wrong "aegis_events.db" in the cwd.
     db_path: str = ""
     bind_host: str = "127.0.0.1"      # set in build_server -- see _host_ok
-    # Set True by desktop_app.py: the monitor pipeline there runs in THIS
-    # same process, not as a separate main.py subprocess the old start/stop
-    # buttons were built to spawn/kill -- see monitor_status()/start_monitor()
-    # /stop_monitor() below for why that distinction matters.
+    # Set True by desktop_app.py, meaning "the monitor pipeline runs in THIS
+    # process and the three callbacks below drive it". False (standalone
+    # `python dashboard/server.py`) means there is no pipeline to control --
+    # see monitor_status()/start_monitor()/stop_monitor().
     in_process_monitor: bool = False
     # desktop_app.py's MonitorPipeline start/stop/status, set alongside
     # in_process_monitor. () -> {"running": bool, "started_at": float|None},
@@ -2016,6 +1906,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     # --- request handling ---
 
+    # Cap on a request body read. The individual endpoints validate their own
+    # fields; this only stops a bogus Content-Length from making us buffer an
+    # unbounded payload before any of that runs.
+    _MAX_BODY_BYTES = 100_000
+
+    def _json_body(self) -> dict | None:
+        """The request's JSON object, or None if there wasn't a usable one.
+
+        None covers malformed JSON *and* a valid non-object (`[1,2]`, `"x"`,
+        `null`) -- callers were doing `body.get(...)` straight onto whatever
+        json.loads returned, so a JSON array body raised AttributeError out of
+        here into do_POST, which catches only BrokenPipeError: the browser saw a
+        dropped connection instead of a 400.
+
+        Two caller styles, both fine: `self._json_body() or {}` where a
+        malformed body should read as "no fields supplied", and an explicit
+        `is None` check where it has to be rejected."""
+        try:
+            length = min(int(self.headers.get("Content-Length") or 0), self._MAX_BODY_BYTES)
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except (json.JSONDecodeError, ValueError):
+            return None
+        return body if isinstance(body, dict) else None
+
     def _handle_post(self):
         parsed = urlparse(self.path)
         if not self._host_ok():
@@ -2025,20 +1939,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/login":
                 self._handle_login()
                 return
+            if parsed.path == "/api/logout":
+                # Ahead of the auth gate on purpose: logging out only ever
+                # reduces access, and an expired session must still be able to
+                # clear its own cookie rather than get a 401 on the way out.
+                token = self._session_token()
+                if token:
+                    _sessions.pop(token, None)
+                    _settings_unlock_until.pop(token, None)  # signing out re-locks Settings
+                self._send_json({"ok": True},
+                                extra={"Set-Cookie": f"{SESSION_COOKIE}=; Path=/; Max-Age=0"})
+                return
+
+            # ONE auth gate for every remaining POST route, hoisted out of the
+            # branches below -- where it was 13 hand-copied `if not
+            # self._authed()` blocks, i.e. 13 chances for the next route added
+            # here to be the one that forgets. _handle_get already gates its
+            # whole /api/ branch this way. A new route is now authenticated by
+            # construction; anything that should be public has to be lifted
+            # above this line deliberately, like the two above.
+            if not self._authed():
+                self._send_json({"error": "authentication required"}, status=401)
+                return
             # Seeded admin/admin still in place -> everything but the
             # change-password and logout routes is refused. See
             # PW_CHANGE_EXEMPT_PATHS for why this is a server-side gate.
-            if self._authed() and self._password_change_required(parsed.path):
+            if self._password_change_required(parsed.path):
                 return
+
             if parsed.path == "/api/settings/unlock":
-                if not self._authed():
-                    self._send_json({"error": "authentication required"}, status=401)
-                    return
-                try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    body = json.loads(self.rfile.read(length) or b"{}")
-                except (json.JSONDecodeError, ValueError):
-                    body = {}
+                body = self._json_body() or {}
                 result = unlock_settings(self._session_token() or "",
                                          str(body.get("password", "")))
                 if result.get("error"):
@@ -2049,21 +1979,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # No password needed to re-lock -- locking can only reduce
                 # access, and a "Lock now" that itself needs the password is
                 # useless to someone stepping away from the machine.
-                if not self._authed():
-                    self._send_json({"error": "authentication required"}, status=401)
-                    return
                 _settings_unlock_until.pop(self._session_token() or "", None)
                 self._send_json({"ok": True})
             elif parsed.path == "/api/settings":
-                if not self._authed():
-                    self._send_json({"error": "authentication required"}, status=401)
-                    return
                 if not self._require_settings_unlock():
                     return
-                try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    body = json.loads(self.rfile.read(length) or b"{}")
-                except (json.JSONDecodeError, ValueError):
+                body = self._json_body()
+                if body is None:
                     self._send_json({"error": "invalid JSON body"}, status=400)
                     return
                 result = write_settings(body)
@@ -2072,13 +1994,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 else:
                     self._send_json({"ok": True, "settings": read_settings()})
             elif parsed.path == "/api/settings/password":
-                if not self._authed():
-                    self._send_json({"error": "authentication required"}, status=401)
-                    return
-                try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    body = json.loads(self.rfile.read(length) or b"{}")
-                except (json.JSONDecodeError, ValueError):
+                body = self._json_body()
+                if body is None:
                     self._send_json({"error": "invalid JSON body"}, status=400)
                     return
                 result = change_password(str(body.get("current_password", "")),
@@ -2105,10 +2022,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     return
                 self._send_json(result, status=status)
             elif parsed.path == "/api/monitor/start":
-                if not self._authed():
-                    self._send_json({"error": "authentication required"}, status=401)
-                else:
-                    self._send_json(start_monitor())
+                self._send_json(start_monitor())
             elif parsed.path == "/api/monitor/restart":
                 # Stop + start so the pipeline is rebuilt against freshly
                 # loaded config -- how saved settings take effect without
@@ -2133,22 +2047,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # user has necessarily just unlocked to save the settings they
                 # want applied) -- so this costs the real flow nothing, while a
                 # session on its own no longer reaches it.
-                if not self._authed():
-                    self._send_json({"error": "authentication required"}, status=401)
-                    return
                 if not self._require_settings_unlock():
                     return
                 stop_monitor()
                 self._send_json(start_monitor())
             elif parsed.path == "/api/monitor/stop":
-                if not self._authed():
-                    self._send_json({"error": "authentication required"}, status=401)
-                    return
-                try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    body = json.loads(self.rfile.read(length) or b"{}")
-                except (json.JSONDecodeError, ValueError):
-                    body = {}
+                body = self._json_body() or {}
                 # Tamper gate: with tamper_require_password on, a correct
                 # password is required to stop. Wrong ones are logged and,
                 # past the threshold, trigger evidence capture.
@@ -2158,9 +2062,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 else:
                     self._send_json(stop_monitor())
             elif parsed.path == "/api/evidence/open-folder":
-                if not self._authed():
-                    self._send_json({"error": "authentication required"}, status=401)
-                    return
                 # No client-supplied path here on purpose: the server opens the
                 # folder it resolved from config, nothing else.
                 from core.config import load_config
@@ -2187,14 +2088,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 except (OSError, subprocess.TimeoutExpired) as e:
                     self._send_json({"error": f"could not open folder: {e}"}, status=500)
             elif parsed.path == "/api/incidents/review":
-                if not self._authed():
-                    self._send_json({"error": "authentication required"}, status=401)
-                    return
-                try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    body = json.loads(self.rfile.read(length) or b"{}")
-                except (json.JSONDecodeError, ValueError):
-                    body = {}
+                body = self._json_body() or {}
                 raw_id = body.get("id")
                 if not isinstance(raw_id, int):
                     self._send_json({"error": "id must be an integer"}, status=400)
@@ -2202,14 +2096,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     result = mark_incident_reviewed(raw_id)
                     self._send_json(result, status=404 if result.get("error") else 200)
             elif parsed.path == "/api/incidents/delete":
-                if not self._authed():
-                    self._send_json({"error": "authentication required"}, status=401)
-                    return
-                try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    body = json.loads(self.rfile.read(length) or b"{}")
-                except (json.JSONDecodeError, ValueError):
-                    body = {}
+                body = self._json_body() or {}
                 raw_ids = body.get("ids")
                 ids = ([i for i in raw_ids if isinstance(i, int) and not isinstance(i, bool)]
                        if isinstance(raw_ids, list) else [])
@@ -2226,39 +2113,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 else:
                     self._send_json(delete_incidents_action(ids))
             elif parsed.path == "/api/enrich/test":
-                if not self._authed():
-                    self._send_json({"error": "authentication required"}, status=401)
-                elif self._require_settings_unlock():
+                if self._require_settings_unlock():
                     result = test_enrichment()
                     self._send_json(result, status=400 if result.get("error") else 200)
             elif parsed.path == "/api/trust/add":
                 # Adding a trust entry rewrites config.yaml (write_settings) and
                 # permanently silences a binary or device -- same class of change
                 # as the Settings page itself, so the same gate applies.
-                if not self._authed():
-                    self._send_json({"error": "authentication required"}, status=401)
-                    return
                 if not self._require_settings_unlock():
                     return
-                try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    body = json.loads(self.rfile.read(length) or b"{}")
-                except (json.JSONDecodeError, ValueError):
-                    body = {}
+                body = self._json_body() or {}
                 result = add_trusted(str(body.get("kind", "")), str(body.get("value", "")))
                 self._send_json(result, status=400 if result.get("error") else 200)
             elif parsed.path == "/api/update/install":
                 # Replaces this application's own files on disk -- gated with
                 # the rest of Settings, where the button lives.
-                if not self._authed():
-                    self._send_json({"error": "authentication required"}, status=401)
-                    return
                 if not self._require_settings_unlock():
                     return
-                try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    body = json.loads(self.rfile.read(length) or b"{}")
-                except (json.JSONDecodeError, ValueError):
+                body = self._json_body()
+                if body is None:
                     self._send_json({"error": "invalid JSON body"}, status=400)
                     return
                 url, name = body.get("download_url"), body.get("asset_name")
@@ -2268,41 +2141,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 result = install_update(url, name)
                 self._send_json(result, status=400 if result.get("error") else 200)
             elif parsed.path == "/api/ask":
-                # Read-only Q&A over the event log. A session gates it, same as
-                # /api/events -- it reads only what that session can already see
-                # and changes nothing, so it needs no Settings unlock.
-                if not self._authed():
-                    self._send_json({"error": "authentication required"}, status=401)
-                    return
-                try:
-                    # Cap the body read: the question is capped again after
-                    # parsing, but don't buffer an unbounded payload first.
-                    length = min(int(self.headers.get("Content-Length") or 0), 100_000)
-                    body = json.loads(self.rfile.read(length) or b"{}")
-                except (json.JSONDecodeError, ValueError):
+                # Read-only Q&A over the event log. The session gate above is
+                # all it needs -- it reads only what that session can already
+                # see and changes nothing, so no Settings unlock. The question
+                # itself is capped again inside ask_aegis.
+                body = self._json_body()
+                if body is None:
                     self._send_json({"error": "invalid JSON body"}, status=400)
                     return
                 result = ask_aegis(self.db_path, str(body.get("question", "")),
                                    body.get("history"))
                 self._send_json(result, status=400 if result.get("error") else 200)
-            elif parsed.path == "/api/logout":
-                token = self._session_token()
-                if token:
-                    _sessions.pop(token, None)
-                    _settings_unlock_until.pop(token, None)  # signing out re-locks Settings
-                self._send_json({"ok": True},
-                                extra={"Set-Cookie": f"{SESSION_COOKIE}=; Path=/; Max-Age=0"})
             else:
                 self._send(404, b"not found", "text/plain")
         except BrokenPipeError:
             pass
 
     def _handle_login(self):
-        try:
-            length = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(length) or b"{}")
-        except (json.JSONDecodeError, ValueError):
-            body = {}
+        body = self._json_body() or {}
         # Sign-in is a protected action too: it hands out a session that can
         # stop monitoring, and it was the one password prompt in the app with
         # no lockout and no tamper trail (see _register_failed_attempt).
@@ -2494,11 +2350,10 @@ def build_server(db_path: str, host: str = "127.0.0.1", port: int = 8787,
     module docstring for why. Same DashboardHandler either way, so the two
     ways of running Aegis can never drift apart in behavior.
 
-    in_process_monitor=True tells the /api/monitor/* endpoints the monitor
-    pipeline is running in THIS process, not a separate main.py subprocess
-    they can start/stop -- see monitor_status()/start_monitor()/stop_monitor().
-    The three monitor_*_callback args are required when in_process_monitor is
-    True (desktop_app.py's MonitorPipeline start/stop/status).
+    in_process_monitor=True tells the /api/monitor/* endpoints there is a
+    pipeline in THIS process for them to drive; the three monitor_*_callback
+    args are then required (desktop_app.py's MonitorPipeline start/stop/status).
+    Left False, those endpoints report "unmanaged" and refuse.
     quit_callback, if given, is what /api/update/install calls to shut the
     monitor pipeline down before an installer replaces this process's files."""
     DashboardHandler.db_path = db_path
@@ -2522,8 +2377,9 @@ def main():
     args = parser.parse_args()
 
     if not Path(args.db).is_file():
-        print(f"error: event store not found at {args.db!r} -- run main.py first, "
-              f"or pass --db path/to/aegis_events.db", file=sys.stderr)
+        print(f"error: event store not found at {args.db!r} -- run Aegis "
+              f"(python desktop_app.py) first, or pass --db path/to/aegis_events.db",
+              file=sys.stderr)
         sys.exit(1)
 
     server = build_server(args.db, args.host, args.port)

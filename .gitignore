@@ -103,6 +103,13 @@ LinkedIN.png
 LinkedIn.png
 linkedin.png
 
+# --- Website source footage (masters, not tracked) ---
+# website/build-media.sh transcodes these into website/media/ and docs/media/,
+# and only those generated outputs are needed to serve the site or render the
+# README. The masters are 75MB of screen recordings -- keep them locally (or in
+# whatever holds the rest of the raw footage), out of the git history.
+website/Videos/
+
 # --- IDE ---
 .vscode/
 .idea/
