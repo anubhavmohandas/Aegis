@@ -52,6 +52,11 @@ WINDOW_TITLE = "Aegis"
 HOST = "127.0.0.1"
 PORT = 8787
 APP_ICON = Path(__file__).resolve().parent / "assets" / "tray_icon.png"  # square mark, not the full text lockup
+# webview.start(icon=...) on Windows goes through System.Drawing.Icon, which only
+# accepts real .ico data (it parses the ICONDIR header) -- handing it the PNG above
+# throws "Argument 'picture' must be a picture that can be used as an Icon". macOS's
+# Cocoa/NSImage path doesn't care about format, so this only matters on win32.
+WINDOWS_ICON = Path(__file__).resolve().parent / "assets" / "aegis.ico"
 
 
 def _load_icon_image():
@@ -974,7 +979,8 @@ def main():
         window.events.shown += lambda: _darken_titlebar(window)
         window.events.shown += lambda: _add_macos_menubar(window, pipeline, _on_closed)
         window.events.shown += lambda: _add_pystray_tray(window, pipeline, _on_closed)
-        webview.start(icon=str(APP_ICON) if APP_ICON.is_file() else None)
+        _start_icon = WINDOWS_ICON if sys.platform == "win32" else APP_ICON
+        webview.start(icon=str(_start_icon) if _start_icon.is_file() else None)
     except Exception:
         logger.exception("Failed to open the desktop window -- shutting down cleanly instead of "
                           "leaving the monitor pipeline/HTTP server running with no window.")
