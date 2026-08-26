@@ -252,14 +252,25 @@ def _show_window(window) -> None:
 
 class _JsApi:
     """Exposed to the dashboard page as window.pywebview.api. One method: the
-    Hide Window button in the More menu. `window` is filled in right after
-    create_window() (pywebview needs the api object at construction time)."""
+    Hide Window button in the More menu. `_window` is filled in right after
+    create_window() (pywebview needs the api object at construction time).
+    Leading underscore is required, not style: pywebview's bind-time
+    reflection (webview/util.py get_functions()) walks every non-underscore,
+    non-callable attribute of this object to build the exposed JS API, and
+    recurses into whatever it finds. A plain `window` attribute puts the raw
+    pywebview Window -- and therefore window.native, the real WinForms Form
+    on Windows -- in that walk. Its AccessibilityObject/Bounds graph is
+    self-referential (`.Empty` returns another object with `.Empty`), so the
+    walker recurses until it hits Python's stack limit, over and over, and
+    the window sits at "Not Responding" while it grinds through that. macOS's
+    Cocoa `native` object doesn't have this trap, which is why this only
+    surfaced on Windows."""
 
     def __init__(self):
-        self.window = None
+        self._window = None
 
     def hide_window(self) -> bool:
-        _hide_window(self.window)
+        _hide_window(self._window)
         return True
 
 
@@ -967,7 +978,7 @@ def main():
             width=1500, height=940, min_size=(1080, 680),
             js_api=js_api,
         )
-        js_api.window = window                 # backs the page's Hide Window button
+        js_api._window = window                # backs the page's Hide Window button
         window.events.closing += _on_closing   # password-gate closing the window
         window.events.closed += _on_closed
         # Loud, unambiguous proof at startup that THIS running build has the quit
