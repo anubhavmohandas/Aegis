@@ -281,6 +281,22 @@ def _server_already_running(host: str, port: int) -> bool:
         return s.connect_ex((host, port)) == 0
 
 
+def _is_aegis_server(host: str, port: int) -> bool:
+    """True only if the listener on host:port is an Aegis dashboard. Port 8787
+    isn't ours by right -- Argus's web server defaulted to it too, and reusing
+    whatever answered opened the Aegis window onto Argus. Checks the Server
+    header DashboardHandler.server_version sends (even on error responses)."""
+    import http.client
+    conn = http.client.HTTPConnection(host, port, timeout=1)
+    try:
+        conn.request("HEAD", "/")
+        return (conn.getresponse().getheader("Server") or "").startswith("Aegis")
+    except (OSError, http.client.HTTPException):
+        return False
+    finally:
+        conn.close()
+
+
 # Strong references to the menu-bar status item and its Objective-C menu
 # target -- pyobjc doesn't retain these for us, and if Python garbage-collects
 # them the icon silently vanishes from the menu bar and the menu stops working.
@@ -909,15 +925,23 @@ def main():
                           "so the problem is visible and fixable from Settings.")
 
     http_server = None
-    if _server_already_running(HOST, PORT):
-        # Most likely another Aegis instance (source or packaged) already has
-        # the dashboard up on this port -- reuse it rather than fail to bind.
+    port = PORT
+    port_taken = _server_already_running(HOST, port)
+    if port_taken and _is_aegis_server(HOST, port):
+        # Another Aegis instance (source or packaged) already has the
+        # dashboard up on this port -- reuse it rather than fail to bind.
         # The monitor pipeline we just started above is still ours; whether
         # that's a second monitor writing to the same DB is on the user, the
         # same tradeoff as launching the app twice.
         logger.info("Dashboard already reachable on %s:%s -- opening a window onto it, "
-                    "not starting a second server", HOST, PORT)
+                    "not starting a second server", HOST, port)
     else:
+        if port_taken:
+            # Some other app holds the port. Never open the window onto it --
+            # serve on a free port the OS picks instead.
+            logger.warning("Port %s is in use by another app -- serving the dashboard "
+                           "on a free port instead", port)
+            port = 0
         def _quit_for_update():
             # Called from /api/update/install (see dashboard/server.py and
             # core/updater.py) on an HTTP worker thread, not the main thread.
@@ -940,15 +964,16 @@ def main():
             threading.Thread(target=_delayed_exit, daemon=True).start()
 
         http_server = build_server(
-            config.db_path, HOST, PORT,
+            config.db_path, HOST, port,
             in_process_monitor=True,
             quit_callback=_quit_for_update,
             monitor_status_callback=lambda: {"running": pipeline.running, "started_at": pipeline.started_at},
             monitor_start_callback=pipeline.start,
             monitor_stop_callback=pipeline.stop,
         )
+        port = http_server.server_address[1]   # the real one when port was 0
         threading.Thread(target=http_server.serve_forever, daemon=True).start()
-        logger.info("Dashboard server started on %s:%s (db: %s)", HOST, PORT, config.db_path)
+        logger.info("Dashboard server started on %s:%s (db: %s)", HOST, port, config.db_path)
 
     def _on_closed():
         logger.info("Window closed -- shutting down")
@@ -974,7 +999,7 @@ def main():
         js_api = _JsApi()
         window = webview.create_window(
             WINDOW_TITLE,
-            f"http://{HOST}:{PORT}",
+            f"http://{HOST}:{port}",
             width=1500, height=940, min_size=(1080, 680),
             js_api=js_api,
         )

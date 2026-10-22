@@ -1736,6 +1736,9 @@ def install_update(download_url: str, asset_name: str) -> dict:
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
+    # Sent as the Server header -- desktop_app._is_aegis_server() checks it
+    # before reusing whatever is already listening on the dashboard port.
+    server_version = "Aegis"
     # Set by build_server(). Empty until then -- and the tamper-gate helpers
     # (_writable_store/_heartbeat_age) CAN run before/without build_server:
     # desktop_app's menu-bar Quit routes its gate through
